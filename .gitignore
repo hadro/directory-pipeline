@@ -1,0 +1,34 @@
+# Downloaded data and local files
+collection_csv/*
+images/*
+samples/*
+ideas_and_questions.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.python-version
+
+# uv
+uv.lock
+
+# Environment / secrets — never commit API keys
+.env
+*.env
+
+# macOS
+.DS_Store
+
+# Claude
+.claude/
+
+# Generated docs / exports
+directory-pipeline-*
+
+# Research
+research/*
+
+# Run files
+test.txt
+collections.txt

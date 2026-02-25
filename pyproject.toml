@@ -1,0 +1,14 @@
+[project]
+name = "directory-pipeline"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "google-genai>=1.0",
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "requests>=2.32.5",
+    "folium>=0.17",
+    "geopy>=2.4",
+]
