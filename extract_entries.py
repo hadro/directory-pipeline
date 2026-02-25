@@ -20,10 +20,9 @@ Output (per item directory):
 
 Usage
 -----
-    python extract_entries.py images/greenbooks/feb978b0 --model gemini-2.0-flash
-    python extract_entries.py images/greenbooks/feb978b0 --model gemini-2.0-flash \\
-        --mode multimodal
-    python extract_entries.py images/greenbooks/ --model gemini-2.0-flash --force
+    python extract_entries.py images/greenbooks/feb978b0
+    python extract_entries.py images/greenbooks/feb978b0 --mode multimodal
+    python extract_entries.py images/greenbooks/ --force
     python extract_entries.py images/greenbooks/feb978b0 --dry-run
 """
 
@@ -41,8 +40,8 @@ from pathlib import Path
 from google import genai
 from google.genai.types import GenerateContentConfig, Part
 
-DEFAULT_MODEL = "gemini-2.0-flash"
-NER_PROMPT_FILE = Path(__file__).parent / "ner_prompt.md"
+DEFAULT_MODEL = "gemini-2.5-flash"
+NER_PROMPT_FILE = Path(__file__).parent / "prompts" / "ner_prompt.md"
 
 ENTRY_FIELDS = [
     "image", "page",
@@ -90,7 +89,7 @@ def _call_gemini(
                 config=GenerateContentConfig(
                     system_instruction=system_prompt,
                     temperature=0.0,
-                    max_output_tokens=8192,
+                    max_output_tokens=65536,
                 ),
                 contents=parts,
             )
@@ -238,9 +237,13 @@ def process_page(
     mode: str,
     force: bool,
     dry_run: bool,
+    aligned_model: str | None = None,
 ) -> dict:
     """
     Extract entries from one aligned JSON page.
+
+    aligned_model: if set, the model whose slug appears in aligned_path's name.
+    The output file is always tagged with the NER model slug.
 
     Returns:
       {
@@ -250,7 +253,8 @@ def process_page(
       }
     """
     slug = model_slug(model)
-    suffix = f"_{slug}_aligned.json"
+    aligned_slug = model_slug(aligned_model) if aligned_model else slug
+    suffix = f"_{aligned_slug}_aligned.json"
     stem = aligned_path.name[: -len(suffix)]
     out_path = aligned_path.parent / f"{stem}_{slug}_entries.json"
 
@@ -346,13 +350,19 @@ def process_item(
     force: bool,
     dry_run: bool,
     quiet: bool,
+    aligned_model: str | None = None,
 ) -> list[dict]:
     """
     Process all aligned JSON pages in an item directory in page order.
     Returns all extracted entries across all pages.
+
+    aligned_model: if set, read *_{aligned_slug}_aligned.json files but write
+    output tagged with the NER model slug.  Useful when OCR was run with one
+    model and NER is run with another.
     """
     slug = model_slug(model)
-    aligned_files = sorted(item_dir.glob(f"*_{slug}_aligned.json"))
+    aligned_slug = model_slug(aligned_model) if aligned_model else slug
+    aligned_files = sorted(item_dir.glob(f"*_{aligned_slug}_aligned.json"))
     if not aligned_files:
         return []
 
@@ -373,7 +383,7 @@ def process_item(
     for i, aligned_path in enumerate(aligned_files, 1):
         result = process_page(
             client, aligned_path, model, system_prompt,
-            context, mode, force, dry_run,
+            context, mode, force, dry_run, aligned_model,
         )
         status = result["status"]
         n = len(result["entries"])
@@ -431,6 +441,17 @@ def main() -> None:
         help=f"Gemini model for NER (default: {DEFAULT_MODEL})",
     )
     parser.add_argument(
+        "--aligned-model",
+        default=None,
+        metavar="MODEL",
+        help=(
+            "Model whose slug appears in the *_aligned.json filenames "
+            "(default: same as --model). Use this when OCR was run with a "
+            "different model than the one doing NER, e.g. "
+            "--model gemini-2.5-flash --aligned-model gemini-2.0-flash"
+        ),
+    )
+    parser.add_argument(
         "--mode",
         choices=["text-only", "multimodal"],
         default="text-only",
@@ -475,7 +496,9 @@ def main() -> None:
         sys.exit(1)
     system_prompt = prompt_path.read_text(encoding="utf-8")
 
+    aligned_model = args.aligned_model
     slug = model_slug(args.model)
+    aligned_slug = model_slug(aligned_model) if aligned_model else slug
     images_root = Path(args.images_dir)
     if not images_root.exists():
         print(f"Error: directory not found: {images_root}", file=sys.stderr)
@@ -485,7 +508,7 @@ def main() -> None:
 
     # Discover item directories: either the given dir itself (if it has aligned
     # JSONs directly) or its immediate subdirectories.
-    slug_pattern = f"*_{slug}_aligned.json"
+    slug_pattern = f"*_{aligned_slug}_aligned.json"
     direct = list(images_root.glob(slug_pattern))
     if direct:
         item_dirs = [images_root]
@@ -496,19 +519,21 @@ def main() -> None:
         ]
 
     if not item_dirs:
-        print(f"No *_{slug}_aligned.json files found under {images_root}", file=sys.stderr)
+        print(f"No *_{aligned_slug}_aligned.json files found under {images_root}", file=sys.stderr)
         sys.exit(1)
 
     print(
-        f"\nExtracting entries: {len(item_dirs)} item dir(s), model={args.model}, mode={args.mode}"
-        f"{' [DRY RUN]' if args.dry_run else ''}",
+        f"\nExtracting entries: {len(item_dirs)} item dir(s), model={args.model}"
+        + (f" (aligned by {aligned_model})" if aligned_model else "")
+        + f", mode={args.mode}"
+        + (" [DRY RUN]" if args.dry_run else ""),
         file=sys.stderr,
     )
 
     for item_dir in item_dirs:
         entries = process_item(
             client, item_dir, args.model, system_prompt,
-            args.mode, args.force, args.dry_run, args.quiet,
+            args.mode, args.force, args.dry_run, args.quiet, aligned_model,
         )
         if not args.dry_run:
             csv_path = item_dir / f"entries_{slug}.csv"

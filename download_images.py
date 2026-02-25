@@ -49,7 +49,7 @@ from pathlib import Path
 
 import requests
 
-import iiif_utils
+from utils import iiif_utils
 
 DEFAULT_WIDTH = 2048
 DEFAULT_DELAY = 0.5   # ~2 requests/second — conservative for institutional servers

@@ -29,7 +29,7 @@ from google import genai
 from google.genai.types import GenerateContentConfig, Part
 
 DEFAULT_MODEL = "gemini-2.0-flash"
-PROMPT_FILE = Path(__file__).parent / "ocr_prompt.md"
+PROMPT_FILE = Path(__file__).parent / "prompts" / "ocr_prompt.md"
 
 _print_lock = threading.Lock()
 

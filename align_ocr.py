@@ -71,7 +71,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from pathlib import Path
 
-import iiif_utils
+from utils import iiif_utils
 
 _print_lock = threading.Lock()
 

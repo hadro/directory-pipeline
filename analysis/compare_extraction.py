@@ -36,7 +36,7 @@ from google.genai.types import GenerateContentConfig, Part
 
 DEFAULT_MODEL = "gemini-2.0-flash"
 DEFAULT_PAGES = 10
-NER_PROMPT_FILE = Path(__file__).parent / "ner_prompt.md"
+NER_PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ner_prompt.md"
 
 _print_lock = threading.Lock()
 

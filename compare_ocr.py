@@ -31,7 +31,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-PROMPT_FILE = Path(__file__).parent / "ocr_prompt.md"
+PROMPT_FILE = Path(__file__).parent / "prompts" / "ocr_prompt.md"
 TESSERACT = "tesseract"
 
 # Background colours for model panels in the HTML report

@@ -12,19 +12,22 @@ every output file and directory, so all stages stay in sync:
 Stages run in this fixed order regardless of the order flags appear on the
 command line:
 
-  --nypl-csv        nypl_collection_csv.py  → collection_csv/{slug}.csv  (NYPL only)
-  --loc-csv         loc_collection_csv.py   → collection_csv/{slug}.csv  (LoC only)
-  --ia-csv          ia_collection_csv.py    → collection_csv/{slug}.csv  (Internet Archive only)
-  --download        download_images.py       → images/{slug}/
-  --detect-spreads  detect_spreads.py        (double-page spread detection)
-  --split-spreads   split_spreads.py         (split spreads into left/right pages)
-  --detect-columns  detect_columns.py        (per-image column layout → columns_report.csv)
-  --tesseract       run_ocr.py               (Tesseract OCR, uses columns_report.csv if present)
-  --gemini-ocr      run_gemini_ocr.py        (Gemini OCR)
-  --compare-ocr     compare_ocr.py           (side-by-side model comparison)
-  --align-ocr           align_ocr.py             (NW alignment of Gemini text to Tesseract bboxes)
-  --improve-alignment   improve_alignment.py     (retry Tesseract PSM for poorly-aligned pages)
-  --visualize           visualize_alignment.py   (draw alignment boxes on images → *_viz.jpg)
+  --nypl-csv        sources/nypl_collection_csv.py  → collection_csv/{slug}.csv  (NYPL only)
+  --loc-csv         sources/loc_collection_csv.py   → collection_csv/{slug}.csv  (LoC only)
+  --ia-csv          sources/ia_collection_csv.py    → collection_csv/{slug}.csv  (Internet Archive only)
+  --download        download_images.py               → images/{slug}/
+  --detect-spreads  detect_spreads.py                (double-page spread detection)
+  --split-spreads   split_spreads.py                 (split spreads into left/right pages)
+  --detect-columns  detect_columns.py                (per-image column layout → columns_report.csv)
+  --tesseract       run_ocr.py                       (Tesseract OCR, uses columns_report.csv if present)
+  --gemini-ocr      run_gemini_ocr.py                (Gemini OCR)
+  --compare-ocr     compare_ocr.py                   (side-by-side model comparison)
+  --align-ocr           align_ocr.py                 (NW alignment of Gemini text to Tesseract bboxes)
+  --improve-alignment   improve_alignment.py         (retry Tesseract PSM for poorly-aligned pages)
+  --visualize           visualize_alignment.py       (draw alignment boxes on images → *_viz.jpg)
+  --extract-entries     extract_entries.py           (extract structured entries from aligned OCR)
+  --geocode             geocode_entries.py            (geocode entries to lat/lon)
+  --map                 map_entries.py               (generate interactive HTML map)
 
 Usage
 -----
@@ -77,19 +80,22 @@ UUID_RE = re.compile(
 # Each entry is (dest_attr_name, script_filename, human_label).
 # ---------------------------------------------------------------------------
 PIPELINE: list[tuple[str, str, str]] = [
-    ("nypl_csv",       "nypl_collection_csv.py",  "--nypl-csv"),
-    ("loc_csv",        "loc_collection_csv.py",   "--loc-csv"),
-    ("ia_csv",         "ia_collection_csv.py",    "--ia-csv"),
-    ("download",       "download_images.py",       "--download"),
-    ("detect_spreads", "detect_spreads.py",        "--detect-spreads"),
-    ("split_spreads",  "split_spreads.py",         "--split-spreads"),
-    ("detect_columns", "detect_columns.py",        "--detect-columns"),
-    ("tesseract",      "run_ocr.py",               "--tesseract"),
-    ("gemini_ocr",     "run_gemini_ocr.py",        "--gemini-ocr"),
-    ("compare_ocr",    "compare_ocr.py",            "--compare-ocr"),
-    ("align_ocr",         "align_ocr.py",            "--align-ocr"),
-    ("improve_alignment", "improve_alignment.py",   "--improve-alignment"),
-    ("visualize",         "visualize_alignment.py", "--visualize"),
+    ("nypl_csv",          "sources/nypl_collection_csv.py",  "--nypl-csv"),
+    ("loc_csv",           "sources/loc_collection_csv.py",   "--loc-csv"),
+    ("ia_csv",            "sources/ia_collection_csv.py",    "--ia-csv"),
+    ("download",          "download_images.py",               "--download"),
+    ("detect_spreads",    "detect_spreads.py",                "--detect-spreads"),
+    ("split_spreads",     "split_spreads.py",                 "--split-spreads"),
+    ("detect_columns",    "detect_columns.py",                "--detect-columns"),
+    ("tesseract",         "run_ocr.py",                       "--tesseract"),
+    ("gemini_ocr",        "run_gemini_ocr.py",                "--gemini-ocr"),
+    ("compare_ocr",       "compare_ocr.py",                   "--compare-ocr"),
+    ("align_ocr",         "align_ocr.py",                     "--align-ocr"),
+    ("improve_alignment", "improve_alignment.py",             "--improve-alignment"),
+    ("visualize",         "visualize_alignment.py",           "--visualize"),
+    ("extract_entries",   "extract_entries.py",               "--extract-entries"),
+    ("geocode",           "geocode_entries.py",               "--geocode"),
+    ("map",               "map_entries.py",                   "--map"),
 ]
 
 
@@ -577,6 +583,60 @@ def build_stage_args(
             a += ["--force"]
         return a
 
+    if stage == "extract_entries":
+        if not _require_images():
+            return None
+        models = parsed.models if parsed.models else (
+            [parsed.model] if getattr(parsed, "model", None) else []
+        )
+        if not models:
+            print(
+                "    Skipping: --extract-entries requires --model or --models.",
+                file=sys.stderr,
+            )
+            return None
+        runs = []
+        for m in models:
+            a = [str(images_dir), "--model", m]
+            if getattr(parsed, "force", False):
+                a += ["--force"]
+            runs.append(a)
+        return runs
+
+    if stage == "geocode":
+        if not _require_images():
+            return None
+        models = parsed.models if parsed.models else (
+            [parsed.model] if getattr(parsed, "model", None) else []
+        )
+        if not models:
+            print(
+                "    Skipping: --geocode requires --model or --models.",
+                file=sys.stderr,
+            )
+            return None
+        runs = []
+        for m in models:
+            runs.append([str(images_dir), "--model", m])
+        return runs
+
+    if stage == "map":
+        if not _require_images():
+            return None
+        models = parsed.models if parsed.models else (
+            [parsed.model] if getattr(parsed, "model", None) else []
+        )
+        if not models:
+            print(
+                "    Skipping: --map requires --model or --models.",
+                file=sys.stderr,
+            )
+            return None
+        runs = []
+        for m in models:
+            runs.append([str(images_dir), "--model", m])
+        return runs
+
     return None
 
 
@@ -684,6 +744,24 @@ def main() -> None:
         dest="split_spreads",
         action="store_true",
         help="Split detected spreads into left/right page files (requires --detect-spreads output)",
+    )
+    stages.add_argument(
+        "--extract-entries",
+        dest="extract_entries",
+        action="store_true",
+        help="Extract structured entries from aligned OCR (see --model / --models)",
+    )
+    stages.add_argument(
+        "--geocode",
+        dest="geocode",
+        action="store_true",
+        help="Geocode extracted entries to lat/lon and write *_geocoded.csv (see --model / --models)",
+    )
+    stages.add_argument(
+        "--map",
+        dest="map",
+        action="store_true",
+        help="Generate interactive HTML map from geocoded entries (see --model / --models)",
     )
 
     # --- Authentication ---
@@ -826,7 +904,8 @@ def main() -> None:
     if not enabled:
         parser.error(
             "No pipeline stages selected. "
-            "Use --nypl-csv, --loc-csv, --ia-csv, --download, --gemini-ocr, etc."
+            "Use --nypl-csv, --loc-csv, --ia-csv, --download, --gemini-ocr, "
+            "--extract-entries, --geocode, --map, etc."
         )
 
     # Validate: stages that need a token (not enforced in dry-run)
