@@ -8,7 +8,7 @@ Presentation v2 or v3 manifest.
 
 ## What it does
 
-The pipeline takes a collection CSV (from NYPL, LoC, or Internet Archive), a
+The pipeline takes a collection CSV (from LoC, Internet Archive, or NYPL), a
 pre-built CSV from any source, or a single IIIF manifest URL, and runs any
 combination of the following stages:
 

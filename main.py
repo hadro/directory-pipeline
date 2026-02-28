@@ -18,7 +18,8 @@ command line:
   --download        download_images.py               → images/{slug}/
   --detect-spreads  detect_spreads.py                (double-page spread detection)
   --split-spreads   split_spreads.py                 (split spreads into left/right pages)
-  --detect-columns  detect_columns.py                (per-image column layout → columns_report.csv)
+  --surya-detect    surya_detect.py                  (Surya neural column detection → columns_report.csv)
+  --detect-columns  detect_columns.py                (pixel-projection column detection → columns_report.csv)
   --tesseract       run_ocr.py                       (Tesseract OCR, uses columns_report.csv if present)
   --gemini-ocr      run_gemini_ocr.py                (Gemini OCR)
   --compare-ocr     compare_ocr.py                   (side-by-side model comparison)
@@ -86,6 +87,7 @@ PIPELINE: list[tuple[str, str, str]] = [
     ("download",          "download_images.py",               "--download"),
     ("detect_spreads",    "detect_spreads.py",                "--detect-spreads"),
     ("split_spreads",     "split_spreads.py",                 "--split-spreads"),
+    ("surya_detect",      "surya_detect.py",                  "--surya-detect"),
     ("detect_columns",    "detect_columns.py",                "--detect-columns"),
     ("tesseract",         "run_ocr.py",                       "--tesseract"),
     ("gemini_ocr",        "run_gemini_ocr.py",                "--gemini-ocr"),
@@ -540,6 +542,14 @@ def build_stage_args(
             runs.append(a)
         return runs  # list[list[str]] — one run per model
 
+    if stage == "surya_detect":
+        if not _require_images():
+            return None
+        a = [str(images_dir)]
+        if getattr(parsed, "force", False):
+            a += ["--force"]
+        return a
+
     if stage == "detect_columns":
         if not _require_images():
             return None
@@ -687,6 +697,16 @@ def main() -> None:
         dest="download",
         action="store_true",
         help="Download IIIF images to images/{slug}/",
+    )
+    stages.add_argument(
+        "--surya-detect",
+        dest="surya_detect",
+        action="store_true",
+        help=(
+            "Detect column layout using Surya neural text-line detection "
+            "(alternative to --detect-columns; produces the same columns_report.csv "
+            "so --tesseract works unchanged; requires surya-ocr)"
+        ),
     )
     stages.add_argument(
         "--detect-columns",
