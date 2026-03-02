@@ -31,8 +31,14 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 PROMPT_FILE = Path(__file__).parent / "prompts" / "ocr_prompt.md"
 TESSERACT = "tesseract"
+SURYA = "surya"
+_LOCAL_ENGINES = {TESSERACT, SURYA}  # tokens that read a local file, no API call
 
 # Background colours for model panels in the HTML report
 PANEL_COLORS = ["#e8f4fd", "#e8fde8", "#fdf5e8", "#fde8f4", "#f5e8fd"]
@@ -52,6 +58,8 @@ def model_slug(model: str) -> str:
 def txt_path_for(image_path: Path, model: str) -> Path:
     if model == TESSERACT:
         return image_path.parent / f"{image_path.stem}_tesseract.txt"
+    if model == SURYA:
+        return image_path.parent / f"{image_path.stem}_surya.txt"
     return image_path.parent / f"{image_path.stem}_{model_slug(model)}.txt"
 
 
@@ -67,8 +75,8 @@ def get_text(
     """
     path = txt_path_for(image_path, model)
 
-    # ── Tesseract: read existing file, no API call ──────────────────────────
-    if model == TESSERACT:
+    # ── Local engines (Tesseract, Surya): read existing file, no API call ───
+    if model in _LOCAL_ENGINES:
         if not path.exists():
             return model, "missing", ""
         text = path.read_text(encoding="utf-8")
@@ -207,7 +215,10 @@ def main() -> None:
         nargs="+",
         required=True,
         metavar="MODEL",
-        help='Two or more model names to compare. Use "tesseract" for Tesseract output.',
+        help=(
+            'Two or more model names to compare. '
+            'Use "surya" for Surya output or "tesseract" for Tesseract output.'
+        ),
     )
     parser.add_argument(
         "--workers", "-w",
@@ -231,7 +242,7 @@ def main() -> None:
     if len(args.models) < 2:
         parser.error("at least two --models are required for comparison.")
 
-    gemini_models = [m for m in args.models if m != TESSERACT]
+    gemini_models = [m for m in args.models if m not in _LOCAL_ENGINES]
 
     # Only require API key if Gemini models are requested
     client = None
@@ -387,7 +398,7 @@ def main() -> None:
         print(f"Stats CSV → {stats_path}", file=sys.stderr)
         parts = [f"{counts['ok']} processed", f"{counts['skipped']} skipped"]
         if counts["missing"]:
-            parts.append(f"{counts['missing']} missing (tesseract not yet run)")
+            parts.append(f"{counts['missing']} missing (OCR not yet run)")
         if counts["failed"]:
             parts.append(f"{counts['failed']} failed")
         print(f"\nDone. {total} task(s): {', '.join(parts)}.", file=sys.stderr)

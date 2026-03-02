@@ -12,24 +12,23 @@ The pipeline takes a collection CSV (from LoC, Internet Archive, or NYPL), a
 pre-built CSV from any source, or a single IIIF manifest URL, and runs any
 combination of the following stages:
 
-1. **Export collection metadata** to CSV (via LoC, IA, or  NYPL APIs)
+1. **Export collection metadata** to CSV (via LoC, IA, or NYPL APIs)
 2. **Download images** from IIIF manifests at full resolution
 3. **Detect double-page spreads** (common in microfilm digitization)
 4. **Split spreads** into separate left/right page files
-5. **Detect column layout** per image to guide Tesseract settings
-6. **Run Tesseract OCR** to get word-level bounding boxes (hOCR output)
+5. **Detect column layout** per image — via Surya neural detection (preferred) or pixel-projection heuristics
+6. **Run Surya OCR** to get line-level bounding boxes (preferred), or Tesseract for word-level hOCR (legacy)
 7. **Run Gemini OCR** to get accurately transcribed text
 8. **Compare OCR models** side-by-side in an HTML report
-9. **Align** Gemini text to Tesseract bounding boxes using anchored Needleman-Wunsch
-10. **Improve alignment** by retrying Tesseract with alternative PSM settings for
-    poorly-matched pages
-11. **Visualize** alignment quality by drawing color-coded boxes on images
+9. **Align** Gemini text to Surya (or Tesseract) bounding boxes using anchored Needleman-Wunsch
+10. **Visualize** alignment quality by drawing color-coded boxes on images
+11. **Review and correct alignment** interactively — draw bounding boxes over unmatched regions, re-run Surya OCR on crops, and save accepted matches back to the aligned JSON
 12. **Extract structured entries** (name, address, city, state, category) via Gemini NER
 13. **Geocode entries** to lat/lon using Google Maps (address-level) or Nominatim (city-level)
 14. **Generate an interactive map** from geocoded entries
 
 The end result is a per-page JSON file pairing Gemini's corrected text with
-Tesseract's pixel-level word coordinates, a structured entries CSV, and an
+Surya's pixel-level line coordinates, a structured entries CSV, and an
 interactive Leaflet map — suitable for search indexing, IIIF annotation,
 and geospatial analysis.
 
@@ -41,23 +40,29 @@ Stages always run in the fixed order below, regardless of flag order on the
 command line. All stages are optional — run only what you need.
 
 ```
---nypl-csv            sources/nypl_collection_csv.py  → collection_csv/{slug}.csv
---loc-csv             sources/loc_collection_csv.py   → collection_csv/{slug}.csv
---ia-csv              sources/ia_collection_csv.py    → collection_csv/{slug}.csv
---download            download_images.py              → images/{slug}/
---detect-spreads      detect_spreads.py               → images/{slug}/spreads_report.csv
---split-spreads       split_spreads.py                → *_left.jpg, *_right.jpg, *_split.json
---detect-columns      detect_columns.py               → images/{slug}/columns_report.csv
---tesseract           run_ocr.py                      → *_tesseract.hocr, *_tesseract.txt
---gemini-ocr          run_gemini_ocr.py               → *_{model}.txt
---compare-ocr         compare_ocr.py                  → *_comparison.html
---align-ocr           align_ocr.py                    → *_{model}_aligned.json
---improve-alignment   improve_alignment.py            → updated *_{model}_aligned.json
---visualize           visualize_alignment.py          → *_{model}_viz.jpg
---extract-entries     extract_entries.py              → entries_{model}.csv, *_{model}_entries.json
---geocode             geocode_entries.py              → entries_{model}_geocoded.csv
---map                 map_entries.py                  → entries_{model}.html
+--nypl-csv            sources/nypl_collection_csv.py      → collection_csv/{slug}.csv
+--loc-csv             sources/loc_collection_csv.py       → collection_csv/{slug}.csv
+--ia-csv              sources/ia_collection_csv.py        → collection_csv/{slug}.csv
+--download            pipeline/download_images.py         → images/{slug}/
+--detect-spreads      pipeline/detect_spreads.py          → images/{slug}/spreads_report.csv
+--split-spreads       pipeline/split_spreads.py           → *_left.jpg, *_right.jpg, *_split.json
+--surya-detect        pipeline/surya_detect.py            → images/{slug}/columns_report.csv  (preferred)
+--detect-columns      pipeline/detect_columns.py          → images/{slug}/columns_report.csv  (legacy)
+--surya-ocr           pipeline/run_surya_ocr.py           → *_surya.json, *_surya.txt         (preferred)
+--tesseract           old/run_ocr.py                      → *_tesseract.hocr, *_tesseract.txt (legacy)
+--gemini-ocr          pipeline/run_gemini_ocr.py          → *_{model}.txt
+--compare-ocr         analysis/compare_ocr.py             → *_comparison.html
+--align-ocr           pipeline/align_ocr.py               → *_{model}_aligned.json
+--visualize           analysis/visualize_alignment.py     → *_{model}_viz.jpg
+--review-alignment    pipeline/review_alignment.py        → updated *_{model}_aligned.json    (interactive)
+--extract-entries     pipeline/extract_entries.py         → entries_{model}.csv, *_{model}_entries.json
+--geocode             pipeline/geocode_entries.py         → entries_{model}_geocoded.csv
+--map                 pipeline/map_entries.py             → entries_{model}.html
 ```
+
+There is also a `--full-run` shorthand that expands to
+`--download --surya-ocr --gemini-ocr --align-ocr --review-alignment --extract-entries --geocode --map`
+and defaults `--batch-size` and `--workers` to 8.
 
 ### Stage descriptions
 
@@ -88,7 +93,7 @@ descending into sub-collections. For each item found, fetches capture metadata a
 writes one row to a CSV. Requires a `NYPL_API_TOKEN` environment variable (or `--token`).
 Responses are cached locally as JSON to avoid redundant API calls on re-runs.
 
-All three source scripts produce the same CSV schema, which feeds into `download_images.py`:
+All three source scripts produce the same CSV schema, which feeds into `pipeline/download_images.py`:
 
 | Column | Description |
 |---|---|
@@ -97,7 +102,7 @@ All three source scripts produce the same CSV schema, which feeds into `download
 | `iiif_manifest_url` | IIIF Presentation manifest URL — used to download images |
 | `microform` | `True` if the item is a microfilm/microform scan — used by `detect_spreads.py` |
 
-#### `download_images.py` — Download images
+#### `pipeline/download_images.py` — Download images
 Fetches full-resolution images from IIIF manifests. Two input modes:
 
 **CSV mode** (default): reads a collection CSV and downloads every item's images.
@@ -120,7 +125,7 @@ LoC item JSON API (`?fo=json`) to build a synthetic IIIF manifest, then download
 images from `tile.loc.gov`. The requested download width is capped at the native
 image resolution to avoid upscaling artifacts from the tile pyramid.
 
-#### `detect_spreads.py` — Spread detection
+#### `pipeline/detect_spreads.py` — Spread detection
 Analyzes each image to determine whether it contains two facing pages (a spread
 captured in a single microfilm frame) vs. a single page. Uses pixel-projection
 analysis: finds the content boundary within the dark microfilm border, checks the
@@ -133,19 +138,36 @@ open), tonal boundary (dark cover beside white content). Outputs
 If a collection CSV is available (via `--csv`), items flagged as microform get a
 looser detection threshold.
 
-#### `split_spreads.py` — Split spreads
+#### `pipeline/split_spreads.py` — Split spreads
 Reads `spreads_report.csv` and, for each spread, crops the image at the detected
 gutter column into `{stem}_left.jpg` and `{stem}_right.jpg`. Also writes a
 `{stem}_split.json` sidecar with the pixel offsets. Original images are untouched.
 
-#### `detect_columns.py` — Column detection
+#### `pipeline/surya_detect.py` — Surya column detection (preferred)
+Runs Surya's neural text-line detection model on each image to count text columns
+and detect gutter positions. Produces the same `columns_report.csv` format as
+`detect_columns.py` (with `recommended_psm` per image), so either detector feeds
+`old/run_ocr.py` unchanged. Surya's neural approach is more robust than pixel-projection
+on degraded microfilm scans and pages with irregular layouts.
+
+#### `pipeline/detect_columns.py` — Pixel-projection column detection (legacy)
 Uses a vertical pixel-projection profile (dark-pixel density per column) to count
 text columns per image and detect gutter positions. Outputs `columns_report.csv`
 with a `recommended_psm` (Tesseract page segmentation mode) for each image:
-PSM 4 for single-column pages, PSM 1 for multi-column. `run_ocr.py` reads this
-CSV to apply per-image PSM automatically.
+PSM 4 for single-column pages, PSM 1 for multi-column. `old/run_ocr.py` reads this
+CSV to apply per-image PSM automatically. Prefer `--surya-detect` for new runs.
 
-#### `run_ocr.py` — Tesseract OCR
+#### `pipeline/run_surya_ocr.py` — Surya OCR (preferred)
+Runs Surya's recognition model on each image and saves:
+- `{stem}_surya.json` — line-level bounding boxes with text and confidence scores
+- `{stem}_surya.txt` — plain text (one line per Surya line)
+
+Surya produces line-level bounding boxes rather than word-level, which aligns
+more cleanly with Gemini's line-oriented output format. Handles multi-column
+pages via the reading-order correction in `align_ocr.py`. Runs in batches
+(default 4 images per batch; reduce with `--batch-size` if OOM).
+
+#### `old/run_ocr.py` — Tesseract OCR (legacy)
 Runs Tesseract on each image and saves:
 - `{stem}_tesseract.hocr` — full hOCR with word-level bounding boxes
 - `{stem}_tesseract.txt` — plain text
@@ -156,37 +178,36 @@ as-written, which is critical for accurate NW alignment with Gemini text. Use
 `--dict` to re-enable. Runs in parallel using `--workers`.
 
 Per-image PSM is loaded from `columns_report.csv` if present; the global `--psm`
-flag always overrides it.
+flag always overrides it. Prefer `--surya-ocr` for new runs.
 
-#### `run_gemini_ocr.py` — Gemini OCR
+#### `pipeline/run_gemini_ocr.py` — Gemini OCR
 Sends each image to the Gemini API using a system prompt from `prompts/ocr_prompt.md`
 and saves the plain-text response as `{stem}_{model_slug}.txt`. Handles HTTP 429
 rate limits with exponential backoff (up to 5 retries, starting at 10s delay).
 Skips images where the output file already exists and is non-empty.
 
-#### `compare_ocr.py` — Model comparison
+#### `analysis/compare_ocr.py` — Model comparison
 Calls multiple models (any mix of Gemini model names and the special token
-`tesseract`) on each image and produces:
+`surya`) on each image and produces:
 - `{stem}_comparison.html` — side-by-side panel view of each model's output
 - `ocr_comparison_stats.csv` — character-level similarity stats across all images
 
 Useful for evaluating which Gemini model performs best on a collection before
 committing to a full run.
 
-#### `align_ocr.py` — NW alignment
+#### `pipeline/align_ocr.py` — NW alignment
 The core output stage. For each image that has both a Gemini `.txt` file and a
-Tesseract `.hocr` file, aligns the two using anchored
-[Needleman-Wunsch](https://en.wikipedia.org/wiki/Needleman%E2%80%93Wunsch_algorithm)
+Surya `.json` (preferred) or Tesseract `.hocr` (legacy) file, aligns the two using
+anchored [Needleman-Wunsch](https://en.wikipedia.org/wiki/Needleman%E2%80%93Wunsch_algorithm)
 global sequence alignment and saves `{stem}_{model_slug}_aligned.json`.
 
-**Approach:** Runs a single global word-level NW pass over all Tesseract words and
-all Gemini tokens on a page. Before the NW pass, city/state headings and category
+**Approach:** Runs a single global NW pass over all Surya lines (or Tesseract words)
+and all Gemini tokens on a page. Before the NW pass, city/state headings and category
 lines that appear verbatim in both sources are committed as fixed anchors. The NW
 problem is then split into independent segments at those anchors, preventing
-misalignment drift across long pages where Tesseract's reading order diverges
-from Gemini's.
+misalignment drift across long pages where OCR reading order diverges from Gemini's.
 
-**Reading-order correction:** Tesseract on multi-column pages reads across columns
+**Reading-order correction:** OCR on multi-column pages may read across columns
 rather than down each column. Lines are re-sorted before alignment:
 - *Row-major (default):* lines are grouped into 50 px horizontal bands and sorted
   left-column-first within each band. Correctly places centered section headings
@@ -196,7 +217,9 @@ rather than down each column. Lines are re-sorted before alignment:
   by the right column top-to-bottom, matching Gemini's reading order for pages with
   independent side-by-side city sections.
 
-Column breaks are detected as gaps in the x1 distribution exceeding 10% of page width.
+Column breaks are detected in two stages: first as gaps in the x1 distribution
+exceeding 8% of page width; then a bimodal histogram fallback for pages where a
+page-number outlier creates a degenerate single-line split.
 
 **Output JSON schema:**
 
@@ -223,7 +246,7 @@ Column breaks are detected as gaps in the x1 distribution exceeding 10% of page 
       ]
     }
   ],
-  "unmatched_gemini": ["lines with no Tesseract match"]
+  "unmatched_gemini": ["lines with no bbox match"]
 }
 ```
 
@@ -231,13 +254,7 @@ IIIF canvas URIs and dimensions are read from the `manifest.json` cached by
 `download_images.py`. Bounding boxes are expressed in both pixel space and IIIF
 canvas fragment space.
 
-#### `improve_alignment.py` — Alignment improvement
-Retries Tesseract with alternative page segmentation modes (PSM 11, PSM 6) for
-pages where more than 5% of Gemini lines are unmatched. Re-runs `align_ocr` with
-the new hOCR and keeps the result only if it reduces the unmatched count. Writes
-updated `*_aligned.json` files in-place.
-
-#### `visualize_alignment.py` — Alignment visualization
+#### `analysis/visualize_alignment.py` — Alignment visualization
 Reads each `*_aligned.json` and draws color-coded bounding boxes on the source
 image, saving `{stem}_{model_slug}_viz.jpg`:
 
@@ -247,7 +264,39 @@ image, saving `{stem}_{model_slug}_viz.jpg`:
 Visualization output files are automatically excluded from all OCR and alignment
 stages (files ending in `_viz.jpg` are skipped).
 
-#### `extract_entries.py` — Entry extraction
+#### `pipeline/review_alignment.py` — Interactive alignment review
+A local Flask web UI for manually correcting pages where automatic alignment left
+unmatched Gemini entries. Run after `--align-ocr` (and optionally `--visualize`)
+to work through problematic pages before proceeding to `--extract-entries`.
+
+**Workflow:**
+1. The sidebar lists all pages in the images directory, sorted by unmatched-entry
+   count. Filter by volume, search term, or minimum unmatched count.
+2. Click a page to load it. Matched lines are overlaid in green.
+3. The *Unmatched Gemini text* panel shows entries that have no bounding box.
+4. Draw one or more bounding boxes over the regions containing those entries —
+   each drag adds a box. Boxes are numbered on the canvas when multiple are drawn.
+   Use *Undo last* to remove the most recent box.
+5. Click *Run Surya on N boxes*. Surya re-runs OCR on each crop; all detected
+   lines are merged top-to-bottom and Needleman-Wunsch-aligned against the
+   unmatched entries.
+6. The *Proposed matches* panel shows Surya → Gemini pairs with similarity scores.
+   Pairs ≥ 40% are pre-checked in green. Uncheck or add as needed.
+7. Click *Save accepted*. Matched pairs are written back to `*_aligned.json`
+   with `"confidence": "manual"` and the page's unmatched count updates immediately.
+
+Surya models are pre-loaded at server startup (~30 s) so all subsequent
+annotation requests are fast.
+
+```bash
+# Run standalone (recommended for iterative review):
+python pipeline/review_alignment.py images/ --model gemini-2.0-flash
+
+# Or via the pipeline (blocks until Ctrl+C):
+python main.py collections.txt --review-alignment --model gemini-2.0-flash
+```
+
+#### `pipeline/extract_entries.py` — Entry extraction
 Reads each `*_aligned.json` file and calls Gemini with a NER prompt
 (`prompts/ner_prompt.md`) to identify structured directory entries. Each entry is
 extracted with the following fields when present:
@@ -264,7 +313,12 @@ extracted with the following fields when present:
 Outputs a per-page `*_entries.json` sidecar and an aggregate `entries_{model}.csv`
 for the entire collection.
 
-#### `geocode_entries.py` — Geocoding
+By default uses `gemini-2.0-flash` (fast and cheap). Dense pages that exceed the
+model's output token limit automatically fall back to `gemini-2.5-flash` (higher
+output limit), and then to partial JSON recovery if needed. Previously failed pages
+(where a `*_entries_error.txt` sidecar exists) are auto-retried without `--force`.
+
+#### `pipeline/geocode_entries.py` — Geocoding
 Reads an `entries_{model}.csv` (or an images directory containing one) and resolves
 each entry to geographic coordinates:
 
@@ -278,11 +332,11 @@ the network for new queries. Writes `entries_{model}_geocoded.csv` with added
 `lat`, `lon`, and `geocode_level` (`"address"` | `"city"` | `""`) columns.
 
 ```bash
-GOOGLE_MAPS_API_KEY=... python geocode_entries.py images/green_book_1962_9ab2e8f0/ \
-    --model gemini-2.0-flash
+GOOGLE_MAPS_API_KEY=... python pipeline/geocode_entries.py \
+    images/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
 ```
 
-#### `map_entries.py` — Interactive map
+#### `pipeline/map_entries.py` — Interactive map
 Reads a `entries_{model}_geocoded.csv` and generates a self-contained Leaflet HTML
 map (`entries_{model}.html`) with:
 - Clustered markers (MarkerCluster) color-coded by establishment category
@@ -298,49 +352,59 @@ geocoded CSV from `geocode_entries.py`.
 
 ```
 directory-pipeline/
-├── main.py                       # Pipeline orchestrator
-├── download_images.py            # Download images from IIIF manifests
-├── detect_spreads.py             # Spread detection
-├── split_spreads.py              # Spread splitting
-├── detect_columns.py             # Column layout detection
-├── run_ocr.py                    # Tesseract OCR
-├── run_gemini_ocr.py             # Gemini OCR
-├── compare_ocr.py                # Model comparison
-├── align_ocr.py                  # NW alignment
-├── improve_alignment.py          # Alignment improvement (PSM retry)
-├── visualize_alignment.py        # Alignment visualization
-├── extract_entries.py            # Structured entry extraction (NER)
-├── geocode_entries.py            # Entry geocoding
-├── map_entries.py                # Interactive map generation
+├── main.py                           # Pipeline orchestrator
 │
-├── sources/                      # Collection metadata exporters
-│   ├── loc_collection_csv.py     # Library of Congress
-│   └── ia_collection_csv.py      # Internet Archive
-│   ├── nypl_collection_csv.py    # NYPL Digital Collections
+├── pipeline/                         # Active pipeline stage scripts
+│   ├── download_images.py            # Download images from IIIF manifests
+│   ├── detect_spreads.py             # Spread detection
+│   ├── split_spreads.py              # Spread splitting
+│   ├── surya_detect.py               # Surya neural column detection (preferred)
+│   ├── detect_columns.py             # Pixel-projection column detection (legacy)
+│   ├── run_surya_ocr.py              # Surya OCR — line-level bboxes (preferred)
+│   ├── run_gemini_ocr.py             # Gemini OCR
+│   ├── align_ocr.py                  # NW alignment (Surya preferred, Tesseract fallback)
+│   ├── review_alignment.py           # Interactive alignment review UI (Flask)
+│   ├── extract_entries.py            # Structured entry extraction (NER)
+│   ├── geocode_entries.py            # Entry geocoding
+│   └── map_entries.py                # Interactive map generation
 │
-├── utils/                        # Shared utilities
-│   └── iiif_utils.py             # IIIF v2/v3 manifest parsing
+├── sources/                          # Collection metadata exporters
+│   ├── loc_collection_csv.py         # Library of Congress
+│   ├── ia_collection_csv.py          # Internet Archive
+│   └── nypl_collection_csv.py        # NYPL Digital Collections
 │
-├── prompts/                      # Gemini system prompts
-│   ├── ocr_prompt.md             # OCR transcription prompt
-│   └── ner_prompt.md             # NER / entry extraction prompt
+├── analysis/                         # Dev tools (not in main pipeline)
+│   ├── compare_ocr.py                # Side-by-side OCR model comparison
+│   ├── visualize_alignment.py        # Draw alignment boxes on images → *_viz.jpg
+│   ├── compare_extraction.py         # Compare entry extraction across models
+│   ├── visualize_entries.py          # Draw entry bounding boxes on images
+│   ├── repatch_fragments.py          # Re-sync canvas_fragment coords after re-alignment
+│   ├── chandra_eval.py               # Evaluate Chandra OCR model on collection pages
+│   └── surya_eval.py                 # Evaluate Surya OCR model accuracy
 │
-├── analysis/                     # Standalone analysis tools
-│   ├── compare_extraction.py     # Compare entry extraction across models
-│   ├── visualize_entries.py      # Draw entry bounding boxes on images
-│   └── repatch_fragments.py      # Re-sync canvas_fragment coords after re-alignment
+├── old/                              # Legacy and superseded scripts
+│   └── run_ocr.py                    # Tesseract OCR — word-level hOCR (use --surya-ocr instead)
 │
-├── pyproject.toml                # Python project config and dependencies
-├── collection_csv/               # Output of --*-csv stages (one CSV per collection)
+├── utils/                            # Shared utilities
+│   └── iiif_utils.py                 # IIIF v2/v3 manifest parsing
+│
+├── prompts/                          # Gemini system prompts
+│   ├── ocr_prompt.md                 # OCR transcription prompt
+│   └── ner_prompt.md                 # NER / entry extraction prompt
+│
+├── pyproject.toml                    # Python project config and dependencies
+├── collection_csv/                   # Output of --*-csv stages (one CSV per collection)
 └── images/
-    └── {slug}/                   # e.g. the_negro_motorist_green_book_1947_4bea2040/
-        └── {item_id}/            # NYPL UUID or LoC/IA identifier
+    └── {slug}/                       # e.g. the_negro_motorist_green_book_1947_4bea2040/
+        └── {item_id}/                # NYPL UUID or LoC/IA identifier
             ├── manifest.json
             ├── 0001_{image_id}.jpg
             ├── 0001_{image_id}_left.jpg              # if spread-split
             ├── 0001_{image_id}_right.jpg             # if spread-split
             ├── 0001_{image_id}_split.json            # split coordinate sidecar
-            ├── 0001_{image_id}_tesseract.hocr
+            ├── 0001_{image_id}_surya.json            # Surya line bboxes + text
+            ├── 0001_{image_id}_surya.txt             # Surya plain text
+            ├── 0001_{image_id}_tesseract.hocr        # (legacy Tesseract output)
             ├── 0001_{image_id}_tesseract.txt
             ├── 0001_{image_id}_{model}.txt           # Gemini plain text
             ├── 0001_{image_id}_{model}_aligned.json  # NW alignment output
@@ -364,10 +428,10 @@ IA identifier. Pass `--slug` to override.
 
 ## Installation
 
-Requires Python 3.11+ and Tesseract.
+Requires Python 3.11+. Tesseract is only needed for the legacy `--tesseract` stage.
 
 ```bash
-# Install Tesseract
+# Optional: install Tesseract for legacy OCR support
 brew install tesseract          # macOS
 apt install tesseract-ocr       # Debian/Ubuntu
 
@@ -375,12 +439,12 @@ apt install tesseract-ocr       # Debian/Ubuntu
 uv sync                         # or: pip install -e .
 ```
 
-Set environment variables:
+Set environment variables (or copy `.env.template` to `.env`):
 
 ```bash
+export GEMINI_API_KEY=your_key_here
 export NYPL_API_TOKEN=your_token_here      # from https://api.repo.nypl.org/sign_up
                                             # (not needed for LoC or IA)
-export GEMINI_API_KEY=your_key_here
 export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geocoding
 ```
 
@@ -388,12 +452,22 @@ export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geo
 
 ## Usage
 
+### Standard end-to-end run
+
+```bash
+# Full pipeline from download through map generation
+python main.py collections.txt --full-run --model gemini-2.0-flash
+
+# With NYPL metadata export
+python main.py collections.txt --nypl-csv --full-run --model gemini-2.0-flash
+```
+
 ### Library of Congress items
 
 ```bash
 # Export metadata and download images for a single LoC item
 python main.py https://www.loc.gov/item/01015253/ \
-    --loc-csv --download --tesseract --gemini-ocr --model gemini-2.0-flash
+    --loc-csv --download --gemini-ocr --model gemini-2.0-flash
 
 # Export metadata and download images for a full LoC collection
 python main.py https://www.loc.gov/collections/civil-war-maps/ \
@@ -409,7 +483,7 @@ python main.py https://www.loc.gov/item/01015253/ \
 ```bash
 # Download a single IA item
 python main.py https://archive.org/details/ldpd_11290437_000/ \
-    --ia-csv --download --tesseract --gemini-ocr --model gemini-2.0-flash
+    --ia-csv --download --gemini-ocr --model gemini-2.0-flash
 
 # Download an IA collection
 python main.py https://archive.org/details/durstoldyorklibrary \
@@ -422,13 +496,16 @@ python main.py https://archive.org/details/durstoldyorklibrary \
 # Export metadata and download images
 python main.py collections.txt --nypl-csv --download
 
-# Detect and split spreads, then run both OCR engines
+# Detect and split spreads, then run OCR
 python main.py collections.txt --detect-spreads --split-spreads \
-    --tesseract --gemini-ocr --model gemini-2.0-flash
+    --surya-ocr --gemini-ocr --model gemini-2.0-flash
 
-# Run the full alignment pipeline
-python main.py collections.txt --align-ocr --improve-alignment --visualize \
-    --model gemini-2.0-flash --force
+# Run alignment and visualize results
+python main.py collections.txt --align-ocr --visualize \
+    --model gemini-2.0-flash
+
+# Interactively review and correct unmatched entries
+python pipeline/review_alignment.py images/ --model gemini-2.0-flash
 
 # Extract entries, geocode, and build a map
 python main.py collections.txt --extract-entries --geocode --map \
@@ -439,7 +516,8 @@ python main.py collections.txt --extract-entries --geocode --map \
 
 ```bash
 # Download a single manifest directly (no CSV needed)
-python download_images.py --manifest https://example.org/iiif/item/manifest.json \
+python pipeline/download_images.py \
+    --manifest https://example.org/iiif/item/manifest.json \
     --output-dir images/my-item
 ```
 
@@ -451,49 +529,57 @@ python main.py collections.txt --compare-ocr \
     --models gemini-2.0-flash gemini-2.5-pro
 
 # Dry run — show commands without executing
-python main.py collections.txt --download --tesseract --gemini-ocr \
+python main.py collections.txt --download --surya-ocr --gemini-ocr \
     --model gemini-2.0-flash --dry-run
+
+# Force re-processing of already-completed files
+python main.py collections.txt --align-ocr --model gemini-2.0-flash --force
 ```
 
-Individual scripts can also be run directly:
+### Running pipeline scripts directly
 
 ```bash
-python align_ocr.py images/the_negro_motorist_green_book_1940_feb978b0 \
+python pipeline/align_ocr.py images/the_negro_motorist_green_book_1940_feb978b0 \
     --model gemini-2.0-flash --force
 
-python extract_entries.py images/the_negro_motorist_green_book_1940_feb978b0 \
+python pipeline/extract_entries.py images/the_negro_motorist_green_book_1940_feb978b0 \
     --model gemini-2.0-flash
 
-python geocode_entries.py images/the_negro_motorist_green_book_1940_feb978b0 \
+python pipeline/geocode_entries.py images/the_negro_motorist_green_book_1940_feb978b0 \
     --model gemini-2.0-flash
 
-python map_entries.py images/the_negro_motorist_green_book_1940_feb978b0 \
+python pipeline/map_entries.py images/the_negro_motorist_green_book_1940_feb978b0 \
     --model gemini-2.0-flash
 ```
 
-Analysis tools (not in the main pipeline) can be run from the `analysis/` directory:
+Analysis tools can be run from the `analysis/` directory:
 
 ```bash
-python analysis/visualize_entries.py images/the_negro_motorist_green_book_1940_feb978b0 \
-    --model gemini-2.0-flash
+python analysis/visualize_alignment.py \
+    images/the_negro_motorist_green_book_1940_feb978b0 --model gemini-2.0-flash
 
-python analysis/repatch_fragments.py images/the_negro_motorist_green_book_1947_4bea2040 \
-    --model gemini-2.0-flash
+python analysis/compare_extraction.py \
+    images/the_negro_motorist_green_book_1940_feb978b0
+
+python analysis/repatch_fragments.py \
+    images/the_negro_motorist_green_book_1947_4bea2040 --model gemini-2.0-flash
 ```
 
 ---
 
 ## Key design decisions
 
-**Gemini for accuracy, Tesseract for coordinates.** Gemini produces far more
-accurate transcriptions of historical print than Tesseract, especially for proper
-nouns, abbreviations, and damaged text. Tesseract's value is its hOCR output:
-word-level bounding boxes. The alignment step combines both.
+**Gemini for accuracy, Surya for coordinates.** Gemini produces far more
+accurate transcriptions of historical print than conventional OCR engines, especially
+for proper nouns, abbreviations, and damaged text. Surya provides line-level bounding
+boxes that align more cleanly with Gemini's line-oriented output than Tesseract's
+word-level hOCR. Tesseract remains supported as a legacy fallback for collections
+where Surya has already been run or word-level granularity is needed.
 
 **Anchored Needleman-Wunsch alignment.** The aligner runs a single global
 word-level NW pass (gap penalty −40, similarity 0–100 based on character edit
 distance). Before the NW pass, city/state headings and category lines that appear
-verbatim in both Gemini and Tesseract are committed as fixed *anchors*. The
+verbatim in both Gemini and Surya are committed as fixed *anchors*. The
 sequence is then split into independent segments at each anchor and each segment
 is aligned separately. This prevents misalignment drift on long pages where a
 mismatched heading would otherwise pull all subsequent entries to wrong coordinates.
@@ -503,9 +589,9 @@ mismatched heading would otherwise pull all subsequent entries to wrong coordina
 (e.g. `Mound` → `Wound`, `Innesfallen` → `Innisfallen`). This is disabled via
 `load_system_dawg=0 load_freq_dawg=0` to preserve names as-written for alignment.
 
-**Column reading-order correction.** Tesseract on multi-column pages reads across
-columns (left-to-right by y position) while Gemini reads column-by-column. Lines
-are re-sorted before alignment using two strategies:
+**Column reading-order correction.** OCR engines on multi-column pages may read
+across columns (left-to-right by y position) while Gemini reads column-by-column.
+Lines are re-sorted before alignment using two strategies:
 - *Row-major:* the default; lines are grouped into 50 px y-bands and sorted
   left-column-first within each band. Correct for pages where a centered heading
   precedes two-column body text.
@@ -513,6 +599,15 @@ are re-sorted before alignment using two strategies:
   ≥ 20% of all lines. Emits the entire left column top-to-bottom, then the entire
   right column, matching Gemini's reading order for pages with independent
   side-by-side city sections.
+
+Column breaks are detected in two stages: an x1-gap threshold of 8% of page width
+(stage 1), with a bimodal histogram fallback (stage 2) for pages where a
+page-number outlier in the margin creates a degenerate one-line pseudo-column.
+
+**Fallback model for dense pages.** `extract_entries.py` defaults to
+`gemini-2.0-flash` (fast and cheap) but escalates to `gemini-2.5-flash` for pages
+that hit the output token limit, then falls back to partial JSON recovery (salvaging
+complete entries before the truncation point) before writing an error sidecar.
 
 **Two-tier geocoding.** `geocode_entries.py` uses Google Maps (building-level
 accuracy) for entries with a street address and Nominatim city/state centroids as
@@ -543,7 +638,7 @@ The closest prior work: an end-to-end pipeline for extracting geocoded business 
 
 **Fleischhacker, Kern & Göderle (2025) — "Enhancing OCR in historical documents with complex layouts through machine learning"** ([Int. J. Digital Libraries 26:3](https://doi.org/10.1007/s00799-025-00413-z))
 
-Demonstrates that layout detection as a preprocessing step improves OCR accuracy by over 15 percentage points on multi-column historical documents (Habsburg civil service directories). The key mechanism: without layout detection, Tesseract reads across columns rather than down them, scrambling the text. This directly motivates the column reading-order correction in `align_ocr.py` and the `detect_columns.py` + `improve_alignment.py` stages.
+Demonstrates that layout detection as a preprocessing step improves OCR accuracy by over 15 percentage points on multi-column historical documents (Habsburg civil service directories). The key mechanism: without layout detection, Tesseract reads across columns rather than down them, scrambling the text. This directly motivates the column reading-order correction in `align_ocr.py` and the `detect_columns.py` / `surya_detect.py` stages.
 
 **Cook, Jones, Rosé & Logan (2020) — "The Green Books and the Geography of Segregation in Public Accommodations"** ([NBER Working Paper 26819](https://www.nber.org/papers/w26819))
 

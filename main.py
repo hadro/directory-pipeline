@@ -15,20 +15,25 @@ command line:
   --nypl-csv        sources/nypl_collection_csv.py  → collection_csv/{slug}.csv  (NYPL only)
   --loc-csv         sources/loc_collection_csv.py   → collection_csv/{slug}.csv  (LoC only)
   --ia-csv          sources/ia_collection_csv.py    → collection_csv/{slug}.csv  (Internet Archive only)
-  --download        download_images.py               → images/{slug}/
-  --detect-spreads  detect_spreads.py                (double-page spread detection)
-  --split-spreads   split_spreads.py                 (split spreads into left/right pages)
-  --surya-detect    surya_detect.py                  (Surya neural column detection → columns_report.csv)
-  --detect-columns  detect_columns.py                (pixel-projection column detection → columns_report.csv)
-  --tesseract       run_ocr.py                       (Tesseract OCR, uses columns_report.csv if present)
-  --gemini-ocr      run_gemini_ocr.py                (Gemini OCR)
-  --compare-ocr     compare_ocr.py                   (side-by-side model comparison)
-  --align-ocr           align_ocr.py                 (NW alignment of Gemini text to Tesseract bboxes)
-  --improve-alignment   improve_alignment.py         (retry Tesseract PSM for poorly-aligned pages)
-  --visualize           visualize_alignment.py       (draw alignment boxes on images → *_viz.jpg)
-  --extract-entries     extract_entries.py           (extract structured entries from aligned OCR)
-  --geocode             geocode_entries.py            (geocode entries to lat/lon)
-  --map                 map_entries.py               (generate interactive HTML map)
+  --download        pipeline/download_images.py       → images/{slug}/
+  --detect-spreads  pipeline/detect_spreads.py        (double-page spread detection)
+  --split-spreads   pipeline/split_spreads.py         (split spreads into left/right pages)
+  --surya-detect    pipeline/surya_detect.py          (Surya neural column detection → columns_report.csv)
+  --detect-columns  pipeline/detect_columns.py        (pixel-projection column detection → columns_report.csv)
+  --tesseract       old/run_ocr.py                    (Tesseract OCR — legacy; use --surya-ocr instead)
+  --surya-ocr       pipeline/run_surya_ocr.py         (Surya OCR → *_surya.json line bboxes + *_surya.txt)
+  --gemini-ocr      pipeline/run_gemini_ocr.py        (Gemini OCR)
+  --compare-ocr     analysis/compare_ocr.py           (side-by-side model comparison; accepts "surya" token)
+  --align-ocr       pipeline/align_ocr.py             (NW alignment of Gemini text to Surya/Tesseract bboxes)
+  --visualize       analysis/visualize_alignment.py   (draw alignment boxes on images → *_viz.jpg)
+  --review-alignment pipeline/review_alignment.py     (interactive UI to correct unmatched entries → *_aligned.json)
+  --extract-entries pipeline/extract_entries.py        (extract structured entries from aligned OCR)
+  --geocode         pipeline/geocode_entries.py        (geocode entries to lat/lon)
+  --map             pipeline/map_entries.py            (generate interactive HTML map)
+
+  --full-run            shorthand for --download --surya-ocr --gemini-ocr --align-ocr
+                          --review-alignment --extract-entries --geocode --map
+                          (defaults --batch-size and --workers to 8)
 
 Usage
 -----
@@ -67,6 +72,9 @@ import time
 from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 SCRIPT_DIR = Path(__file__).parent
 API_BASE = "https://api.repo.nypl.org/api/v2"
@@ -81,23 +89,24 @@ UUID_RE = re.compile(
 # Each entry is (dest_attr_name, script_filename, human_label).
 # ---------------------------------------------------------------------------
 PIPELINE: list[tuple[str, str, str]] = [
-    ("nypl_csv",          "sources/nypl_collection_csv.py",  "--nypl-csv"),
-    ("loc_csv",           "sources/loc_collection_csv.py",   "--loc-csv"),
-    ("ia_csv",            "sources/ia_collection_csv.py",    "--ia-csv"),
-    ("download",          "download_images.py",               "--download"),
-    ("detect_spreads",    "detect_spreads.py",                "--detect-spreads"),
-    ("split_spreads",     "split_spreads.py",                 "--split-spreads"),
-    ("surya_detect",      "surya_detect.py",                  "--surya-detect"),
-    ("detect_columns",    "detect_columns.py",                "--detect-columns"),
-    ("tesseract",         "run_ocr.py",                       "--tesseract"),
-    ("gemini_ocr",        "run_gemini_ocr.py",                "--gemini-ocr"),
-    ("compare_ocr",       "compare_ocr.py",                   "--compare-ocr"),
-    ("align_ocr",         "align_ocr.py",                     "--align-ocr"),
-    ("improve_alignment", "improve_alignment.py",             "--improve-alignment"),
-    ("visualize",         "visualize_alignment.py",           "--visualize"),
-    ("extract_entries",   "extract_entries.py",               "--extract-entries"),
-    ("geocode",           "geocode_entries.py",               "--geocode"),
-    ("map",               "map_entries.py",                   "--map"),
+    ("nypl_csv",        "sources/nypl_collection_csv.py",      "--nypl-csv"),
+    ("loc_csv",         "sources/loc_collection_csv.py",       "--loc-csv"),
+    ("ia_csv",          "sources/ia_collection_csv.py",        "--ia-csv"),
+    ("download",        "pipeline/download_images.py",         "--download"),
+    ("detect_spreads",  "pipeline/detect_spreads.py",          "--detect-spreads"),
+    ("split_spreads",   "pipeline/split_spreads.py",           "--split-spreads"),
+    ("surya_detect",    "pipeline/surya_detect.py",            "--surya-detect"),
+    ("detect_columns",  "pipeline/detect_columns.py",          "--detect-columns"),
+    ("tesseract",       "old/run_ocr.py",                      "--tesseract"),
+    ("surya_ocr",       "pipeline/run_surya_ocr.py",           "--surya-ocr"),
+    ("gemini_ocr",      "pipeline/run_gemini_ocr.py",          "--gemini-ocr"),
+    ("compare_ocr",     "analysis/compare_ocr.py",             "--compare-ocr"),
+    ("align_ocr",       "pipeline/align_ocr.py",               "--align-ocr"),
+    ("visualize",       "analysis/visualize_alignment.py",     "--visualize"),
+    ("review_alignment","pipeline/review_alignment.py",        "--review-alignment"),
+    ("extract_entries", "pipeline/extract_entries.py",         "--extract-entries"),
+    ("geocode",         "pipeline/geocode_entries.py",         "--geocode"),
+    ("map",             "pipeline/map_entries.py",             "--map"),
 ]
 
 
@@ -456,6 +465,14 @@ def build_stage_args(
             a += ["--dict"]
         return a
 
+    if stage == "surya_ocr":
+        if not _require_images():
+            return None
+        a = [str(images_dir)]
+        if getattr(parsed, "batch_size", None) is not None:
+            a += ["--batch-size", str(parsed.batch_size)]
+        return a
+
     if stage == "gemini_ocr":
         if not _require_images():
             return None
@@ -497,26 +514,6 @@ def build_stage_args(
                 a += ["--workers", str(parsed.workers)]
             if getattr(parsed, "force", False):
                 a += ["--force"]
-            runs.append(a)
-        return runs  # list[list[str]] — one run per model
-
-    if stage == "improve_alignment":
-        if not _require_images():
-            return None
-        models = parsed.models if parsed.models else (
-            [parsed.model] if getattr(parsed, "model", None) else []
-        )
-        if not models:
-            print(
-                "    Skipping: --improve-alignment requires --model or --models.",
-                file=sys.stderr,
-            )
-            return None
-        runs = []
-        for m in models:
-            a = [str(images_dir), "--model", m]
-            if parsed.workers is not None:
-                a += ["--workers", str(parsed.workers)]
             runs.append(a)
         return runs  # list[list[str]] — one run per model
 
@@ -591,6 +588,13 @@ def build_stage_args(
         a = [str(spreads_report)]
         if getattr(parsed, "force", False):
             a += ["--force"]
+        return a
+
+    if stage == "review_alignment":
+        if not _require_images():
+            return None
+        m = (parsed.models[0] if parsed.models else None) or getattr(parsed, "model", "gemini-2.0-flash")
+        a = [str(images_dir), "--model", m]
         return a
 
     if stage == "extract_entries":
@@ -718,7 +722,16 @@ def main() -> None:
         "--tesseract",
         dest="tesseract",
         action="store_true",
-        help="Run Tesseract OCR on downloaded images",
+        help="Run Tesseract OCR on downloaded images (legacy; prefer --surya-ocr)",
+    )
+    stages.add_argument(
+        "--surya-ocr",
+        dest="surya_ocr",
+        action="store_true",
+        help=(
+            "Run Surya OCR on downloaded images, producing line-level bboxes "
+            "(*_surya.json) used by --align-ocr. Requires surya-ocr."
+        ),
     )
     stages.add_argument(
         "--gemini-ocr",
@@ -736,15 +749,9 @@ def main() -> None:
         "--align-ocr",
         dest="align_ocr",
         action="store_true",
-        help="Align Gemini text to Tesseract hOCR bboxes (see --model / --models)",
-    )
-    stages.add_argument(
-        "--improve-alignment",
-        dest="improve_alignment",
-        action="store_true",
         help=(
-            "Retry Tesseract with alternative PSM settings for poorly-aligned pages "
-            "(>5%% unmatched Gemini lines). Runs after --align-ocr."
+            "Align Gemini text to OCR bboxes (Surya line-level preferred; "
+            "Tesseract word-level as legacy fallback). See --model / --models."
         ),
     )
     stages.add_argument(
@@ -766,6 +773,17 @@ def main() -> None:
         help="Split detected spreads into left/right page files (requires --detect-spreads output)",
     )
     stages.add_argument(
+        "--review-alignment",
+        dest="review_alignment",
+        action="store_true",
+        help=(
+            "Launch the interactive alignment review UI (Flask web server). "
+            "Browse pages by unmatched count, draw bounding boxes over unmatched "
+            "regions, re-run Surya OCR on crops, and save accepted matches back "
+            "to *_aligned.json. Blocks until you press Ctrl+C."
+        ),
+    )
+    stages.add_argument(
         "--extract-entries",
         dest="extract_entries",
         action="store_true",
@@ -782,6 +800,19 @@ def main() -> None:
         dest="map",
         action="store_true",
         help="Generate interactive HTML map from geocoded entries (see --model / --models)",
+    )
+    stages.add_argument(
+        "--full-run",
+        dest="full_run",
+        action="store_true",
+        help=(
+            "Shorthand for the standard end-to-end pipeline: "
+            "--download --surya-ocr --gemini-ocr --align-ocr --review-alignment "
+            "--extract-entries --geocode --map. "
+            "Defaults --batch-size to 8 and --workers to 8 unless already set. "
+            "Add --model / --models to specify the Gemini model (default: gemini-2.0-flash). "
+            "Combine with --nypl-csv / --loc-csv / --ia-csv to also export metadata."
+        ),
     )
 
     # --- Authentication ---
@@ -816,6 +847,14 @@ def main() -> None:
         default=None,
         metavar="N",
         help="Parallel workers for OCR stages",
+    )
+    opts.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        dest="batch_size",
+        metavar="N",
+        help="Images per Surya inference batch for --surya-ocr (default: 4; reduce if OOM)",
     )
     opts.add_argument(
         "--width",
@@ -919,13 +958,23 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # Expand --full-run into its constituent stage flags and defaults
+    if args.full_run:
+        for flag in ("download", "surya_ocr", "gemini_ocr", "align_ocr",
+                     "review_alignment", "extract_entries", "geocode", "map"):
+            setattr(args, flag, True)
+        if args.batch_size is None:
+            args.batch_size = 8
+        if args.workers is None:
+            args.workers = 8
+
     # Validate: at least one stage must be selected
     enabled = {stage for stage, _, _ in PIPELINE if getattr(args, stage)}
     if not enabled:
         parser.error(
             "No pipeline stages selected. "
-            "Use --nypl-csv, --loc-csv, --ia-csv, --download, --gemini-ocr, "
-            "--extract-entries, --geocode, --map, etc."
+            "Use --nypl-csv, --loc-csv, --ia-csv, --download, --surya-ocr, --gemini-ocr, "
+            "--align-ocr, --review-alignment, --extract-entries, --geocode, --map, etc."
         )
 
     # Validate: stages that need a token (not enforced in dry-run)

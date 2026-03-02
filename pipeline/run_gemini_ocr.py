@@ -25,11 +25,14 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from dotenv import load_dotenv
 from google import genai
+
+load_dotenv()
 from google.genai.types import GenerateContentConfig, Part
 
 DEFAULT_MODEL = "gemini-2.0-flash"
-PROMPT_FILE = Path(__file__).parent / "prompts" / "ocr_prompt.md"
+PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
 
 _print_lock = threading.Lock()
 

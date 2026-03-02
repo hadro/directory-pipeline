@@ -37,11 +37,17 @@ import threading
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
 from google import genai
+
+load_dotenv()
 from google.genai.types import GenerateContentConfig, Part
 
-DEFAULT_MODEL = "gemini-2.5-flash"
-NER_PROMPT_FILE = Path(__file__).parent / "prompts" / "ner_prompt.md"
+DEFAULT_MODEL = "gemini-2.0-flash"
+# Fallback used when the primary model appears to have hit its output token limit.
+# gemini-2.0-flash caps output at ~8 k tokens; gemini-2.5-flash allows up to 65 k.
+FALLBACK_MODEL = "gemini-2.5-flash"
+NER_PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ner_prompt.md"
 
 ENTRY_FIELDS = [
     "image", "page",
@@ -104,16 +110,21 @@ def _call_gemini(
     return ""
 
 
-def _parse_json_response(text: str) -> dict | None:
-    """Parse a JSON object from a model response, stripping any markdown fences."""
+def _strip_fence(text: str) -> str:
+    """Strip markdown code fences from a model response."""
     text = text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
-        # Strip opening fence (possibly ```json) and closing fence
         inner = lines[1:]
         if inner and inner[-1].strip() == "```":
             inner = inner[:-1]
         text = "\n".join(inner).strip()
+    return text
+
+
+def _parse_json_response(text: str) -> dict | None:
+    """Parse a JSON object from a model response, stripping any markdown fences."""
+    text = _strip_fence(text)
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -126,6 +137,64 @@ def _parse_json_response(text: str) -> dict | None:
             except json.JSONDecodeError:
                 pass
     return None
+
+
+def _recover_partial_json(text: str) -> dict | None:
+    """Salvage complete entries from a response truncated by the model's token limit.
+
+    When a page has many entries the model's output can be cut off mid-entry.
+    This function uses raw_decode to walk the entries array and collect every
+    complete entry that was emitted before the truncation point.
+
+    Returns a dict with "entries" and "page_context" keys (like a normal
+    response), or None if no complete entries could be recovered.
+    """
+    text = _strip_fence(text)
+    decoder = json.JSONDecoder()
+
+    # Recover page_context (appears before entries; it's a shallow object)
+    page_context: dict = {}
+    ctx_pos = text.find('"page_context"')
+    if ctx_pos != -1:
+        colon = text.find(":", ctx_pos + len('"page_context"'))
+        brace = text.find("{", colon) if colon != -1 else -1
+        if brace != -1:
+            try:
+                page_context, _ = decoder.raw_decode(text, brace)
+            except json.JSONDecodeError:
+                pass
+
+    # Find the entries array
+    entries_pos = text.find('"entries"')
+    if entries_pos == -1:
+        return None
+    array_open = text.find("[", entries_pos)
+    if array_open == -1:
+        return None
+
+    # Walk the array, parsing one complete object at a time
+    entries: list[dict] = []
+    i = array_open + 1
+    while i < len(text):
+        ch = text[i]
+        if ch in " \t\n\r,":
+            i += 1
+            continue
+        if ch == "]":
+            break  # Normal end of array (response was not truncated)
+        if ch == "{":
+            try:
+                obj, end = decoder.raw_decode(text, i)
+                entries.append(obj)
+                i = end
+            except json.JSONDecodeError:
+                break  # Truncation point — stop here
+        else:
+            break
+
+    if not entries:
+        return None
+    return {"entries": entries, "page_context": page_context}
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +307,7 @@ def process_page(
     force: bool,
     dry_run: bool,
     aligned_model: str | None = None,
+    fallback_model: str | None = FALLBACK_MODEL,
 ) -> dict:
     """
     Extract entries from one aligned JSON page.
@@ -249,7 +319,7 @@ def process_page(
       {
         "entries": [...],
         "page_context": {...},
-        "status": "ok" | "skipped" | "empty" | "error:<msg>" | "parse_error",
+        "status": "ok" | "partial_recovery" | "skipped" | "empty" | "error:<msg>" | "parse_error",
       }
     """
     slug = model_slug(model)
@@ -296,22 +366,50 @@ def process_page(
         if image_path is None:
             _log(f"    Warning: image not found for {aligned_path.name}; falling back to text-only")
 
-    # Call API
+    error_path = aligned_path.parent / f"{stem}_{slug}_entries_error.txt"
+
+    # Call primary model once
     try:
-        raw = _call_gemini(client, model, system_prompt, user_msg, image_path)
+        last_raw = _call_gemini(client, model, system_prompt, user_msg, image_path)
     except Exception as exc:
         return {"entries": [], "page_context": prior_context, "status": f"api_error:{exc}"}
+    result = _parse_json_response(last_raw)
 
-    result = _parse_json_response(raw)
-    if result is None:
-        # Save raw response for debugging
-        (aligned_path.parent / f"{stem}_{slug}_entries_error.txt").write_text(
-            raw, encoding="utf-8"
+    # If the primary model failed, try once with the fallback model.
+    # gemini-2.0-flash caps output at ~8 k tokens; the fallback (gemini-2.5-flash)
+    # allows up to 65 k, which handles dense pages with 100+ entries.
+    if result is None and fallback_model and fallback_model != model:
+        _log(
+            f"    [{aligned_path.name}] primary model exhausted — retrying once"
+            f" with fallback model {fallback_model}"
         )
-        return {"entries": [], "page_context": prior_context, "status": "parse_error"}
+        try:
+            last_raw = _call_gemini(client, fallback_model, system_prompt, user_msg, image_path)
+            result = _parse_json_response(last_raw)
+        except Exception as exc:
+            _log(f"    [{aligned_path.name}] fallback model error: {exc}")
+
+    partial = False
+    if result is None:
+        # Full parse failed even after retries and fallback. The response is
+        # likely truncated. Try to salvage complete entries.
+        result = _recover_partial_json(last_raw)
+        if result is None:
+            # Nothing recoverable — save for debugging and skip this page
+            error_path.write_text(last_raw, encoding="utf-8")
+            return {"entries": [], "page_context": prior_context, "status": "parse_error"}
+        partial = True
+        _log(
+            f"    [{aligned_path.name}] WARNING: response was truncated; "
+            f"recovered {len(result.get('entries', []))} entries (may be incomplete)"
+        )
+
+    # Clean up any leftover error file from a prior run
+    if error_path.exists():
+        error_path.unlink()
 
     entries = result.get("entries", [])
-    new_context = result.get("page_context", prior_context)
+    new_context = result.get("page_context") or prior_context
 
     # Link canvas fragments from the aligned JSON.
     # Use line_text if present (legacy), otherwise match on establishment_name.
@@ -334,7 +432,7 @@ def process_page(
     }
     out_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    return {"entries": entries, "page_context": new_context, "status": "ok"}
+    return {"entries": entries, "page_context": new_context, "status": "partial_recovery" if partial else "ok"}
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +449,7 @@ def process_item(
     dry_run: bool,
     quiet: bool,
     aligned_model: str | None = None,
+    fallback_model: str | None = FALLBACK_MODEL,
 ) -> list[dict]:
     """
     Process all aligned JSON pages in an item directory in page order.
@@ -359,6 +458,8 @@ def process_item(
     aligned_model: if set, read *_{aligned_slug}_aligned.json files but write
     output tagged with the NER model slug.  Useful when OCR was run with one
     model and NER is run with another.
+    fallback_model: if set, used when the primary model appears to have hit its
+    output token limit (all retries produce unparseable responses).
     """
     slug = model_slug(model)
     aligned_slug = model_slug(aligned_model) if aligned_model else slug
@@ -380,10 +481,20 @@ def process_item(
     if not quiet:
         _log(f"  {item_dir.name}: {len(aligned_files)} page(s), mode={mode}")
 
+    aligned_suffix = f"_{aligned_slug}_aligned.json"
     for i, aligned_path in enumerate(aligned_files, 1):
+        # Auto-retry pages whose last run produced a parse error, even without --force
+        stem = aligned_path.name[: -len(aligned_suffix)]
+        error_path = aligned_path.parent / f"{stem}_{slug}_entries_error.txt"
+        page_force = force
+        if not force and error_path.exists():
+            _log(f"    [{aligned_path.name}] prior parse-error file detected — forcing retry")
+            page_force = True
+
         result = process_page(
             client, aligned_path, model, system_prompt,
-            context, mode, force, dry_run, aligned_model,
+            context, mode, page_force, dry_run, aligned_model,
+            fallback_model=fallback_model,
         )
         status = result["status"]
         n = len(result["entries"])
@@ -449,6 +560,16 @@ def main() -> None:
             "(default: same as --model). Use this when OCR was run with a "
             "different model than the one doing NER, e.g. "
             "--model gemini-2.5-flash --aligned-model gemini-2.0-flash"
+        ),
+    )
+    parser.add_argument(
+        "--fallback-model",
+        default=FALLBACK_MODEL,
+        metavar="MODEL",
+        help=(
+            "Model to try when the primary model fails all parse attempts "
+            "(typically because it hit its output token limit on dense pages). "
+            f"Default: {FALLBACK_MODEL}. Pass empty string to disable."
         ),
     )
     parser.add_argument(
@@ -522,9 +643,12 @@ def main() -> None:
         print(f"No *_{aligned_slug}_aligned.json files found under {images_root}", file=sys.stderr)
         sys.exit(1)
 
+    fallback_model = args.fallback_model or None  # empty string → disabled
+
     print(
         f"\nExtracting entries: {len(item_dirs)} item dir(s), model={args.model}"
         + (f" (aligned by {aligned_model})" if aligned_model else "")
+        + (f", fallback={fallback_model}" if fallback_model and fallback_model != args.model else "")
         + f", mode={args.mode}"
         + (" [DRY RUN]" if args.dry_run else ""),
         file=sys.stderr,
@@ -534,6 +658,7 @@ def main() -> None:
         entries = process_item(
             client, item_dir, args.model, system_prompt,
             args.mode, args.force, args.dry_run, args.quiet, aligned_model,
+            fallback_model=fallback_model,
         )
         if not args.dry_run:
             csv_path = item_dir / f"entries_{slug}.csv"

@@ -1,8 +1,11 @@
 # Downloaded data and local files
 collection_csv/*
 images/*
-samples/*
 ideas_and_questions.md
+old/*
+
+# tmp files
+.tmp*
 
 # Python
 __pycache__/
@@ -22,6 +25,7 @@ uv.lock
 
 # Claude
 .claude/
+.claudeignore
 
 # Generated docs / exports
 directory-pipeline-*

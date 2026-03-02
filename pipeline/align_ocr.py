@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Align Gemini OCR text with Tesseract hOCR bounding boxes using Needleman-Wunsch.
+"""Align Gemini OCR text with Surya (or Tesseract) bounding boxes using Needleman-Wunsch.
 
+Primary backend: Surya (line-level)
+------------------------------------
 For each image that has both {stem}_{model}.txt (Gemini) and
-{stem}_tesseract.hocr (Tesseract), produces {stem}_{model}_aligned.json
-with word-level bounding boxes from Tesseract and corrected text from Gemini.
+{stem}_surya.json (Surya), produces {stem}_{model}_aligned.json with
+line-level bounding boxes from Surya and corrected text from Gemini.
+
+Legacy backend: Tesseract (word-level)
+----------------------------------------
+If no _surya.json is found but a _tesseract.hocr file exists, the aligner
+falls back to word-level Tesseract alignment for backward compatibility.
 
 Reading-order correction
 ------------------------
-Tesseract on multi-column pages reads across columns rather than down each
-column. Lines are re-sorted by detected column (left→right) then top-to-bottom
+OCR lines are re-sorted by detected column (left→right) then top-to-bottom
 within each column before alignment.
 
 IIIF canvas URIs and dimensions are read from manifest.json cached by
@@ -16,15 +22,8 @@ download_images.py in each item directory.
 
 Confidence tiers
 ----------------
-  word — matched with word-level bboxes (all matched lines)
-  none — Gemini line had no matching Tesseract word; goes to unmatched_gemini
-
-The aligner uses a single global word-level NW pass rather than a two-level
-(line then word) approach.  Building a flat list of all Tesseract words in
-reading order and aligning against a flat list of all Gemini word tokens lets
-a Gemini line claim words from what Tesseract merged into a single noisy
-line — the common dot-leader pattern ``CITY NAME......Business, Address``
-where Tesseract emits one garbled line but Gemini correctly splits it in two.
+  line — matched with line-level bboxes from Surya (primary)
+  word — matched with word-level bboxes from Tesseract (legacy fallback)
 
 Output JSON
 -----------
@@ -38,19 +37,11 @@ Output JSON
       {
         "bbox": [x1, y1, x2, y2],
         "canvas_fragment": "canvas_uri#xywh=x,y,w,h",
-        "confidence": "word",
-        "gemini_text": "corrected line text",
-        "words": [
-          {
-            "bbox": [x1, y1, x2, y2],
-            "canvas_fragment": "canvas_uri#xywh=...",
-            "confidence": "word",
-            "text": "word"
-          }
-        ]
+        "confidence": "line",
+        "gemini_text": "corrected line text"
       }
     ],
-    "unmatched_gemini": ["lines with no tesseract match"]
+    "unmatched_gemini": ["lines with no OCR match"]
   }
 
 Usage
@@ -71,6 +62,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import iiif_utils
 
 _print_lock = threading.Lock()
@@ -176,6 +168,27 @@ def parse_hocr(path: Path) -> tuple[tuple[int, int, int, int], list[dict]]:
     return parser.page_bbox, parser.lines
 
 
+def parse_surya(path: Path) -> tuple[tuple[int, int, int, int], list[dict]]:
+    """
+    Parse a Surya JSON file produced by run_surya_ocr.py.
+
+    Returns (page_bbox, lines) where each line is:
+        {'bbox': [x1, y1, x2, y2], 'text': str}
+
+    page_bbox is (0, 0, image_width, image_height).
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    w = data.get("image_width", 0)
+    h = data.get("image_height", 0)
+    page_bbox = (0, 0, w, h)
+    lines = [
+        {"bbox": ln["bbox"], "text": ln.get("text", "")}
+        for ln in data.get("lines", [])
+        if ln.get("bbox")
+    ]
+    return page_bbox, lines
+
+
 # ---------------------------------------------------------------------------
 # Reading-order correction
 # ---------------------------------------------------------------------------
@@ -215,24 +228,80 @@ def sort_by_reading_order(lines: list[dict], page_width: int) -> list[dict]:
     right column.  In that case we emit left-column lines (sorted by y) followed
     by right-column lines (sorted by y) to match Gemini's reading order.
 
-    Column breaks are detected by gaps between consecutive x1 values > 10%
-    of page width (rather than 5%) to avoid treating indentation within a
-    single column as a column break.  The real inter-column gap is typically
-    ≥ 12% of page width on Green Book pages.
+    Column breaks are detected in two stages:
+
+    Stage 1 – consecutive x1 gap: looks for a gap > 8% of page width between
+    adjacent sorted x1 values.  This handles the common case where the
+    inter-column gutter is empty.  Also handles pages where a few bridge
+    lines (ads, page numbers) reduce the max consecutive gap to ~8–10% of
+    page width — lower than the old 10% threshold which missed these.
+
+    Stage 2 – bimodal peak detection (fallback): when stage 1 finds no break
+    or a degenerate break (< 10% of lines in the smaller "column", e.g. a
+    lone page-number at extreme x1), this stage builds a histogram of x1
+    values and detects two dense clusters separated by ≥ 20% of page width,
+    each containing ≥ 15% of lines.  The column break is placed at the
+    midpoint of the gap between the two peaks.  A bridge-sparsity guard
+    (< 10% of lines in the inter-cluster zone) prevents this from running
+    on pages with dense centered advertisement content that straddles both
+    column margins — splitting that content across columns would confuse NW.
     """
     if not lines or page_width <= 0:
         return lines
 
     x1_vals = sorted(line["bbox"][0] for line in lines)
 
-    # Find column breaks: gaps between consecutive x1 values > 10% of page width.
-    threshold = max(page_width * 0.10, 20)
+    # Stage 1: Find column breaks via consecutive x1 gaps > 8% of page width.
+    threshold = max(page_width * 0.08, 20)
     col_breaks: list[float] = []
     prev = x1_vals[0]
     for x in x1_vals[1:]:
         if x - prev > threshold:
             col_breaks.append((prev + x) / 2.0)
         prev = x
+
+    # Stage 2: Bimodal peak detection fallback.  Runs when stage 1 found no
+    # breaks, OR when its break is spurious — e.g. a page-number outlier at
+    # high x1 creates a break that puts 99% of lines in one "column" and only
+    # the page number in the other.  We detect this by checking whether the
+    # smallest column produced by stage-1 would hold < 10% of lines.
+    def _smallest_col_frac(breaks: list[float]) -> float:
+        if not breaks:
+            return 0.0
+        hist: dict[int, int] = {}
+        for ln in lines:
+            ci = next(
+                (j for j, b in enumerate(breaks) if ln["bbox"][0] < b), len(breaks)
+            )
+            hist[ci] = hist.get(ci, 0) + 1
+        return min(hist.values()) / len(lines)
+
+    if not col_breaks or _smallest_col_frac(col_breaks) < 0.10:
+        _bin = max(page_width // 20, 30)  # ~5% of page width
+        _hist: dict[int, int] = {}
+        for _x in x1_vals:
+            _b = (_x // _bin) * _bin
+            _hist[_b] = _hist.get(_b, 0) + 1
+        if len(_hist) >= 2:
+            _sorted_peaks = sorted(_hist.items(), key=lambda t: t[1], reverse=True)
+            (_p1x, _p1n), (_p2x, _p2n) = _sorted_peaks[0], _sorted_peaks[1]
+            _lx, _rx = min(_p1x, _p2x), max(_p1x, _p2x)
+            _gap = _rx - (_lx + _bin)
+            _n = len(x1_vals)
+            # Count lines in the "bridge" zone between the two peak clusters.
+            # If the bridge is dense (≥ 10% of lines), applying column-major
+            # sort would split the bridge content across both columns, confusing
+            # NW alignment.  In that case, fall back to y-band sort instead.
+            _bridge_n = sum(
+                1 for _x in x1_vals if _lx + _bin <= _x < _rx
+            )
+            if (
+                _p1n >= _n * 0.15
+                and _p2n >= _n * 0.15
+                and _gap >= page_width * 0.20
+                and _bridge_n < _n * 0.10
+            ):
+                col_breaks = [(_lx + _bin + _rx) / 2.0]
 
     def col_index(x1: int) -> int:
         for i, boundary in enumerate(col_breaks):
@@ -451,27 +520,26 @@ def _median(values: list[float]) -> float:
 
 
 def _find_anchors(
-    sorted_tess_lines: list[dict],
+    ocr_line_texts: list[str],
     gemini_lines: list[str],
 ) -> list[tuple[int, int]]:
     """
-    Find (tess_line_idx, gem_line_idx) anchor pairs where a Gemini line is a
-    near-verbatim match to an entire Tesseract line.
+    Find (ocr_line_idx, gem_line_idx) anchor pairs where a Gemini line is a
+    near-verbatim match to an entire OCR line.
 
     City/state headings and category lines typically appear verbatim in both
-    Gemini and Tesseract.  Committing those as anchors before the NW pass
-    prevents the aligner from consuming their words on wrong Gemini lines — the
+    Gemini and the OCR source.  Committing those as anchors before the NW pass
+    prevents the aligner from consuming them on wrong Gemini lines — the
     failure mode where, e.g., "CHERAW" entries mapped to CHARLESTON bounding
     boxes because the global NW preferred nearby wrong words over paying the gap
-    cost to reach the real CHERAW Tesseract line at a later sequence position.
+    cost to reach the real CHERAW OCR line at a later sequence position.
+
+    ocr_line_texts: raw (un-normalised) text strings, one per OCR line.
 
     Returns pairs in monotonically increasing order on both axes.  Each
-    Tesseract line and each Gemini line appears in at most one anchor.
+    OCR line and each Gemini line appears in at most one anchor.
     """
-    tess_line_texts = [
-        _normalize(" ".join(w["text"] for w in tl["words"]))
-        for tl in sorted_tess_lines
-    ]
+    tess_line_texts = [_normalize(t) for t in ocr_line_texts]
     gem_norms = [_normalize(g) for g in gemini_lines]
 
     # Lines whose normalised text appears more than once in the Gemini sequence
@@ -598,7 +666,8 @@ def _build_word_aligned_lines(
         ]
 
     # Anchored segmented NW
-    anchors = _find_anchors(sorted_tess_lines, gemini_lines)
+    tess_line_texts = [" ".join(w["text"] for w in tl["words"]) for tl in sorted_tess_lines]
+    anchors = _find_anchors(tess_line_texts, gemini_lines)
 
     all_pairs: list[tuple[int | None, int | None]] = []
     prev_tl = 0  # next Tess line to process (line index, inclusive)
@@ -681,6 +750,87 @@ def _build_word_aligned_lines(
 
 
 # ---------------------------------------------------------------------------
+# Line-level alignment (Surya backend)
+# ---------------------------------------------------------------------------
+
+def _build_line_aligned_lines(
+    sorted_surya_lines: list[dict],
+    gemini_lines: list[str],
+    fragment_fn,
+) -> tuple[list[dict], list[str]]:
+    """
+    Align Gemini text to Surya line bboxes using anchored Needleman-Wunsch
+    at line granularity.
+
+    Each Surya line is treated as a single unit and matched against one Gemini
+    line.  The output confidence is "line".
+
+    Anchoring works the same way as in _build_word_aligned_lines: city/state
+    headings and category lines that appear near-verbatim in both sources are
+    committed as fixed anchors before the NW pass, preventing drift across
+    long pages.
+
+    Returns (result_lines, unmatched_gemini).
+    """
+    if not sorted_surya_lines or not gemini_lines:
+        return [], list(gemini_lines)
+
+    surya_texts = [ln["text"] for ln in sorted_surya_lines]
+    anchors = _find_anchors(surya_texts, gemini_lines)
+
+    def _nw_lines(s_start: int, s_end: int, g_start: int, g_end: int):
+        """NW over line-index slices; return pairs with absolute indices."""
+        if s_start >= s_end or g_start >= g_end:
+            return []
+        pairs = needleman_wunsch(
+            surya_texts[s_start:s_end],
+            gemini_lines[g_start:g_end],
+            _text_sim,
+        )
+        return [
+            (si + s_start if si is not None else None,
+             gi + g_start if gi is not None else None)
+            for si, gi in pairs
+        ]
+
+    all_pairs: list[tuple[int | None, int | None]] = []
+    prev_sl = 0
+    prev_gl = 0
+    for surya_li, gem_li in anchors:
+        all_pairs.extend(_nw_lines(prev_sl, surya_li, prev_gl, gem_li))
+        all_pairs.extend(_nw_lines(surya_li, surya_li + 1, gem_li, gem_li + 1))
+        prev_sl = surya_li + 1
+        prev_gl = gem_li + 1
+    all_pairs.extend(_nw_lines(prev_sl, len(surya_texts), prev_gl, len(gemini_lines)))
+
+    result_lines: list[dict] = []
+    matched_gi: set[int] = set()
+
+    for si, gi in all_pairs:
+        if gi is None:
+            continue  # Surya line with no Gemini counterpart
+        if si is None:
+            continue  # will be collected as unmatched below
+        matched_gi.add(gi)
+        bbox = list(sorted_surya_lines[si]["bbox"])
+        result_lines.append({
+            "bbox": bbox,
+            "canvas_fragment": fragment_fn(bbox),
+            "confidence": "line",
+            "gemini_text": gemini_lines[gi],
+        })
+
+    # Any Gemini line not matched by a Surya line is unmatched
+    unmatched_gemini = [
+        gemini_lines[gi]
+        for gi in range(len(gemini_lines))
+        if gi not in matched_gi
+    ]
+
+    return result_lines, unmatched_gemini
+
+
+# ---------------------------------------------------------------------------
 # Per-image alignment
 # ---------------------------------------------------------------------------
 
@@ -691,24 +841,36 @@ def align_image(
     quiet: bool = False,
 ) -> str:
     """
-    Align Gemini OCR text and Tesseract hOCR for one image.
+    Align Gemini OCR text and OCR bounding boxes for one image.
+
+    Prefers Surya (_surya.json, line-level) over Tesseract (_tesseract.hocr,
+    word-level) when both are present.
+
     Returns 'ok', 'skipped', 'missing', or 'failed'.
     """
     slug = model_slug(model)
     stem = image_path.stem
-    gemini_txt = image_path.parent / f"{stem}_{slug}.txt"
-    hocr_path = image_path.parent / f"{stem}_tesseract.hocr"
-    out_path = image_path.parent / f"{stem}_{slug}_aligned.json"
+    gemini_txt  = image_path.parent / f"{stem}_{slug}.txt"
+    surya_path  = image_path.parent / f"{stem}_surya.json"
+    hocr_path   = image_path.parent / f"{stem}_tesseract.hocr"
+    out_path    = image_path.parent / f"{stem}_{slug}_aligned.json"
 
     if out_path.exists() and not force:
         return "skipped"
 
-    if not gemini_txt.exists() or not hocr_path.exists():
+    use_surya = surya_path.exists()
+    use_hocr  = hocr_path.exists()
+
+    if not gemini_txt.exists() or (not use_surya and not use_hocr):
         return "missing"
 
     try:
-        # Parse hOCR ---------------------------------------------------------
-        page_bbox, lines = parse_hocr(hocr_path)
+        # Parse OCR source ----------------------------------------------------
+        if use_surya:
+            page_bbox, lines = parse_surya(surya_path)
+        else:
+            page_bbox, lines = parse_hocr(hocr_path)
+
         img_w, img_h = page_bbox[2], page_bbox[3]
         page_w = img_w - page_bbox[0]
 
@@ -731,10 +893,15 @@ def align_image(
                 return ""
             return _canvas_fragment(canvas_uri, bbox, img_w, img_h, canvas_w, canvas_h)
 
-        # Global word-level NW alignment --------------------------------------
-        result_lines, unmatched_gemini = _build_word_aligned_lines(
-            lines, gemini_lines, fragment
-        )
+        # NW alignment --------------------------------------------------------
+        if use_surya:
+            result_lines, unmatched_gemini = _build_line_aligned_lines(
+                lines, gemini_lines, fragment
+            )
+        else:
+            result_lines, unmatched_gemini = _build_word_aligned_lines(
+                lines, gemini_lines, fragment
+            )
 
         result = {
             "image": image_path.name,
@@ -762,7 +929,10 @@ def align_image(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Align Gemini OCR text with Tesseract hOCR bounding boxes.",
+        description=(
+            "Align Gemini OCR text with Surya line bboxes (primary) "
+            "or Tesseract hOCR bboxes (legacy fallback)."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -856,8 +1026,8 @@ def main() -> None:
                     _log(f"[{completed:04d}/{total}] Done:    {out_name}")
                 elif status == "missing":
                     _log(
-                        f"[{completed:04d}/{total}] Missing: hOCR or Gemini txt "
-                        f"for {image_path.name}"
+                        f"[{completed:04d}/{total}] Missing: Surya JSON (or hOCR) "
+                        f"and/or Gemini txt for {image_path.name}"
                     )
                 else:
                     _log(f"[{completed:04d}/{total}] FAILED:  {image_path.name}")

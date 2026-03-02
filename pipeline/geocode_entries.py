@@ -34,7 +34,10 @@ import sys
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
 from geopy.geocoders import Nominatim, GoogleV3
+
+load_dotenv()
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
 # ---------------------------------------------------------------------------
