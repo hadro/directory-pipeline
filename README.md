@@ -378,7 +378,6 @@ directory-pipeline/
 │   ├── visualize_alignment.py        # Draw alignment boxes on images → *_viz.jpg
 │   ├── compare_extraction.py         # Compare entry extraction across models
 │   ├── visualize_entries.py          # Draw entry bounding boxes on images
-│   ├── repatch_fragments.py          # Re-sync canvas_fragment coords after re-alignment
 │   ├── chandra_eval.py               # Evaluate Chandra OCR model on collection pages
 │   └── surya_eval.py                 # Evaluate Surya OCR model accuracy
 │
@@ -560,9 +559,6 @@ python analysis/visualize_alignment.py \
 
 python analysis/compare_extraction.py \
     images/the_negro_motorist_green_book_1940_feb978b0
-
-python analysis/repatch_fragments.py \
-    images/the_negro_motorist_green_book_1947_4bea2040 --model gemini-2.0-flash
 ```
 
 ---
