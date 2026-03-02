@@ -36,3 +36,5 @@ research/*
 # Run files
 test.txt
 collections.txt
+analysis/chandra_eval.py
+analysis/surya_eval.py
