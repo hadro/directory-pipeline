@@ -15,11 +15,15 @@ Then build the map:
 """
 
 import argparse
+import base64
 import csv
 import json
 import random
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils import iiif_utils
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -46,14 +50,175 @@ _JITTER = 0.018   # ~2 km — applied only to city-level fallback coords
 
 
 # ---------------------------------------------------------------------------
+# IIIF thumbnail support
+# ---------------------------------------------------------------------------
+
+def _build_canvas_service_map(
+    search_root: Path,
+) -> dict[str, tuple[str, int, int, str]]:
+    """Walk search_root for manifest.json files.
+
+    Returns {canvas_id: (service_id, canvas_w, canvas_h, viewer_url)}.
+
+    canvas_w / canvas_h reflect the coordinate space that canvas_fragment
+    values in aligned.json were generated in — NOT necessarily the manifest
+    canvas dimensions (which may have been updated to natural image dims by
+    export_entry_boxes.py --update-manifest).  We read the canonical values
+    from *_aligned.json files so that _iiif_region_url's pct: calculation
+    remains correct regardless of whether the manifest has been updated.
+
+    viewer_url is a deep-link into the institution's viewer (e.g. NYPL Digital
+    Collections with ?canvasIndex=N); empty string for unknown institutions.
+    """
+    mapping: dict[str, tuple[str, int, int, str]] = {}
+    for manifest_path in search_root.rglob("manifest.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        item_uuid = manifest_path.parent.name
+        for i, canvas in enumerate(iiif_utils.iter_canvases(manifest)):
+            svc_id = canvas["service_id"]
+            viewer_url = ""
+            if svc_id.startswith("https://iiif.nypl.org/"):
+                viewer_url = (
+                    f"https://digitalcollections.nypl.org/items/{item_uuid}"
+                    f"?canvasIndex={i}"
+                )
+            mapping[canvas["canvas_id"]] = (
+                svc_id,
+                canvas["canvas_width"],
+                canvas["canvas_height"],
+                viewer_url,
+            )
+
+    # Override canvas_w / canvas_h with the coordinate space recorded in each
+    # *_aligned.json file.  align_ocr.py writes canvas_width / canvas_height as
+    # the coordinate space it used when generating canvas_fragment values.
+    # This may differ from the manifest dimensions if the manifest was later
+    # updated to natural image dims by export_entry_boxes.py --update-manifest.
+    for aligned_path in search_root.rglob("*_aligned.json"):
+        try:
+            aligned = json.loads(aligned_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        canvas_id = aligned.get("canvas_uri") or aligned.get("canvas_id") or ""
+        aw = int(aligned.get("canvas_width") or 0)
+        ah = int(aligned.get("canvas_height") or 0)
+        if canvas_id and aw and ah and canvas_id in mapping:
+            svc_id, _, _, viewer_url = mapping[canvas_id]
+            mapping[canvas_id] = (svc_id, aw, ah, viewer_url)
+
+    return mapping
+
+
+def _iiif_region_url(
+    canvas_fragment: str,
+    service_map: dict[str, tuple[str, int, int, str]],
+    thumb_width: int = 220,
+    pad: int = 40,
+) -> str:
+    """Convert a canvas_fragment (#xywh=) to a IIIF Image API region URL.
+
+    Uses pct: addressing: x_pct = x / canvas_w * 100.  Because canvas_w
+    comes from *_aligned.json (the same coordinate space that align_ocr.py
+    used when writing canvas_fragment), the pct: values are always relative
+    to the correct coordinate space, regardless of whether the manifest canvas
+    dimensions have been updated to natural image dims.
+
+    Adds padding so there is visual context around the target text line.
+    Returns '' if the fragment can't be resolved to a known image service.
+    """
+    if "#xywh=" not in canvas_fragment:
+        return ""
+    canvas_id, xywh = canvas_fragment.split("#xywh=", 1)
+    entry = service_map.get(canvas_id)
+    if not entry:
+        return ""
+    service_id, canvas_w, canvas_h = entry[0], entry[1], entry[2]
+    if not service_id or not canvas_w or not canvas_h:
+        return ""
+    try:
+        x, y, w, h = [int(v) for v in xywh.split(",")]
+    except ValueError:
+        return ""
+    if w <= 0 or h <= 0:
+        return ""
+    # Apply padding in canvas-pixel space, clamping at 0
+    rx = max(0, x - pad)
+    ry = max(0, y - pad)
+    rw = (x + w + pad) - rx
+    rh = (y + h + pad) - ry
+    # Convert to pct: so the request targets the correct region of the
+    # server's native image regardless of resolution differences.
+    x_pct = rx / canvas_w * 100
+    y_pct = ry / canvas_h * 100
+    w_pct = rw / canvas_w * 100
+    h_pct = rh / canvas_h * 100
+    return (
+        f"{service_id}/pct:{x_pct:.4f},{y_pct:.4f},"
+        f"{w_pct:.4f},{h_pct:.4f}/{thumb_width},/0/default.jpg"
+    )
+
+
+def _content_state_url(
+    canvas_fragment: str,
+    manifest_url: str,
+    viewer_base_url: str,
+) -> str:
+    """Build a IIIF Content State deep-link URL for the given canvas fragment.
+
+    Encodes a minimal W3C Annotation as Base64url and appends it as
+    ?iiif-content= to viewer_base_url.  Mirador 3.3+ opens to the specified
+    canvas and region when this parameter is present.
+
+    Returns '' if any required input is missing.
+    """
+    if not canvas_fragment or not manifest_url or not viewer_base_url:
+        return ""
+    if "#xywh=" not in canvas_fragment:
+        return ""
+    canvas_id, xywh = canvas_fragment.split("#xywh=", 1)
+    # target.id includes the #xywh= fragment so Mirador zooms to the entry
+    # region on open (Mirador 3 honors xywh in canvasId for initial viewport).
+    # motivation must be a string per the IIIF Content State 1.0 spec.
+    state = {
+        "@context": "http://iiif.io/api/presentation/3/context.json",
+        "type": "Annotation",
+        "motivation": "contentState",
+        "target": {
+            "id": f"{canvas_id}#xywh={xywh}",
+            "type": "Canvas",
+            "partOf": [{"id": manifest_url, "type": "Manifest"}],
+        },
+    }
+    encoded = (
+        base64.urlsafe_b64encode(
+            json.dumps(state, separators=(",", ":")).encode()
+        )
+        .rstrip(b"=")
+        .decode()
+    )
+    return f"{viewer_base_url.rstrip('/')}?iiif-content={encoded}"
+
+
+# ---------------------------------------------------------------------------
 # Read geocoded CSV
 # ---------------------------------------------------------------------------
 
-def _prepare_entries(rows: list[dict]) -> tuple[list[dict], int]:
+def _prepare_entries(
+    rows: list[dict],
+    service_map: dict[str, tuple[str, int, int, str]] | None = None,
+    viewer_base_url: str = "",
+    manifest_url: str = "",
+) -> tuple[list[dict], int]:
     """Convert geocoded CSV rows to minimal dicts for the map.
 
     Expects rows to have lat, lon, geocode_level columns (from geocode_entries.py).
     City-level entries get a small random jitter so they don't stack.
+    If service_map is provided, a IIIF thumbnail URL is added to each entry.
+    If viewer_base_url and manifest_url are also provided, each thumbnail links
+    to a IIIF Content State deep-link that opens the entry in the viewer.
     """
     rng = random.Random(42)
     entries = []
@@ -73,7 +238,7 @@ def _prepare_entries(rows: list[dict]) -> tuple[list[dict], int]:
             lat += rng.uniform(-_JITTER, _JITTER)
             lon += rng.uniform(-_JITTER, _JITTER)
 
-        entries.append({
+        entry: dict = {
             "name":     row.get("establishment_name", ""),
             "address":  (row.get("raw_address") or "").strip(),
             "city":     row.get("city", ""),
@@ -82,7 +247,26 @@ def _prepare_entries(rows: list[dict]) -> tuple[list[dict], int]:
             "page":     row.get("image", "").replace(".jpg", ""),
             "lat":      round(lat, 6),
             "lon":      round(lon, 6),
-        })
+        }
+
+        if service_map is not None:
+            cf = row.get("canvas_fragment", "")
+            thumb = _iiif_region_url(cf, service_map) if cf else ""
+            if thumb:
+                entry["thumb"] = thumb
+                # Prefer a Content State deep-link into the self-hosted viewer
+                if viewer_base_url and manifest_url:
+                    cs_link = _content_state_url(cf, manifest_url, viewer_base_url)
+                    if cs_link:
+                        entry["thumb_link"] = cs_link
+                # Fallback: institutional viewer deep-link (page-level only)
+                if "thumb_link" not in entry:
+                    canvas_id = cf.split("#xywh=", 1)[0] if "#xywh=" in cf else cf
+                    map_entry = service_map.get(canvas_id)
+                    if map_entry and map_entry[3]:
+                        entry["thumb_link"] = map_entry[3]
+
+        entries.append(entry)
 
     return entries, skipped
 
@@ -185,6 +369,10 @@ input[type=text]:focus, select:focus {{ border-color: #4e79a7; }}
 .popup-addr  {{ color: #444; margin: 2px 0; }}
 .popup-cat   {{ color: #777; font-style: italic; font-size: 11px; }}
 .popup-page  {{ color: #aaa; font-size: 10px; margin-top: 3px; }}
+.popup-thumb {{
+  display: block; width: 100%; border-radius: 3px;
+  margin-bottom: 6px; border: 1px solid #e0e0e0;
+}}
 </style>
 </head>
 <body>
@@ -306,12 +494,15 @@ function updateMap() {{
 
     marker.bindTooltip(esc(e.name), {{ direction: 'top', offset: [0, -4] }});
     marker.bindPopup(
+      (e.thumb ? (e.thumb_link
+        ? `<a href="${{e.thumb_link}}" target="_blank" rel="noopener"><img class="popup-thumb" src="${{e.thumb}}" alt="source scan"/></a>`
+        : `<img class="popup-thumb" src="${{e.thumb}}" alt="source scan"/>`) : '') +
       `<div class="popup-name">${{esc(e.name)}}</div>` +
       (e.address ? `<div class="popup-addr">${{esc(e.address)}}</div>` : '') +
       `<div class="popup-addr">${{esc(e.city)}}, ${{esc(e.state)}}</div>` +
       `<div class="popup-cat">${{esc(CAT_LABELS[e.category] || e.category)}}</div>` +
       `<div class="popup-page">${{esc(e.page)}}</div>`,
-      {{ maxWidth: 280 }}
+      {{ maxWidth: 300 }}
     );
 
     clusterGroup.addLayer(marker);
@@ -415,6 +606,20 @@ def main() -> None:
         help="Exclude advertisement entries")
     parser.add_argument("--year", default="", metavar="YEAR",
         help="Year label shown in the sidebar (e.g. 1962)")
+    parser.add_argument("--images-dir", default=None, metavar="DIR",
+        help="Root of the images directory tree — used to find IIIF manifests "
+             "and add source-scan thumbnails to map popups. "
+             "Defaults to the CSV's parent directory.")
+    parser.add_argument("--viewer-url", default="", metavar="URL",
+        help="Base URL of a self-hosted IIIF viewer (e.g. "
+             "https://hadro.github.io/green-book-iiif-test/). "
+             "When set, thumbnail images in map popups link to a IIIF Content "
+             "State deep-link that opens the viewer at the exact entry location. "
+             "A manifest.json is assumed to live at <viewer-url>/manifest.json "
+             "unless --manifest-url overrides it.")
+    parser.add_argument("--manifest-url", default="", metavar="URL",
+        help="Explicit URL of the IIIF manifest served alongside the viewer. "
+             "Defaults to <viewer-url>/manifest.json.")
     args = parser.parse_args()
 
     slug     = args.model.replace("/", "_")
@@ -440,7 +645,36 @@ def main() -> None:
 
     print(f"Loaded {len(rows)} entries from {csv_path.name}", file=sys.stderr)
 
-    entries, skipped = _prepare_entries(rows)
+    # Build IIIF canvas → image-service map for popup thumbnails
+    images_root = Path(args.images_dir) if args.images_dir else csv_path.parent
+    service_map: dict[str, str] | None = None
+    if images_root.is_dir():
+        service_map = _build_canvas_service_map(images_root)
+        if service_map:
+            print(
+                f"IIIF: loaded {len(service_map)} canvas→service mappings "
+                f"from {images_root}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "IIIF: no manifests found — map popups will not include thumbnails. "
+                "Pass --images-dir to specify the images directory.",
+                file=sys.stderr,
+            )
+
+    viewer_base_url = args.viewer_url.rstrip("/")
+    manifest_url = (
+        args.manifest_url
+        or (f"{viewer_base_url}/manifest.json" if viewer_base_url else "")
+    )
+
+    entries, skipped = _prepare_entries(
+        rows,
+        service_map=service_map,
+        viewer_base_url=viewer_base_url,
+        manifest_url=manifest_url,
+    )
     print(
         f"Map: {len(entries)} entries placed, {skipped} skipped (no geocode).",
         file=sys.stderr,

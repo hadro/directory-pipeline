@@ -58,9 +58,11 @@ import os
 import re
 import sys
 import threading
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import iiif_utils
@@ -68,6 +70,44 @@ from utils import iiif_utils
 _print_lock = threading.Lock()
 
 BBOX_RE = re.compile(r"bbox\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)")
+
+# ---------------------------------------------------------------------------
+# IIIF image-service helpers
+# ---------------------------------------------------------------------------
+
+# In-process cache: service_base → (nat_w, nat_h).
+# Shared across threads; worst case two threads fetch the same URL once.
+_info_cache: dict[str, tuple[int, int]] = {}
+
+
+def _get_natural_dims(canvas_id: str) -> tuple[int, int]:
+    """Return (width, height) of the natural image by fetching info.json.
+
+    Parses the IIIF Image API service base from *canvas_id* (a URL of the form
+    ``https://host/prefix/identifier/region/size/rotation/quality.fmt``), then
+    fetches ``{service_base}/info.json``.  Results are cached in-process.
+    Returns (0, 0) on any error.
+    """
+    parts = urlparse(canvas_id)
+    path_parts = parts.path.split("/")
+    # IIIF Image API path: /{prefix}/{identifier}/{region}/…
+    # Service base = scheme + host + first 4 path segments (index 0–3, where 0 is "")
+    if len(path_parts) < 5:
+        return 0, 0
+    service_base = f"{parts.scheme}://{parts.netloc}" + "/".join(path_parts[:4])
+    if service_base in _info_cache:
+        return _info_cache[service_base]
+    info_url = f"{service_base}/info.json"
+    try:
+        with urllib.request.urlopen(info_url, timeout=15) as resp:
+            info = json.loads(resp.read())
+        w = int(info.get("width") or 0)
+        h = int(info.get("height") or 0)
+    except Exception as exc:
+        _log(f"  Warning: could not fetch {info_url}: {exc}")
+        w, h = 0, 0
+    _info_cache[service_base] = (w, h)
+    return w, h
 
 # Needleman-Wunsch gap penalty (must be negative)
 _NW_GAP = -40
@@ -474,15 +514,25 @@ def _canvas_fragment(
     """
     Build a IIIF xywh fragment string, scaling pixel coords to canvas space
     if the canvas and image dimensions differ.
+
+    When called from align_image, canvas_w/canvas_h are the *natural* image
+    dimensions (fetched from info.json), not the manifest canvas size.  Mirador
+    maps annotation xywh directly to image pixel space, so outputting natural
+    pixel coords is the correct target.
+
+    Uses non-uniform (independent-axis) scaling — matching how Mirador/OSD
+    renders a painting annotation that fills the full canvas.  For the common
+    case where the pipeline download resolution equals the natural dimensions,
+    sx = sy = 1 and no scaling occurs.
     """
     x1, y1, x2, y2 = bbox
-    if canvas_w and img_w and canvas_w != img_w:
+    if canvas_w and img_w and (canvas_w != img_w or canvas_h != img_h):
         sx = canvas_w / img_w
-        sy = canvas_h / img_h if img_h else 1.0
-        x1, y1, x2, y2 = (
-            round(x1 * sx), round(y1 * sy),
-            round(x2 * sx), round(y2 * sy),
-        )
+        sy = canvas_h / img_h if img_h else sx
+        x1 = round(x1 * sx)
+        y1 = round(y1 * sy)
+        x2 = round(x2 * sx)
+        y2 = round(y2 * sy)
     w = max(1, x2 - x1)
     h = max(1, y2 - y1)
     return f"{canvas_uri}#xywh={x1},{y1},{w},{h}"
@@ -888,10 +938,57 @@ def align_image(
         manifest_path = image_path.parent / "manifest.json"
         canvas_uri, canvas_w, canvas_h = load_canvas_info(manifest_path, image_id)
 
+        # Fetch natural image dimensions so canvas_fragment outputs native pixel
+        # coords (Mirador maps xywh directly to image pixel space).
+        nat_w, nat_h = (0, 0)
+        if canvas_uri:
+            nat_w, nat_h = _get_natural_dims(canvas_uri)
+        if not nat_w:
+            nat_w, nat_h = canvas_w, canvas_h
+
+        # For split images (_left / _right), read the sidecar to get the
+        # x_offset that maps split-image coordinates back to full-spread
+        # canvas coordinates before any canvas-vs-download scaling.
+        split_x_offset = 0
+        split_y_offset = 0
+        full_img_w = img_w   # width of the full downloaded image pre-split
+        full_img_h = img_h
+        for _suffix in ("_left", "_right"):
+            if stem.endswith(_suffix):
+                _split_json = image_path.with_name(
+                    f"{stem[: -len(_suffix)]}_split.json"
+                )
+                if _split_json.exists():
+                    try:
+                        _sidecar = json.loads(
+                            _split_json.read_text(encoding="utf-8")
+                        )
+                        full_img_w = _sidecar.get("original_width", img_w)
+                        full_img_h = _sidecar.get("original_height", img_h)
+                        _side = _suffix.lstrip("_")
+                        for _page in _sidecar.get("pages", []):
+                            if _page.get("side") == _side:
+                                split_x_offset = _page.get("x_offset", 0)
+                                split_y_offset = _page.get("y_offset", 0)
+                                break
+                    except Exception:
+                        pass
+                break
+
         def fragment(bbox: list[int]) -> str:
             if not canvas_uri:
                 return ""
-            return _canvas_fragment(canvas_uri, bbox, img_w, img_h, canvas_w, canvas_h)
+            # Translate split-image pixel coords to full-spread coords,
+            # then scale to canvas space (handles download-resolution caps).
+            offset_bbox = [
+                bbox[0] + split_x_offset,
+                bbox[1] + split_y_offset,
+                bbox[2] + split_x_offset,
+                bbox[3] + split_y_offset,
+            ]
+            return _canvas_fragment(
+                canvas_uri, offset_bbox, full_img_w, full_img_h, nat_w, nat_h
+            )
 
         # NW alignment --------------------------------------------------------
         if use_surya:
@@ -907,8 +1004,8 @@ def align_image(
             "image": image_path.name,
             "model": model,
             "canvas_uri": canvas_uri or None,
-            "canvas_width": canvas_w or None,
-            "canvas_height": canvas_h or None,
+            "canvas_width": nat_w or None,
+            "canvas_height": nat_h or None,
             "lines": result_lines,
             "unmatched_gemini": unmatched_gemini,
         }

@@ -28,9 +28,11 @@ combination of the following stages:
 14. **Generate an interactive map** from geocoded entries
 
 The end result is a per-page JSON file pairing Gemini's corrected text with
-Surya's pixel-level line coordinates, a structured entries CSV, and an
-interactive Leaflet map — suitable for search indexing, IIIF annotation,
-and geospatial analysis.
+Surya's pixel-level line coordinates, a structured entries CSV, an
+interactive Leaflet map with IIIF popup thumbnails and Content State deep-links
+into a self-hosted viewer, and W3C Annotation Pages with colored bounding
+boxes that load directly in Mirador and Universal Viewer — suitable for search
+indexing, IIIF annotation, and geospatial analysis.
 
 ---
 
@@ -58,6 +60,8 @@ command line. All stages are optional — run only what you need.
 --extract-entries     pipeline/extract_entries.py         → entries_{model}.csv, *_{model}_entries.json
 --geocode             pipeline/geocode_entries.py         → entries_{model}_geocoded.csv
 --map                 pipeline/map_entries.py             → entries_{model}.html
+--export-annotations  pipeline/export_annotations.py     → *_{model}_annotations.json, *_{model}_entry_annotations.json
+(standalone)          pipeline/export_entry_boxes.py     → *_{model}_box_annotations.json
 ```
 
 There is also a `--full-run` shorthand that expands to
@@ -228,8 +232,8 @@ page-number outlier creates a degenerate single-line split.
   "image": "0001_58030238.jpg",
   "model": "gemini-2.0-flash",
   "canvas_uri": "https://...",
-  "canvas_width": 2048,
-  "canvas_height": 3000,
+  "canvas_width": 3316,
+  "canvas_height": 4513,
   "lines": [
     {
       "bbox": [x1, y1, x2, y2],
@@ -250,9 +254,13 @@ page-number outlier creates a degenerate single-line split.
 }
 ```
 
-IIIF canvas URIs and dimensions are read from the `manifest.json` cached by
-`download_images.py`. Bounding boxes are expressed in both pixel space and IIIF
-canvas fragment space.
+IIIF canvas URIs are read from the `manifest.json` cached by
+`download_images.py`. `canvas_width` and `canvas_height` reflect the **natural
+image pixel dimensions** fetched from the IIIF Image API `info.json` — not the
+dimensions declared in the manifest, which may differ (e.g. NYPL manifests
+declare 2560×2560 square canvases for portrait images). All `bbox` and
+`canvas_fragment` coordinates are in this natural pixel space, which is required
+for IIIF annotation tools and Mirador to place boxes correctly.
 
 #### `analysis/visualize_alignment.py` — Alignment visualization
 Reads each `*_aligned.json` and draws color-coded bounding boxes on the source
@@ -342,9 +350,100 @@ map (`entries_{model}.html`) with:
 - Clustered markers (MarkerCluster) color-coded by establishment category
 - Sidebar with live search, state dropdown, and category checkboxes
 - Live count of entries shown
+- Source-scan thumbnails in map popups (when IIIF manifests are available)
+- IIIF Content State deep-links that open a IIIF viewer directly to the correct page and region (when `--viewer-url` is supplied)
 
 Entries geocoded at city level are jittered slightly to avoid stacking. Requires the
 geocoded CSV from `geocode_entries.py`.
+
+When IIIF manifests are present alongside the images (as cached by `download_images.py`),
+each marker popup includes a thumbnail of the exact page region where the entry appears,
+fetched directly from the source institution's IIIF image server. Pass `--images-dir`
+to specify the images root if the CSV has been moved; by default the script searches
+the CSV's parent directory for manifests.
+
+**IIIF Content State deep-links.** Pass `--viewer-url` to embed a link in each popup
+that opens a IIIF viewer directly at the correct page and zooms to the entry region.
+The link encodes a [IIIF Content State 1.0](https://iiif.io/api/content-state/1.0/)
+annotation as a Base64url `?iiif-content=` URL parameter. Any IIIF viewer that
+supports Content State (including the self-hosted Mirador viewer at
+`hadro.github.io/green-book-iiif-test`) will navigate directly to the right canvas
+and scroll the entry into view.
+
+Pass `--manifest-url` to specify the manifest explicitly; if omitted the script
+derives it as `{viewer-url}/manifest.json`.
+
+```bash
+python pipeline/map_entries.py images/green_book_1940_feb978b0/ --model gemini-2.0-flash
+python pipeline/map_entries.py path/to/entries.csv --images-dir images/
+python pipeline/map_entries.py images/green_book_1947_xxx/ \
+    --model gemini-2.0-flash \
+    --viewer-url https://hadro.github.io/green-book-iiif-test \
+    --manifest-url https://hadro.github.io/green-book-iiif-test/manifest.json
+```
+
+#### `pipeline/export_annotations.py` — IIIF Annotation Pages export
+Converts `*_{model}_aligned.json` files to W3C Annotation Pages (JSON-LD), the
+standard format for overlaying transcription text on IIIF images in viewers like
+Mirador, Universal Viewer, and Clover.
+
+Produces two annotation files per page:
+- `*_{model}_annotations.json` — line-level transcription (`motivation: supplementing`),
+  one annotation per aligned line with the Gemini-corrected text as the body and the
+  IIIF `#xywh=` canvas fragment as the target
+- `*_{model}_entry_annotations.json` — entry-level structured data
+  (`motivation: describing`) when `*_{model}_entries.json` sidecars are present;
+  body is `name — address, city, state` as plain text
+
+Annotation pages are valid without server-hosted IDs (omit `--base-url` for
+self-contained local files). Add `--base-url` to embed persistent URIs so viewers
+can reload annotations from a known endpoint.
+
+```bash
+python pipeline/export_annotations.py images/green_book_1940_feb978b0/uuid/
+python pipeline/export_annotations.py images/green_book_1940_feb978b0/uuid/ \
+    --base-url https://example.org/annotations --model gemini-2.0-flash
+python pipeline/export_annotations.py images/green_book_1940_feb978b0/uuid/ \
+    --no-entries   # line-level transcription only
+```
+
+#### `pipeline/export_entry_boxes.py` — IIIF colored bounding boxes
+Reads `*_{model}_entries.json` files and produces `*_{model}_box_annotations.json`
+— W3C Annotation Pages with colored rectangular overlays, one annotation per
+entry. Color coding matches `analysis/visualize_entries.py`:
+
+| Category | Color |
+|---|---|
+| Hotels / Motels | Blue |
+| Tourist Homes | Teal |
+| Restaurants / Bars | Red |
+| Barber / Beauty | Purple |
+| Service Stations | Amber |
+| Other / Unknown | Grey |
+
+Advertisements receive a stroke twice as thick as regular entries.
+
+Each annotation uses a simple `FragmentSelector` (`#xywh=` canvas fragment) as its
+target, which Mirador 3.3 and Universal Viewer handle most reliably. Coordinates are
+converted to natural image pixel space at export time (see *IIIF canvas coordinate
+space* under Key design decisions).
+
+With `--update-manifest`, the script also:
+1. Adds an `annotations` property to each canvas in `manifest.json` referencing its
+   box annotation page, so IIIF viewers load the colored boxes automatically on open.
+2. Corrects each canvas `width`/`height` in the manifest to the natural image
+   dimensions (fetched from the IIIF image service `info.json`), which is required
+   for Mirador to map annotation coordinates to the correct pixel positions.
+   Requires `--base-url`. Original manifest is backed up as `manifest_bak.json`.
+
+```bash
+python pipeline/export_entry_boxes.py images/green_book_1947_xxx/uuid/
+python pipeline/export_entry_boxes.py images/green_book_1947_xxx/uuid/ \
+    --model gemini-2.0-flash
+python pipeline/export_entry_boxes.py images/green_book_1947_xxx/uuid/ \
+    --base-url https://hadro.github.io/green-book-iiif-test/annotations \
+    --update-manifest
+```
 
 ---
 
@@ -366,7 +465,9 @@ directory-pipeline/
 │   ├── review_alignment.py           # Interactive alignment review UI (Flask)
 │   ├── extract_entries.py            # Structured entry extraction (NER)
 │   ├── geocode_entries.py            # Entry geocoding
-│   └── map_entries.py                # Interactive map generation
+│   ├── map_entries.py                # Interactive map generation (IIIF popup thumbnails + Content State links)
+│   ├── export_annotations.py         # IIIF Annotation Pages export (W3C Web Annotation)
+│   └── export_entry_boxes.py         # IIIF colored entry bounding boxes (standalone)
 │
 ├── sources/                          # Collection metadata exporters
 │   ├── loc_collection_csv.py         # Library of Congress
@@ -406,10 +507,13 @@ directory-pipeline/
             ├── 0001_{image_id}_tesseract.hocr        # (legacy Tesseract output)
             ├── 0001_{image_id}_tesseract.txt
             ├── 0001_{image_id}_{model}.txt           # Gemini plain text
-            ├── 0001_{image_id}_{model}_aligned.json  # NW alignment output
-            ├── 0001_{image_id}_{model}_viz.jpg       # alignment visualization
-            ├── 0001_{image_id}_{model}_entries.json  # per-page entries
-            ├── 0001_{image_id}_comparison.html       # OCR model comparison
+            ├── 0001_{image_id}_{model}_aligned.json            # NW alignment output
+            ├── 0001_{image_id}_{model}_viz.jpg               # alignment visualization
+            ├── 0001_{image_id}_{model}_entries.json          # per-page entries
+            ├── 0001_{image_id}_{model}_annotations.json      # IIIF line-level annotation page
+            ├── 0001_{image_id}_{model}_entry_annotations.json # IIIF entry-level annotation page
+            ├── 0001_{image_id}_{model}_box_annotations.json  # IIIF colored entry bounding boxes
+            ├── 0001_{image_id}_comparison.html               # OCR model comparison
             ├── spreads_report.csv
             ├── columns_report.csv
             ├── entries_{model}.csv                   # aggregate entries for collection
@@ -446,6 +550,72 @@ export NYPL_API_TOKEN=your_token_here      # from https://api.repo.nypl.org/sign
                                             # (not needed for LoC or IA)
 export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geocoding
 ```
+
+---
+
+## Estimated costs
+
+Two cost categories: **API charges** (variable; applies on any platform) and
+**platform costs** (compute infrastructure).
+
+### Gemini API
+
+`--gemini-ocr` and `--extract-entries` both call the Gemini API. Pricing as of
+early 2026 (verify current rates at [ai.google.dev/pricing](https://ai.google.dev/pricing)):
+
+| Model | Input | Output |
+|---|---|---|
+| `gemini-2.0-flash` (default) | $0.10 / 1M tokens | $0.40 / 1M tokens |
+| `gemini-2.5-flash` (dense-page fallback) | $0.30 / 1M tokens | $2.50 / 1M tokens |
+
+A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens
+for OCR, and another ~10,000 input / 2,000 output tokens for NER entry
+extraction — about **$0.002–$0.003 per page** combined using `gemini-2.0-flash`.
+Dense pages that exceed the output token limit automatically retry with
+`gemini-2.5-flash`, but this affects fewer than 5% of pages in practice.
+
+**Rough collection estimates:**
+
+| Collection | Pages | Gemini cost |
+|---|---|---|
+| One Green Book volume | ~100 pages | ~$0.20–$0.30 |
+| Full Green Books corpus (14 volumes) | ~1,400 pages | ~$3–$5 |
+| Large city directory (500+ pages) | 500 pages | ~$1–$1.50 |
+
+**Free tier:** The Gemini API free tier (no billing required) covers both
+models at no charge, subject to rate limits of 15 requests/minute and
+~1,500 requests/day for `gemini-2.0-flash`. A single 100-page volume
+(~200 API calls total) fits comfortably within a single day's free quota,
+though the 15 RPM cap means the API stages take ~15–20 minutes rather than
+a few minutes. For the full multi-volume corpus you will either need billing
+enabled or spread the run across several days.
+
+### Google Maps Geocoding (optional)
+
+The `--geocode` stage uses Nominatim (free, city-level accuracy) by default.
+Setting `GOOGLE_MAPS_API_KEY` enables address-level geocoding at roughly
+$0.005/request. Google Maps includes a $200/month free credit, which covers
+~40,000 geocoding requests — more than the entire Green Books corpus.
+
+### Platform costs
+
+The stages that use significant compute are **Surya OCR** (`--surya-ocr`,
+`--surya-detect`, `--review-alignment`) and optionally **Chandra**
+(`analysis/chandra_eval.py`). Gemini API stages are network-bound and run
+equally fast everywhere.
+
+| Platform | Cost | Surya OCR (200 pages) | Notes |
+|---|---|---|---|
+| **Mac (M-series, 16 GB+)** | $0 (electricity) | ~5–8 min (MPS, `--batch-size 4`) | Good for development and single-volume runs |
+| **Mac (8 GB)** | $0 | ~10–15 min (MPS, `--batch-size 1–2`) | Works; reduce batch size if OOM errors occur |
+| **Google Colab (free T4)** | $0 | ~2–3 min (CUDA, `--batch-size 8`) | Sessions expire; T4 not always available at peak times; `--review-alignment` requires a tunnel (e.g. ngrok) |
+| **Google Colab Pro** | ~$10/month | ~1–2 min (T4/L4, `--batch-size 8`) | Reliable GPU access, longer sessions |
+| **Google Colab Pro+** | ~$50/month | <1 min (A100, `--batch-size 16`) | Background execution; best for large multi-volume runs |
+
+**Chandra evaluation** (`analysis/chandra_eval.py`) runs Qwen3-VL 7B and
+requires ~9 GB VRAM with `--quantize`. On a Colab T4 this is roughly
+50 seconds per image; on an M-series Mac with MPS it is ~25 minutes per image.
+Chandra is practical only on Colab or a machine with a CUDA GPU.
 
 ---
 
@@ -561,6 +731,30 @@ python analysis/compare_extraction.py \
     images/the_negro_motorist_green_book_1940_feb978b0
 ```
 
+### IIIF annotation export and self-hosted viewer
+
+```bash
+# Export line-level and entry-level IIIF annotation pages
+python pipeline/export_annotations.py \
+    images/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
+
+# Export colored entry bounding boxes (standalone — not in --full-run)
+python pipeline/export_entry_boxes.py \
+    images/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
+
+# Export boxes and update manifest so viewers auto-load them
+python pipeline/export_entry_boxes.py \
+    images/green_book_1947_xxx/uuid/ \
+    --base-url https://hadro.github.io/green-book-iiif-test/annotations \
+    --update-manifest
+
+# Generate map with IIIF Content State deep-links (open viewer at correct page/region)
+python pipeline/map_entries.py images/green_book_1947_xxx/ \
+    --model gemini-2.0-flash \
+    --viewer-url https://hadro.github.io/green-book-iiif-test \
+    --manifest-url https://hadro.github.io/green-book-iiif-test/manifest.json
+```
+
 ---
 
 ## Key design decisions
@@ -615,6 +809,20 @@ interface for walking IIIF Presentation manifests. IIIF Image API URLs work
 identically for both API versions. The downloader caps requested width at the
 service's advertised `maxWidth` to prevent upscaling artifacts on tile-pyramid
 servers.
+
+**IIIF canvas coordinate space.** IIIF manifest canvas dimensions do not
+necessarily match the actual image pixel dimensions. NYPL manifests, for example,
+declare all canvases as 2560×2560 (square) even for portrait images that are
+3316×4513. Mirador 3 maps annotation `xywh` coordinates directly to image pixel
+space regardless of the canvas dimensions in the manifest. As a result, all
+bounding boxes and `canvas_fragment` values in this pipeline are stored in
+**natural image pixel coordinates**, fetched at align time from the IIIF Image API
+`info.json`. The `canvas_width`/`canvas_height` fields in `*_aligned.json` reflect
+these natural dimensions and serve as the authoritative coordinate space for all
+downstream scripts. `export_entry_boxes.py` converts coordinates to natural pixel
+space during export, and `map_entries.py` reads canvas dimensions from
+`*_aligned.json` (not the manifest) so that IIIF `pct:` thumbnail calculations
+remain correct even after a manifest has been updated with natural canvas dims.
 
 **IIIF-native output.** The aligned JSON includes `canvas_uri` and
 `canvas_fragment` (IIIF `#xywh=` fragment) for every word and line, making the
