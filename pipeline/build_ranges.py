@@ -23,10 +23,10 @@ Depth levels
 
 Usage
 -----
-    python pipeline/build_ranges.py images/green_book_1947_4bea2040/uuid/
-    python pipeline/build_ranges.py images/green_book_1947_4bea2040/uuid/ \\
+    python pipeline/build_ranges.py output/green_book_1947_4bea2040/uuid/
+    python pipeline/build_ranges.py output/green_book_1947_4bea2040/uuid/ \\
         --model gemini-2.0-flash --depth 2
-    python pipeline/build_ranges.py images/green_book_1947_4bea2040/uuid/ \\
+    python pipeline/build_ranges.py output/green_book_1947_4bea2040/uuid/ \\
         --update-manifest --base-url https://example.org/iiif
 """
 

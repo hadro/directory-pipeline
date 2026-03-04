@@ -33,10 +33,10 @@ is treated as margin). Smoothing radius is ~1% of page width.
 
 Usage
 -----
-    python detect_columns.py images/greenbooks
-    python detect_columns.py images/greenbooks --threshold 0.08 --workers 8
-    python detect_columns.py images/greenbooks --max-columns 4 --force
-    python detect_columns.py images/greenbooks --force
+    python detect_columns.py output/greenbooks
+    python detect_columns.py output/greenbooks --threshold 0.08 --workers 8
+    python detect_columns.py output/greenbooks --max-columns 4 --force
+    python detect_columns.py output/greenbooks --force
 """
 
 import argparse
@@ -308,8 +308,8 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "images_dir",
-        help="Root images directory (e.g. images/greenbooks)",
+        "output_dir",
+        help="Root images directory (e.g. output/greenbooks)",
     )
     parser.add_argument(
         "--threshold", "-t",
@@ -384,12 +384,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    images_root = Path(args.images_dir)
-    if not images_root.exists():
-        print(f"Error: directory not found: {images_root}", file=sys.stderr)
+    output_root = Path(args.output_dir)
+    if not output_root.exists():
+        print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
 
-    report_path = images_root / REPORT_FILENAME
+    report_path = output_root / REPORT_FILENAME
     if report_path.exists() and not args.force:
         print(
             f"columns_report.csv already exists ({report_path}). "
@@ -399,7 +399,7 @@ def main() -> None:
         sys.exit(0)
 
     # Split-aware image selection — same logic used across the pipeline
-    all_jpgs = sorted(images_root.rglob("*.jpg"))
+    all_jpgs = sorted(output_root.rglob("*.jpg"))
     images = []
     for p in all_jpgs:
         if p.stem.endswith("_left") or p.stem.endswith("_right"):
@@ -412,7 +412,7 @@ def main() -> None:
         images.append(p)
 
     if not images:
-        print(f"No .jpg files found under {images_root}", file=sys.stderr)
+        print(f"No .jpg files found under {output_root}", file=sys.stderr)
         sys.exit(0)
 
     total = len(images)

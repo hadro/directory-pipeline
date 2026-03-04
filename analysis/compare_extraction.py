@@ -17,9 +17,9 @@ Output:
 
 Usage
 -----
-    python compare_extraction.py images/greenbooks/feb978b0 --model gemini-2.0-flash
-    python compare_extraction.py images/greenbooks/feb978b0 --model gemini-2.0-flash --pages 5
-    python compare_extraction.py images/greenbooks/feb978b0 --dry-run
+    python compare_extraction.py output/greenbooks/feb978b0 --model gemini-2.0-flash
+    python compare_extraction.py output/greenbooks/feb978b0 --model gemini-2.0-flash --pages 5
+    python compare_extraction.py output/greenbooks/feb978b0 --dry-run
 """
 
 import argparse

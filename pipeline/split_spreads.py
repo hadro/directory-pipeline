@@ -44,7 +44,7 @@ To map a bounding box from a split image back to the original image:
 
 Usage
 -----
-    python split_spreads.py images/Hackley_Harrison/spreads_report.csv
+    python split_spreads.py output/Hackley_Harrison/spreads_report.csv
     python split_spreads.py path/to/spreads_report.csv --quiet
     python split_spreads.py path/to/spreads_report.csv --dry-run
 """

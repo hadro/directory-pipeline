@@ -6,10 +6,10 @@ a self-contained HTML file with a Leaflet map and a sidebar for filtering
 by name/address, state, and category.
 
 Run geocode_entries.py first to produce entries_{slug}_geocoded.csv:
-    python geocode_entries.py images/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
+    python geocode_entries.py output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
 
 Then build the map:
-    python map_entries.py images/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
+    python map_entries.py output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
     python map_entries.py path/to/entries_gemini-2.0-flash_geocoded.csv
     python map_entries.py path/to/entries.csv --out my_map.html
 """
@@ -606,7 +606,7 @@ def main() -> None:
         help="Exclude advertisement entries")
     parser.add_argument("--year", default="", metavar="YEAR",
         help="Year label shown in the sidebar (e.g. 1962)")
-    parser.add_argument("--images-dir", default=None, metavar="DIR",
+    parser.add_argument("--output-dir", default=None, metavar="DIR",
         help="Root of the images directory tree — used to find IIIF manifests "
              "and add source-scan thumbnails to map popups. "
              "Defaults to the CSV's parent directory.")
@@ -646,20 +646,20 @@ def main() -> None:
     print(f"Loaded {len(rows)} entries from {csv_path.name}", file=sys.stderr)
 
     # Build IIIF canvas → image-service map for popup thumbnails
-    images_root = Path(args.images_dir) if args.images_dir else csv_path.parent
+    output_root = Path(args.output_dir) if args.output_dir else csv_path.parent
     service_map: dict[str, str] | None = None
-    if images_root.is_dir():
-        service_map = _build_canvas_service_map(images_root)
+    if output_root.is_dir():
+        service_map = _build_canvas_service_map(output_root)
         if service_map:
             print(
                 f"IIIF: loaded {len(service_map)} canvas→service mappings "
-                f"from {images_root}",
+                f"from {output_root}",
                 file=sys.stderr,
             )
         else:
             print(
                 "IIIF: no manifests found — map popups will not include thumbnails. "
-                "Pass --images-dir to specify the images directory.",
+                "Pass --output-dir to specify the images directory.",
                 file=sys.stderr,
             )
 

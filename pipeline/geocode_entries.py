@@ -21,7 +21,7 @@ over the same data are instant.
 
 Usage
 -----
-    python geocode_entries.py images/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
+    python geocode_entries.py output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
     python geocode_entries.py path/to/entries_gemini-2.0-flash.csv
     GOOGLE_MAPS_API_KEY=... python geocode_entries.py ...
 """

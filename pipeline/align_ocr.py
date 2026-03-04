@@ -46,9 +46,9 @@ Output JSON
 
 Usage
 -----
-    python align_ocr.py images/greenbooks --model gemini-2.0-flash
-    python align_ocr.py images/greenbooks --model gemini-2.0-flash --workers 4
-    python align_ocr.py images/greenbooks --model gemini-2.0-flash --force
+    python align_ocr.py output/greenbooks --model gemini-2.0-flash
+    python align_ocr.py output/greenbooks --model gemini-2.0-flash --workers 4
+    python align_ocr.py output/greenbooks --model gemini-2.0-flash --force
 """
 
 import argparse
@@ -1034,8 +1034,8 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "images_dir",
-        help="Root images directory (e.g. images/greenbooks)",
+        "output_dir",
+        help="Root images directory (e.g. output/greenbooks)",
     )
     parser.add_argument(
         "--model", "-m",
@@ -1062,13 +1062,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    images_root = Path(args.images_dir)
-    if not images_root.exists():
-        print(f"Error: directory not found: {images_root}", file=sys.stderr)
+    output_root = Path(args.output_dir)
+    if not output_root.exists():
+        print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
 
     # Same split-aware image selection used across the pipeline
-    all_jpgs = sorted(images_root.rglob("*.jpg"))
+    all_jpgs = sorted(output_root.rglob("*.jpg"))
     images = []
     for p in all_jpgs:
         # Skip visualization output files
@@ -1085,7 +1085,7 @@ def main() -> None:
         images.append(p)
 
     if not images:
-        print(f"No .jpg files found under {images_root}", file=sys.stderr)
+        print(f"No .jpg files found under {output_root}", file=sys.stderr)
         sys.exit(0)
 
     total = len(images)

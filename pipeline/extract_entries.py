@@ -20,10 +20,10 @@ Output (per item directory):
 
 Usage
 -----
-    python extract_entries.py images/greenbooks/feb978b0
-    python extract_entries.py images/greenbooks/feb978b0 --mode multimodal
-    python extract_entries.py images/greenbooks/ --force
-    python extract_entries.py images/greenbooks/feb978b0 --dry-run
+    python extract_entries.py output/greenbooks/feb978b0
+    python extract_entries.py output/greenbooks/feb978b0 --mode multimodal
+    python extract_entries.py output/greenbooks/ --force
+    python extract_entries.py output/greenbooks/feb978b0 --dry-run
 """
 
 import argparse
@@ -48,6 +48,20 @@ DEFAULT_MODEL = "gemini-2.0-flash"
 # gemini-2.0-flash caps output at ~8 k tokens; gemini-2.5-flash allows up to 65 k.
 FALLBACK_MODEL = "gemini-2.5-flash"
 NER_PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ner_prompt.md"
+
+
+def _find_ner_prompt(output_root: Path) -> Path:
+    """Return a volume-specific ner_prompt.md if one exists alongside the images,
+    otherwise return the global NER_PROMPT_FILE fallback.
+
+    Checks output_root and output_root.parent so the lookup works whether
+    output_root is the item directory or the slug-level directory above it.
+    """
+    for candidate_dir in (output_root.resolve(), output_root.resolve().parent):
+        p = candidate_dir / "ner_prompt.md"
+        if p.exists():
+            return p
+    return NER_PROMPT_FILE
 
 ENTRY_FIELDS = [
     "image", "page",
@@ -538,10 +552,10 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "images_dir",
+        "output_dir",
         help=(
             "Item images directory containing *_aligned.json files "
-            "(e.g. images/greenbooks/feb978b0), or a parent directory to "
+            "(e.g. output/greenbooks/feb978b0), or a parent directory to "
             "process all item subdirectories."
         ),
     )
@@ -583,9 +597,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--prompt", "-p",
-        default=str(NER_PROMPT_FILE),
+        default=None,
         metavar="FILE",
-        help=f"NER system prompt file (default: {NER_PROMPT_FILE})",
+        help=(
+            "NER system prompt file. If omitted, looks for ner_prompt.md in the "
+            "images directory (volume-specific), then falls back to "
+            f"{NER_PROMPT_FILE} (global default)."
+        ),
     )
     parser.add_argument(
         "--force", "-f",
@@ -610,19 +628,24 @@ def main() -> None:
         print("Error: GEMINI_API_KEY environment variable is not set.", file=sys.stderr)
         sys.exit(1)
 
-    # NER prompt
-    prompt_path = Path(args.prompt)
+    aligned_model = args.aligned_model
+    slug = model_slug(args.model)
+    aligned_slug = model_slug(aligned_model) if aligned_model else slug
+    output_root = Path(args.output_dir)
+
+    # NER prompt — explicit flag > volume-specific > global default
+    if args.prompt:
+        prompt_path = Path(args.prompt)
+    else:
+        prompt_path = _find_ner_prompt(output_root)
     if not prompt_path.exists():
         print(f"Error: NER prompt file not found: {prompt_path}", file=sys.stderr)
         sys.exit(1)
     system_prompt = prompt_path.read_text(encoding="utf-8")
-
-    aligned_model = args.aligned_model
-    slug = model_slug(args.model)
-    aligned_slug = model_slug(aligned_model) if aligned_model else slug
-    images_root = Path(args.images_dir)
-    if not images_root.exists():
-        print(f"Error: directory not found: {images_root}", file=sys.stderr)
+    if not args.quiet and prompt_path != NER_PROMPT_FILE:
+        print(f"Using volume NER prompt: {prompt_path}", file=sys.stderr)
+    if not output_root.exists():
+        print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
 
     client = genai.Client(api_key=api_key) if not args.dry_run else None  # type: ignore[assignment]
@@ -630,17 +653,17 @@ def main() -> None:
     # Discover item directories: either the given dir itself (if it has aligned
     # JSONs directly) or its immediate subdirectories.
     slug_pattern = f"*_{aligned_slug}_aligned.json"
-    direct = list(images_root.glob(slug_pattern))
+    direct = list(output_root.glob(slug_pattern))
     if direct:
-        item_dirs = [images_root]
+        item_dirs = [output_root]
     else:
         item_dirs = [
-            d for d in sorted(images_root.iterdir())
+            d for d in sorted(output_root.iterdir())
             if d.is_dir() and list(d.glob(slug_pattern))
         ]
 
     if not item_dirs:
-        print(f"No *_{aligned_slug}_aligned.json files found under {images_root}", file=sys.stderr)
+        print(f"No *_{aligned_slug}_aligned.json files found under {output_root}", file=sys.stderr)
         sys.exit(1)
 
     fallback_model = args.fallback_model or None  # empty string → disabled

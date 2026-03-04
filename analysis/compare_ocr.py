@@ -15,10 +15,10 @@ The system prompt (for Gemini API calls) is read from ocr_prompt.md.
 
 Usage
 -----
-    python compare_ocr.py images/greenbooks/item_uuid \\
+    python compare_ocr.py output/greenbooks/item_uuid \\
         --models gemini-2.0-flash tesseract
 
-    python compare_ocr.py images/greenbooks/item_uuid \\
+    python compare_ocr.py output/greenbooks/item_uuid \\
         --models gemini-2.0-flash gemini-2.5-pro tesseract --workers 6
 """
 
@@ -207,8 +207,8 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "images_dir",
-        help="Directory of images to process (e.g. images/greenbooks/item_uuid)",
+        "output_dir",
+        help="Directory of images to process (e.g. output/greenbooks/item_uuid)",
     )
     parser.add_argument(
         "--models", "-m",
@@ -259,12 +259,12 @@ def main() -> None:
         from google import genai as _genai  # noqa: PLC0415
         client = _genai.Client(api_key=api_key)
 
-    images_root = Path(args.images_dir)
-    if not images_root.exists():
-        print(f"Error: directory not found: {images_root}", file=sys.stderr)
+    output_root = Path(args.output_dir)
+    if not output_root.exists():
+        print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
 
-    all_jpgs = sorted(images_root.rglob("*.jpg"))
+    all_jpgs = sorted(output_root.rglob("*.jpg"))
     images = []
     for p in all_jpgs:
         if p.stem.endswith("_left") or p.stem.endswith("_right"):
@@ -276,7 +276,7 @@ def main() -> None:
             continue
         images.append(p)
     if not images:
-        print(f"No .jpg files found under {images_root}", file=sys.stderr)
+        print(f"No .jpg files found under {output_root}", file=sys.stderr)
         sys.exit(0)
 
     tasks = [(img, model) for img in images for model in args.models]
@@ -376,7 +376,7 @@ def main() -> None:
             _log(f"  → {html_path}")
 
     # Write summary stats CSV
-    stats_path = images_root / "ocr_comparison_stats.csv"
+    stats_path = output_root / "ocr_comparison_stats.csv"
     fieldnames = ["image", "model", "char_count", "word_count", "line_count", "status"]
     with open(stats_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)

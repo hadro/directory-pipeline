@@ -31,9 +31,9 @@ Output JSON schema per image:
 
 Usage
 -----
-    python run_surya_ocr.py images/greenbooks
-    python run_surya_ocr.py images/travelguide --batch-size 8
-    python run_surya_ocr.py images/travelguide --quiet
+    python run_surya_ocr.py output/greenbooks
+    python run_surya_ocr.py output/travelguide --batch-size 8
+    python run_surya_ocr.py output/travelguide --quiet
 """
 
 import argparse
@@ -55,8 +55,8 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "images_dir",
-        help="Root images directory to process (e.g. images/greenbooks)",
+        "output_dir",
+        help="Root images directory to process (e.g. output/greenbooks)",
     )
     parser.add_argument(
         "--batch-size", "-b",
@@ -72,9 +72,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    images_root = Path(args.images_dir)
-    if not images_root.exists():
-        print(f"Error: directory not found: {images_root}", file=sys.stderr)
+    output_root = Path(args.output_dir)
+    if not output_root.exists():
+        print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
 
     # Load Surya models
@@ -99,7 +99,7 @@ def main() -> None:
         print(f"Models loaded in {time.monotonic() - t_load:.1f}s.\n", file=sys.stderr)
 
     # Collect images to process (mirrors run_ocr.py split-aware logic)
-    all_jpgs = sorted(images_root.rglob("*.jpg"))
+    all_jpgs = sorted(output_root.rglob("*.jpg"))
     images_to_run: list[Path] = []
     skipped = 0
     for p in all_jpgs:
@@ -121,7 +121,7 @@ def main() -> None:
             images_to_run.append(p)
 
     if not images_to_run and skipped == 0:
-        print(f"No .jpg files found under {images_root}", file=sys.stderr)
+        print(f"No .jpg files found under {output_root}", file=sys.stderr)
         sys.exit(0)
 
     if not args.quiet:

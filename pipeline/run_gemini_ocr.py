@@ -11,10 +11,10 @@ Requires a Gemini API key in the GEMINI_API_KEY environment variable.
 
 Usage
 -----
-    python run_gemini_ocr.py images/travelguide
-    python run_gemini_ocr.py images/greenbooks --workers 8
-    python run_gemini_ocr.py images/travelguide --model gemini-2.0-flash
-    python run_gemini_ocr.py images/travelguide --quiet
+    python run_gemini_ocr.py output/travelguide
+    python run_gemini_ocr.py output/greenbooks --workers 8
+    python run_gemini_ocr.py output/travelguide --model gemini-2.0-flash
+    python run_gemini_ocr.py output/travelguide --quiet
 """
 
 import argparse
@@ -35,6 +35,20 @@ DEFAULT_MODEL = "gemini-2.0-flash"
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
 
 _print_lock = threading.Lock()
+
+
+def _find_prompt(output_root: Path, fallback: Path) -> Path:
+    """Return a volume-specific ocr_prompt.md if one exists alongside the images,
+    otherwise return the global fallback.
+
+    Checks output_root and output_root.parent so the lookup works whether
+    output_root is the item directory or the slug-level directory above it.
+    """
+    for candidate_dir in (output_root.resolve(), output_root.resolve().parent):
+        p = candidate_dir / "ocr_prompt.md"
+        if p.exists():
+            return p
+    return fallback
 
 
 def _log(msg: str) -> None:
@@ -94,8 +108,8 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "images_dir",
-        help="Root images directory to process (e.g. images/travelguide)",
+        "output_dir",
+        help="Root images directory to process (e.g. output/travelguide)",
     )
     parser.add_argument(
         "--model", "-m",
@@ -110,6 +124,14 @@ def main() -> None:
         help="Number of parallel API requests (default: 4)",
     )
     parser.add_argument(
+        "--prompt-file",
+        metavar="PATH",
+        help=(
+            "Path to a custom OCR system prompt (default: prompts/ocr_prompt.md). "
+            "Use generate_prompt.py to produce a volume-specific prompt."
+        ),
+    )
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="Suppress per-file progress output",
@@ -122,19 +144,25 @@ def main() -> None:
         print("Error: GEMINI_API_KEY environment variable is not set.", file=sys.stderr)
         sys.exit(1)
 
-    # System prompt
-    if not PROMPT_FILE.exists():
-        print(f"Error: prompt file not found: {PROMPT_FILE}", file=sys.stderr)
-        sys.exit(1)
-    system_prompt = PROMPT_FILE.read_text(encoding="utf-8")
+    # Images root (needed for prompt auto-discovery below)
+    output_root = Path(args.output_dir)
 
-    # Images
-    images_root = Path(args.images_dir)
-    if not images_root.exists():
-        print(f"Error: directory not found: {images_root}", file=sys.stderr)
+    # System prompt — explicit flag > volume-specific > global default
+    if args.prompt_file:
+        prompt_path = Path(args.prompt_file)
+    else:
+        prompt_path = _find_prompt(output_root, PROMPT_FILE)
+    if not prompt_path.exists():
+        print(f"Error: prompt file not found: {prompt_path}", file=sys.stderr)
+        sys.exit(1)
+    system_prompt = prompt_path.read_text(encoding="utf-8")
+    if not args.quiet and prompt_path != PROMPT_FILE:
+        print(f"Using volume prompt: {prompt_path}", file=sys.stderr)
+    if not output_root.exists():
+        print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
 
-    all_jpgs = sorted(images_root.rglob("*.jpg"))
+    all_jpgs = sorted(output_root.rglob("*.jpg"))
     images = []
     for p in all_jpgs:
         # Skip visualization output files
@@ -151,7 +179,7 @@ def main() -> None:
             continue
         images.append(p)
     if not images:
-        print(f"No .jpg files found under {images_root}", file=sys.stderr)
+        print(f"No .jpg files found under {output_root}", file=sys.stderr)
         sys.exit(0)
 
     total = len(images)

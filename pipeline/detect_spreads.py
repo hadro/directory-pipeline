@@ -22,11 +22,11 @@ Output is a CSV report. No image files are modified.
 
 Usage
 -----
-    python detect_spreads.py images/Hackley_Harrison
-    python detect_spreads.py images/Hackley_Harrison/4f7822b0-...
-    python detect_spreads.py images/ --output spreads_report.csv
-    python detect_spreads.py images/Hackley_Harrison --threshold 0.08
-    python detect_spreads.py images/Hackley_Harrison --csv collection_csv/Hackley_Harrison.csv
+    python detect_spreads.py output/Hackley_Harrison
+    python detect_spreads.py output/Hackley_Harrison/4f7822b0-...
+    python detect_spreads.py output/ --output spreads_report.csv
+    python detect_spreads.py output/Hackley_Harrison --threshold 0.08
+    python detect_spreads.py output/Hackley_Harrison --csv collection_csv/Hackley_Harrison.csv
 """
 
 import argparse
@@ -270,13 +270,13 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "images_dir",
-        help="Directory to scan (e.g. images/Hackley_Harrison or a single item UUID dir)",
+        "output_dir",
+        help="Directory to scan (e.g. output/Hackley_Harrison or a single item UUID dir)",
     )
     parser.add_argument(
         "--output", "-o",
         default=None,
-        help="Output CSV path (default: <images_dir>/spreads_report.csv)",
+        help="Output CSV path (default: <output_dir>/spreads_report.csv)",
     )
     parser.add_argument(
         "--threshold", "-t",
@@ -321,12 +321,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    images_root = Path(args.images_dir)
-    if not images_root.exists():
-        print(f"Error: directory not found: {images_root}", file=sys.stderr)
+    output_root = Path(args.output_dir)
+    if not output_root.exists():
+        print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
 
-    out_path = Path(args.output) if args.output else images_root / "spreads_report.csv"
+    out_path = Path(args.output) if args.output else output_root / "spreads_report.csv"
 
     if out_path.exists() and not args.force:
         print(
@@ -337,11 +337,11 @@ def main() -> None:
         sys.exit(0)
 
     images = sorted(
-        p for p in images_root.rglob("*.jpg")
+        p for p in output_root.rglob("*.jpg")
         if not (p.stem.endswith("_left") or p.stem.endswith("_right"))
     )
     if not images:
-        print(f"No .jpg files found under {images_root}", file=sys.stderr)
+        print(f"No .jpg files found under {output_root}", file=sys.stderr)
         sys.exit(0)
 
     # Load microform lookup from collection CSV if supplied
@@ -375,8 +375,8 @@ def main() -> None:
         writer.writeheader()
 
         for i, img_path in enumerate(images, 1):
-            # Extract item_id: images/<collection>/<item_id>/<filename>
-            # or images/<item_id>/<filename>
+            # Extract item_id: output/<collection>/<item_id>/<filename>
+            # or output/<item_id>/<filename>
             parts = img_path.parts
             item_id = parts[-2] if len(parts) >= 2 else ""
 

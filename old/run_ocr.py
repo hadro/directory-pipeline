@@ -15,10 +15,10 @@ Requires Tesseract to be installed and on PATH:
 
 Usage
 -----
-    python run_ocr.py images/travelguide
-    python run_ocr.py images/greenbooks --lang eng
-    python run_ocr.py images/travelguide --workers 6
-    python run_ocr.py images/travelguide --quiet
+    python run_ocr.py output/travelguide
+    python run_ocr.py output/greenbooks --lang eng
+    python run_ocr.py output/travelguide --workers 6
+    python run_ocr.py output/travelguide --quiet
 """
 
 import argparse
@@ -84,8 +84,8 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "images_dir",
-        help="Root images directory to process (e.g. images/travelguide)",
+        "output_dir",
+        help="Root images directory to process (e.g. output/travelguide)",
     )
     parser.add_argument(
         "--lang", "-l",
@@ -149,9 +149,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    images_root = Path(args.images_dir)
-    if not images_root.exists():
-        print(f"Error: directory not found: {images_root}", file=sys.stderr)
+    output_root = Path(args.output_dir)
+    if not output_root.exists():
+        print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
 
     try:
@@ -165,7 +165,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    all_jpgs = sorted(images_root.rglob("*.jpg"))
+    all_jpgs = sorted(output_root.rglob("*.jpg"))
     images = []
     for p in all_jpgs:
         # Skip visualization output files
@@ -182,13 +182,13 @@ def main() -> None:
             continue
         images.append(p)
     if not images:
-        print(f"No .jpg files found under {images_root}", file=sys.stderr)
+        print(f"No .jpg files found under {output_root}", file=sys.stderr)
         sys.exit(0)
 
     # Load per-image PSM recommendations from detect_columns.py output (if present).
     # The global --psm flag always takes precedence over the per-image value.
     psm_map: dict[str, int] = {}
-    columns_report = images_root / "columns_report.csv"
+    columns_report = output_root / "columns_report.csv"
     if columns_report.exists():
         with open(columns_report, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):

@@ -8,14 +8,14 @@ CSV mode (default):
     loc_collection_csv.py and downloads every item's images.
 
     Images are saved to:
-        images/<csv-stem>/<item_id>/<page>_<image_id>.jpg
+        output/<csv-stem>/<item_id>/<page>_<image_id>.jpg
 
 Manifest mode (--manifest):
     Downloads a single IIIF manifest directly — no CSV required.
     Accepts any public IIIF Presentation v2 or v3 manifest URL.
 
     Images are saved to:
-        images/<item_id>/<page>_<image_id>.jpg
+        output/<item_id>/<page>_<image_id>.jpg
 
     where <item_id> is derived from the manifest URL, or overridden
     with --output-dir.
@@ -37,7 +37,7 @@ Usage
     # Manifest mode:
     python download_images.py --manifest https://www.loc.gov/item/01015253/manifest.json
     python download_images.py --manifest https://example.org/iiif/item/manifest.json \\
-        --output-dir images/my-item --width 2048
+        --output-dir output/my-item --width 2048
 """
 
 import argparse
@@ -349,7 +349,7 @@ def main() -> None:
         default=None,
         help=(
             "Directory to write images into. "
-            "Defaults to images/<csv-stem>/ (CSV mode) or images/<item-id>/ (manifest mode)."
+            "Defaults to output/<csv-stem>/ (CSV mode) or output/<item-id>/ (manifest mode)."
         ),
     )
     parser.add_argument(
@@ -395,7 +395,7 @@ def main() -> None:
     # ── Manifest mode ──────────────────────────────────────────────────────
     if args.manifest:
         item_id = iiif_utils.manifest_item_id(args.manifest)
-        out_root = Path(args.output_dir) if args.output_dir else Path("images") / item_id
+        out_root = Path(args.output_dir) if args.output_dir else Path("output") / item_id
 
         if out_root.exists():
             existing = list(out_root.rglob("*.jpg"))
@@ -459,7 +459,7 @@ def main() -> None:
     if args.output_dir:
         out_root = Path(args.output_dir)
     else:
-        out_root = Path("images") / csv_path.stem
+        out_root = Path("output") / csv_path.stem
 
     # Guard against accidentally re-downloading a completed collection.
     if out_root.exists():

@@ -10,8 +10,8 @@ Opens a local web UI where you can:
 
 Usage
 -----
-    uv run review_alignment.py images/
-    uv run review_alignment.py images/ --model gemini-2.0-flash --port 5001
+    uv run review_alignment.py output/
+    uv run review_alignment.py output/ --model gemini-2.0-flash --port 5001
 
 Then open http://localhost:5000 in your browser.
 """
@@ -37,7 +37,7 @@ app = Flask(__name__)
 PROJECT_ROOT: Path = Path(__file__).parent.parent
 
 # Set at startup
-IMAGES_ROOT: Path = Path("images")
+OUTPUT_ROOT: Path = Path("output")
 MODEL: str = "gemini-2.0-flash"
 
 # Surya models – pre-loaded at startup (see main())
@@ -100,7 +100,7 @@ def _img_path(json_path: Path) -> Path:
 
 def _find_pages() -> list[dict]:
     pages = []
-    for p in sorted(IMAGES_ROOT.rglob(f"*{_json_suffix()}")):
+    for p in sorted(OUTPUT_ROOT.rglob(f"*{_json_suffix()}")):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
@@ -109,10 +109,10 @@ def _find_pages() -> list[dict]:
         img = _img_path(p)
         if not img.exists():
             continue
-        # Volume = first path component below IMAGES_ROOT, if there are at
+        # Volume = first path component below OUTPUT_ROOT, if there are at
         # least two directory levels (volume/item_dir/file).  Single-level
         # runs (item_dir/file) have an empty volume string.
-        rel_parts = p.relative_to(IMAGES_ROOT).parts
+        rel_parts = p.relative_to(OUTPUT_ROOT).parts
         volume = rel_parts[0] if len(rel_parts) >= 3 else ""
         pages.append({
             "json_path": str(p),
@@ -801,7 +801,7 @@ function finishReview() {
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    global IMAGES_ROOT, MODEL
+    global OUTPUT_ROOT, MODEL
 
     parser = argparse.ArgumentParser(
         description="Annotation tool for reviewing Surya/Gemini alignment results.",
@@ -809,8 +809,8 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "images_dir",
-        help="Root images directory (e.g. images/ or images/greenbooks)",
+        "output_dir",
+        help="Root images directory (e.g. output/ or output/greenbooks)",
     )
     parser.add_argument(
         "--model", "-m",
@@ -830,14 +830,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    IMAGES_ROOT = Path(args.images_dir)
-    if not IMAGES_ROOT.exists():
-        print(f"Error: directory not found: {IMAGES_ROOT}", file=sys.stderr)
+    OUTPUT_ROOT = Path(args.output_dir)
+    if not OUTPUT_ROOT.exists():
+        print(f"Error: directory not found: {OUTPUT_ROOT}", file=sys.stderr)
         sys.exit(1)
 
     MODEL = args.model
 
-    print(f"  images: {IMAGES_ROOT.resolve()}", flush=True)
+    print(f"  images: {OUTPUT_ROOT.resolve()}", flush=True)
     print(f"  model:  {MODEL}", flush=True)
     print("Loading Surya models… (this takes ~30 s)", flush=True)
     _load_surya()

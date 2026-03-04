@@ -24,16 +24,16 @@ Confidence mapping
   1-col (no gutter)        → "high"
 
 Output
-  images_dir/columns_report.csv  (same fields as detect_columns.py)
+  output_dir/columns_report.csv  (same fields as detect_columns.py)
 
 Requirements
   pip install surya-ocr
 
 Usage
 -----
-    python surya_detect.py images/greenbooks
-    python surya_detect.py images/greenbooks --force
-    python surya_detect.py images/greenbooks --batch-size 8
+    python surya_detect.py output/greenbooks
+    python surya_detect.py output/greenbooks --force
+    python surya_detect.py output/greenbooks --batch-size 8
 """
 
 import argparse
@@ -156,7 +156,7 @@ def _analyze_bboxes(bboxes: list, image_width: int) -> dict:
 # Image selection (mirrors detect_columns.py: prefer split halves)
 # ---------------------------------------------------------------------------
 
-def _select_images(images_root: Path) -> list[Path]:
+def _select_images(output_root: Path) -> list[Path]:
     """
     Return the images to process.
 
@@ -169,7 +169,7 @@ def _select_images(images_root: Path) -> list[Path]:
     # Stems ending with any of these are pipeline outputs, not source scans.
     _SKIP_SUFFIXES = ("_viz", "_surya_det", "_chandra_layout")
 
-    all_jpgs = sorted(images_root.rglob("*.jpg"))
+    all_jpgs = sorted(output_root.rglob("*.jpg"))
     images: list[Path] = []
     for p in all_jpgs:
         if any(p.stem.endswith(s) for s in _SKIP_SUFFIXES):
@@ -196,8 +196,8 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "images_dir",
-        help="Root images directory (e.g. images/greenbooks)",
+        "output_dir",
+        help="Root images directory (e.g. output/greenbooks)",
     )
     parser.add_argument(
         "--force", "-f",
@@ -219,12 +219,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    images_root = Path(args.images_dir)
-    if not images_root.exists():
-        print(f"Error: directory not found: {images_root}", file=sys.stderr)
+    output_root = Path(args.output_dir)
+    if not output_root.exists():
+        print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
 
-    report_path = images_root / REPORT_FILENAME
+    report_path = output_root / REPORT_FILENAME
     if report_path.exists() and not args.force:
         print(
             f"columns_report.csv already exists ({report_path}). "
@@ -233,15 +233,15 @@ def main() -> None:
         )
         sys.exit(0)
 
-    images = _select_images(images_root)
+    images = _select_images(output_root)
     if not images:
-        print(f"No .jpg files found under {images_root}", file=sys.stderr)
+        print(f"No .jpg files found under {output_root}", file=sys.stderr)
         sys.exit(0)
 
     total = len(images)
     if not args.quiet:
         print(
-            f"Surya column detection: {total} image(s) in {images_root}",
+            f"Surya column detection: {total} image(s) in {output_root}",
             file=sys.stderr,
         )
 

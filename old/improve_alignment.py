@@ -14,9 +14,9 @@ Retry sequence (tried in order):
 
 Usage
 -----
-    python improve_alignment.py images/greenbooks/feb978b0 --model gemini-2.0-flash
-    python improve_alignment.py images/greenbooks/ --model gemini-2.0-flash --workers 4
-    python improve_alignment.py images/greenbooks/ --model gemini-2.0-flash --dry-run
+    python improve_alignment.py output/greenbooks/feb978b0 --model gemini-2.0-flash
+    python improve_alignment.py output/greenbooks/ --model gemini-2.0-flash --workers 4
+    python improve_alignment.py output/greenbooks/ --model gemini-2.0-flash --dry-run
 """
 
 import argparse
@@ -270,10 +270,10 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "images_dir",
+        "output_dir",
         help=(
             "Item images directory containing *_aligned.json files "
-            "(e.g. images/greenbooks/feb978b0), or a parent directory to "
+            "(e.g. output/greenbooks/feb978b0), or a parent directory to "
             "process all item subdirectories."
         ),
     )
@@ -325,13 +325,13 @@ def main() -> None:
     args = parser.parse_args()
 
     slug = align_ocr.model_slug(args.model)
-    images_root = Path(args.images_dir)
-    if not images_root.exists():
-        print(f"Error: directory not found: {images_root}", file=sys.stderr)
+    output_root = Path(args.output_dir)
+    if not output_root.exists():
+        print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
 
     # Collect images that have an existing aligned JSON to assess
-    all_jpgs = sorted(images_root.rglob("*.jpg"))
+    all_jpgs = sorted(output_root.rglob("*.jpg"))
     images: list[Path] = []
     for p in all_jpgs:
         if p.stem.endswith("_viz"):
@@ -348,7 +348,7 @@ def main() -> None:
 
     if not images:
         print(
-            f"No *_{slug}_aligned.json files found under {images_root}",
+            f"No *_{slug}_aligned.json files found under {output_root}",
             file=sys.stderr,
         )
         sys.exit(0)

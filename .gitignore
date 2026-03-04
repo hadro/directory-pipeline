@@ -1,6 +1,6 @@
 # Downloaded data and local files
 collection_csv/*
-images/*
+output/*
 ideas_and_questions.md
 old/*
 

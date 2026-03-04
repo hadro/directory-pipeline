@@ -11,16 +11,16 @@ color-coded bounding boxes, and saves a *_viz.jpg next to it:
 Usage
 -----
     # Visualize all aligned JSONs in an item directory:
-    python visualize_alignment.py images/greenbooks/item_uuid/
+    python visualize_alignment.py output/greenbooks/item_uuid/
 
     # Visualize a single JSON:
-    python visualize_alignment.py images/greenbooks/item_uuid/0039_123_gemini-2.0-flash_aligned.json
+    python visualize_alignment.py output/greenbooks/item_uuid/0039_123_gemini-2.0-flash_aligned.json
 
     # Filter by model:
-    python visualize_alignment.py images/greenbooks/ --model gemini-2.0-flash
+    python visualize_alignment.py output/greenbooks/ --model gemini-2.0-flash
 
     # Re-generate (skip existing _viz.jpg files by default):
-    python visualize_alignment.py images/greenbooks/ --force
+    python visualize_alignment.py output/greenbooks/ --force
 """
 
 import argparse

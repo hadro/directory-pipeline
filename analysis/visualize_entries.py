@@ -20,10 +20,10 @@ listed in the right margin in their category colour.
 
 Usage
 -----
-    python visualize_entries.py images/greenbooks/item_uuid/
-    python visualize_entries.py images/greenbooks/item_uuid/0039_123_gemini-2.0-flash_entries.json
-    python visualize_entries.py images/greenbooks/ --model gemini-2.0-flash
-    python visualize_entries.py images/greenbooks/ --force
+    python visualize_entries.py output/greenbooks/item_uuid/
+    python visualize_entries.py output/greenbooks/item_uuid/0039_123_gemini-2.0-flash_entries.json
+    python visualize_entries.py output/greenbooks/ --model gemini-2.0-flash
+    python visualize_entries.py output/greenbooks/ --force
 """
 
 import argparse

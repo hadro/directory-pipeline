@@ -16,21 +16,23 @@ combination of the following stages:
 2. **Download images** from IIIF manifests at full resolution
 3. **Detect double-page spreads** (common in microfilm digitization)
 4. **Split spreads** into separate left/right page files
-5. **Detect column layout** per image — via Surya neural detection (preferred) or pixel-projection heuristics
-6. **Run Surya OCR** to get line-level bounding boxes (preferred), or Tesseract for word-level hOCR (legacy)
-7. **Run Gemini OCR** to get accurately transcribed text
-8. **Compare OCR models** side-by-side in an HTML report
-9. **Align** Gemini text to Surya (or Tesseract) bounding boxes using anchored Needleman-Wunsch
-10. **Visualize** alignment quality by drawing color-coded boxes on images
-11. **Review and correct alignment** interactively — draw bounding boxes over unmatched regions, re-run Surya OCR on crops, and save accepted matches back to the aligned JSON
-12. **Extract structured entries** (name, address, city, state, category) via Gemini NER
-13. **Geocode entries** to lat/lon using Google Maps (address-level) or Nominatim (city-level)
-14. **Generate an interactive map** from geocoded entries
+5. **Select sample pages** interactively — browser UI for picking 4–8 representative pages
+6. **Generate volume-specific prompts** — Gemini analyzes sample pages and writes tailored OCR and NER system prompts
+7. **Detect column layout** per image — via Surya neural detection (preferred) or pixel-projection heuristics
+8. **Run Surya OCR** to get line-level bounding boxes (preferred), or Tesseract for word-level hOCR (legacy)
+9. **Run Gemini OCR** to get accurately transcribed text
+10. **Compare OCR models** side-by-side in an HTML report
+11. **Align** Gemini text to Surya (or Tesseract) bounding boxes using anchored Needleman-Wunsch
+12. **Visualize** alignment quality by drawing color-coded boxes on images
+13. **Review and correct alignment** interactively — draw bounding boxes over unmatched regions, re-run Surya OCR on crops, and save accepted matches back to the aligned JSON
+14. **Extract structured entries** (name, address, city, state, category) via Gemini NER
+15. **Geocode entries** to lat/lon using Google Maps (address-level) or Nominatim (city-level)
+16. **Generate an interactive map** from geocoded entries
 
 The end result is a per-page JSON file pairing Gemini's corrected text with
 Surya's pixel-level line coordinates, a structured entries CSV, an
 interactive Leaflet map with IIIF popup thumbnails and Content State deep-links
-into a self-hosted viewer, and W3C Annotation Pages with colored bounding
+into a self-hosted viewer, and W3C/IIIF Annotation Pages with colored bounding
 boxes that load directly in Mirador and Universal Viewer — suitable for search
 indexing, IIIF annotation, and geospatial analysis.
 
@@ -45,11 +47,13 @@ command line. All stages are optional — run only what you need.
 --nypl-csv            sources/nypl_collection_csv.py      → collection_csv/{slug}.csv
 --loc-csv             sources/loc_collection_csv.py       → collection_csv/{slug}.csv
 --ia-csv              sources/ia_collection_csv.py        → collection_csv/{slug}.csv
---download            pipeline/download_images.py         → images/{slug}/
---detect-spreads      pipeline/detect_spreads.py          → images/{slug}/spreads_report.csv
+--download            pipeline/download_images.py         → output/{slug}/
+--detect-spreads      pipeline/detect_spreads.py          → output/{slug}/spreads_report.csv
 --split-spreads       pipeline/split_spreads.py           → *_left.jpg, *_right.jpg, *_split.json
---surya-detect        pipeline/surya_detect.py            → images/{slug}/columns_report.csv  (preferred)
---detect-columns      pipeline/detect_columns.py          → images/{slug}/columns_report.csv  (legacy)
+--select-pages        pipeline/select_sample_pages.py     → select_pages.html                 (interactive)
+--generate-prompts    pipeline/generate_ocr_prompt.py     → output/{slug}/ocr_prompt.md, ner_prompt.md
+--surya-detect        pipeline/surya_detect.py            → output/{slug}/columns_report.csv  (preferred)
+--detect-columns      pipeline/detect_columns.py          → output/{slug}/columns_report.csv  (legacy)
 --surya-ocr           pipeline/run_surya_ocr.py           → *_surya.json, *_surya.txt         (preferred)
 --tesseract           old/run_ocr.py                      → *_tesseract.hocr, *_tesseract.txt (legacy)
 --gemini-ocr          pipeline/run_gemini_ocr.py          → *_{model}.txt
@@ -60,7 +64,7 @@ command line. All stages are optional — run only what you need.
 --extract-entries     pipeline/extract_entries.py         → entries_{model}.csv, *_{model}_entries.json
 --geocode             pipeline/geocode_entries.py         → entries_{model}_geocoded.csv
 --map                 pipeline/map_entries.py             → entries_{model}.html
---export-annotations  pipeline/export_annotations.py     → *_{model}_annotations.json, *_{model}_entry_annotations.json
+(standalone)          pipeline/export_annotations.py     → *_{model}_annotations.json, *_{model}_entry_annotations.json
 (standalone)          pipeline/export_entry_boxes.py     → *_{model}_box_annotations.json
 ```
 
@@ -111,12 +115,12 @@ Fetches full-resolution images from IIIF manifests. Two input modes:
 
 **CSV mode** (default): reads a collection CSV and downloads every item's images.
 ```
-images/{slug}/{item_id}/{page:04d}_{image_id}.jpg
+output/{slug}/{item_id}/{page:04d}_{image_id}.jpg
 ```
 
 **Manifest mode** (`--manifest URL`): downloads a single IIIF manifest directly — no CSV needed. Accepts any public IIIF Presentation v2 or v3 manifest URL.
 ```
-images/{item_id}/{page:04d}_{image_id}.jpg
+output/{item_id}/{page:04d}_{image_id}.jpg
 ```
 
 The IIIF manifest is cached alongside the images for downstream use by `align_ocr.py`.
@@ -146,6 +150,51 @@ looser detection threshold.
 Reads `spreads_report.csv` and, for each spread, crops the image at the detected
 gutter column into `{stem}_left.jpg` and `{stem}_right.jpg`. Also writes a
 `{stem}_split.json` sidecar with the pixel offsets. Original images are untouched.
+
+#### `pipeline/select_sample_pages.py` — Sample page selector (interactive)
+Generates a self-contained `select_pages.html` browser UI for visually picking 4–8
+representative pages from a volume to use as prompt-calibration samples. Opens the
+page in the default browser automatically (pass `--no-open` to suppress).
+
+In the browser: click thumbnails to select or deselect pages; the header shows the
+current count (green when 4–8 are chosen). Click **Download selection.txt** to save
+a plain-text list of selected filenames. Place the downloaded `selection.txt` in
+`output/{slug}/` before running `--generate-prompts`.
+
+```bash
+python pipeline/select_sample_pages.py output/the_travelers_guide_e088efa0/
+python pipeline/select_sample_pages.py output/the_travelers_guide_e088efa0/ --no-open
+```
+
+#### `pipeline/generate_ocr_prompt.py` — Volume-specific prompt generation
+Sends selected sample page images to Gemini and generates two prompts tailored to
+the specific volume's layout, typography, and entry format:
+
+- `output/{slug}/ocr_prompt.md` — OCR transcription system prompt
+- `output/{slug}/ner_prompt.md` — NER entry-extraction system prompt
+
+Both prompts are **auto-discovered** by `run_gemini_ocr.py` and `extract_entries.py`
+when they exist in the slug directory — no explicit `--prompt-file` flag needed.
+Falls back to the global `prompts/ocr_prompt.md` / `prompts/ner_prompt.md` if no
+volume-specific prompt is found.
+
+Requires a `selection.txt` file (from `--select-pages`). Pass `--ocr-only` or
+`--ner-only` to generate a single prompt. Prints both prompts to stdout for
+immediate review in addition to saving them.
+
+```bash
+# Generate both prompts (typical workflow):
+python pipeline/generate_ocr_prompt.py output/the_travelers_guide_e088efa0/ \
+    --selection output/the_travelers_guide_e088efa0/selection.txt
+
+# OCR prompt only:
+python pipeline/generate_ocr_prompt.py output/the_travelers_guide_e088efa0/ \
+    --selection output/the_travelers_guide_e088efa0/selection.txt --ocr-only
+
+# Use explicit page filenames instead of a selection file:
+python pipeline/generate_ocr_prompt.py output/the_travelers_guide_e088efa0/ \
+    --pages 0005_58019060.jpg 0012_58019067.jpg 0023_58019078.jpg 0041_58019096.jpg
+```
 
 #### `pipeline/surya_detect.py` — Surya column detection (preferred)
 Runs Surya's neural text-line detection model on each image to count text columns
@@ -298,7 +347,7 @@ annotation requests are fast.
 
 ```bash
 # Run standalone (recommended for iterative review):
-python pipeline/review_alignment.py images/ --model gemini-2.0-flash
+python pipeline/review_alignment.py output/ --model gemini-2.0-flash
 
 # Or via the pipeline (blocks until Ctrl+C):
 python main.py collections.txt --review-alignment --model gemini-2.0-flash
@@ -341,7 +390,7 @@ the network for new queries. Writes `entries_{model}_geocoded.csv` with added
 
 ```bash
 GOOGLE_MAPS_API_KEY=... python pipeline/geocode_entries.py \
-    images/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
+    output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
 ```
 
 #### `pipeline/map_entries.py` — Interactive map
@@ -358,8 +407,8 @@ geocoded CSV from `geocode_entries.py`.
 
 When IIIF manifests are present alongside the images (as cached by `download_images.py`),
 each marker popup includes a thumbnail of the exact page region where the entry appears,
-fetched directly from the source institution's IIIF image server. Pass `--images-dir`
-to specify the images root if the CSV has been moved; by default the script searches
+fetched directly from the source institution's IIIF image server. Pass `--output-dir`
+to specify the output root if the CSV has been moved; by default the script searches
 the CSV's parent directory for manifests.
 
 **IIIF Content State deep-links.** Pass `--viewer-url` to embed a link in each popup
@@ -374,9 +423,9 @@ Pass `--manifest-url` to specify the manifest explicitly; if omitted the script
 derives it as `{viewer-url}/manifest.json`.
 
 ```bash
-python pipeline/map_entries.py images/green_book_1940_feb978b0/ --model gemini-2.0-flash
-python pipeline/map_entries.py path/to/entries.csv --images-dir images/
-python pipeline/map_entries.py images/green_book_1947_xxx/ \
+python pipeline/map_entries.py output/green_book_1940_feb978b0/ --model gemini-2.0-flash
+python pipeline/map_entries.py path/to/entries.csv --output-dir output/
+python pipeline/map_entries.py output/green_book_1947_xxx/ \
     --model gemini-2.0-flash \
     --viewer-url https://hadro.github.io/green-book-iiif-test \
     --manifest-url https://hadro.github.io/green-book-iiif-test/manifest.json
@@ -400,10 +449,10 @@ self-contained local files). Add `--base-url` to embed persistent URIs so viewer
 can reload annotations from a known endpoint.
 
 ```bash
-python pipeline/export_annotations.py images/green_book_1940_feb978b0/uuid/
-python pipeline/export_annotations.py images/green_book_1940_feb978b0/uuid/ \
+python pipeline/export_annotations.py output/green_book_1940_feb978b0/uuid/
+python pipeline/export_annotations.py output/green_book_1940_feb978b0/uuid/ \
     --base-url https://example.org/annotations --model gemini-2.0-flash
-python pipeline/export_annotations.py images/green_book_1940_feb978b0/uuid/ \
+python pipeline/export_annotations.py output/green_book_1940_feb978b0/uuid/ \
     --no-entries   # line-level transcription only
 ```
 
@@ -437,10 +486,10 @@ With `--update-manifest`, the script also:
    Requires `--base-url`. Original manifest is backed up as `manifest_bak.json`.
 
 ```bash
-python pipeline/export_entry_boxes.py images/green_book_1947_xxx/uuid/
-python pipeline/export_entry_boxes.py images/green_book_1947_xxx/uuid/ \
+python pipeline/export_entry_boxes.py output/green_book_1947_xxx/uuid/
+python pipeline/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \
     --model gemini-2.0-flash
-python pipeline/export_entry_boxes.py images/green_book_1947_xxx/uuid/ \
+python pipeline/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \
     --base-url https://hadro.github.io/green-book-iiif-test/annotations \
     --update-manifest
 ```
@@ -457,6 +506,8 @@ directory-pipeline/
 │   ├── download_images.py            # Download images from IIIF manifests
 │   ├── detect_spreads.py             # Spread detection
 │   ├── split_spreads.py              # Spread splitting
+│   ├── select_sample_pages.py        # Interactive browser UI for picking sample pages
+│   ├── generate_ocr_prompt.py        # Gemini-generated volume-specific OCR + NER prompts
 │   ├── surya_detect.py               # Surya neural column detection (preferred)
 │   ├── detect_columns.py             # Pixel-projection column detection (legacy)
 │   ├── run_surya_ocr.py              # Surya OCR — line-level bboxes (preferred)
@@ -494,10 +545,14 @@ directory-pipeline/
 │
 ├── pyproject.toml                    # Python project config and dependencies
 ├── collection_csv/                   # Output of --*-csv stages (one CSV per collection)
-└── images/
+└── output/
     └── {slug}/                       # e.g. the_negro_motorist_green_book_1947_4bea2040/
+        ├── selection.txt                             # sample page filenames (from --select-pages)
+        ├── ocr_prompt.md                             # volume-specific OCR prompt (from --generate-prompts)
+        ├── ner_prompt.md                             # volume-specific NER prompt (from --generate-prompts)
         └── {item_id}/                # NYPL UUID or LoC/IA identifier
             ├── manifest.json
+            ├── select_pages.html                     # page-selector UI (from --select-pages)
             ├── 0001_{image_id}.jpg
             ├── 0001_{image_id}_left.jpg              # if spread-split
             ├── 0001_{image_id}_right.jpg             # if spread-split
@@ -574,13 +629,19 @@ extraction — about **$0.002–$0.003 per page** combined using `gemini-2.0-fla
 Dense pages that exceed the output token limit automatically retry with
 `gemini-2.5-flash`, but this affects fewer than 5% of pages in practice.
 
+`--generate-prompts` (`generate_ocr_prompt.py`) makes 2 Gemini calls (one for the
+OCR prompt, one for the NER prompt) with 4–8 sample images each. This is a one-time
+per-volume cost of roughly **$0.01–$0.05 total**, negligible compared to the full
+run. `gemini-2.5-flash-preview` is used by default for prompt generation because
+it produces higher-quality meta-prompts; you can override with `--model`.
+
 **Rough collection estimates:**
 
-| Collection | Pages | Gemini cost |
-|---|---|---|
-| One Green Book volume | ~100 pages | ~$0.20–$0.30 |
-| Full Green Books corpus (14 volumes) | ~1,400 pages | ~$3–$5 |
-| Large city directory (500+ pages) | 500 pages | ~$1–$1.50 |
+| Collection | Pages | Gemini cost (OCR + NER) | Prompt generation |
+|---|---|---|---|
+| One Green Book volume | ~100 pages | ~$0.20–$0.30 | ~$0.02 (one-time) |
+| Full Green Books corpus (14 volumes) | ~1,400 pages | ~$3–$5 | ~$0.28 (one-time per volume) |
+| Large city directory (500+ pages) | 500 pages | ~$1–$1.50 | ~$0.02 (one-time) |
 
 **Free tier:** The Gemini API free tier (no billing required) covers both
 models at no charge, subject to rate limits of 15 requests/minute and
@@ -589,6 +650,10 @@ models at no charge, subject to rate limits of 15 requests/minute and
 though the 15 RPM cap means the API stages take ~15–20 minutes rather than
 a few minutes. For the full multi-volume corpus you will either need billing
 enabled or spread the run across several days.
+
+Note: `gemini-2.5-flash-preview` (used for prompt generation) may have different
+free-tier limits; check [ai.google.dev/pricing](https://ai.google.dev/pricing) for
+current rates. The 2-call prompt generation step is unlikely to exhaust any tier.
 
 ### Google Maps Geocoding (optional)
 
@@ -674,11 +739,45 @@ python main.py collections.txt --align-ocr --visualize \
     --model gemini-2.0-flash
 
 # Interactively review and correct unmatched entries
-python pipeline/review_alignment.py images/ --model gemini-2.0-flash
+python pipeline/review_alignment.py output/ --model gemini-2.0-flash
 
 # Extract entries, geocode, and build a map
 python main.py collections.txt --extract-entries --geocode --map \
     --model gemini-2.0-flash
+```
+
+### Volume-specific prompt calibration
+
+For a new collection type whose layout or entry format differs significantly from the
+Green Books, generate tailored OCR and NER prompts before running OCR:
+
+```bash
+# Step 1: Download images
+python main.py collections.txt --nypl-csv --download
+
+# Step 2: Open the browser UI and pick 4–8 representative sample pages
+#         Click "Download selection.txt" and save it to output/{slug}/selection.txt
+python main.py collections.txt --select-pages
+
+# Step 3: Generate volume-specific prompts (Gemini analyzes the selected pages)
+python main.py collections.txt --generate-prompts
+
+# Step 4: Run the standard pipeline — prompts are auto-discovered
+python main.py collections.txt --surya-ocr --gemini-ocr --align-ocr \
+    --extract-entries --geocode --map --model gemini-2.0-flash
+```
+
+Or run the prompt generation standalone:
+
+```bash
+# Standalone — with explicit selection file
+python pipeline/generate_ocr_prompt.py output/the_travelers_guide_e088efa0/ \
+    --selection output/the_travelers_guide_e088efa0/selection.txt
+
+# OCR prompt only, using explicit page filenames instead of selection.txt
+python pipeline/generate_ocr_prompt.py output/the_travelers_guide_e088efa0/ \
+    --pages 0005_58019060.jpg 0012_58019067.jpg 0023_58019078.jpg 0041_58019096.jpg \
+    --ocr-only
 ```
 
 ### Any IIIF manifest
@@ -687,7 +786,7 @@ python main.py collections.txt --extract-entries --geocode --map \
 # Download a single manifest directly (no CSV needed)
 python pipeline/download_images.py \
     --manifest https://example.org/iiif/item/manifest.json \
-    --output-dir images/my-item
+    --output-dir output/my-item
 ```
 
 ### Other options
@@ -708,16 +807,16 @@ python main.py collections.txt --align-ocr --model gemini-2.0-flash --force
 ### Running pipeline scripts directly
 
 ```bash
-python pipeline/align_ocr.py images/the_negro_motorist_green_book_1940_feb978b0 \
+python pipeline/align_ocr.py output/the_negro_motorist_green_book_1940_feb978b0 \
     --model gemini-2.0-flash --force
 
-python pipeline/extract_entries.py images/the_negro_motorist_green_book_1940_feb978b0 \
+python pipeline/extract_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
     --model gemini-2.0-flash
 
-python pipeline/geocode_entries.py images/the_negro_motorist_green_book_1940_feb978b0 \
+python pipeline/geocode_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
     --model gemini-2.0-flash
 
-python pipeline/map_entries.py images/the_negro_motorist_green_book_1940_feb978b0 \
+python pipeline/map_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
     --model gemini-2.0-flash
 ```
 
@@ -725,10 +824,10 @@ Analysis tools can be run from the `analysis/` directory:
 
 ```bash
 python analysis/visualize_alignment.py \
-    images/the_negro_motorist_green_book_1940_feb978b0 --model gemini-2.0-flash
+    output/the_negro_motorist_green_book_1940_feb978b0 --model gemini-2.0-flash
 
 python analysis/compare_extraction.py \
-    images/the_negro_motorist_green_book_1940_feb978b0
+    output/the_negro_motorist_green_book_1940_feb978b0
 ```
 
 ### IIIF annotation export and self-hosted viewer
@@ -736,20 +835,20 @@ python analysis/compare_extraction.py \
 ```bash
 # Export line-level and entry-level IIIF annotation pages
 python pipeline/export_annotations.py \
-    images/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
+    output/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
 
 # Export colored entry bounding boxes (standalone — not in --full-run)
 python pipeline/export_entry_boxes.py \
-    images/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
+    output/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
 
 # Export boxes and update manifest so viewers auto-load them
 python pipeline/export_entry_boxes.py \
-    images/green_book_1947_xxx/uuid/ \
+    output/green_book_1947_xxx/uuid/ \
     --base-url https://hadro.github.io/green-book-iiif-test/annotations \
     --update-manifest
 
 # Generate map with IIIF Content State deep-links (open viewer at correct page/region)
-python pipeline/map_entries.py images/green_book_1947_xxx/ \
+python pipeline/map_entries.py output/green_book_1947_xxx/ \
     --model gemini-2.0-flash \
     --viewer-url https://hadro.github.io/green-book-iiif-test \
     --manifest-url https://hadro.github.io/green-book-iiif-test/manifest.json

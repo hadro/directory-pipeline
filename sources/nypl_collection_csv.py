@@ -136,7 +136,7 @@ class NYPLClient:
     def get_captures_page(
         self, item_uuid: str, page: int = 1, per_page: int = 1
     ) -> dict:
-        """One page of captures (individual images/pages) for an item UUID."""
+        """One page of captures (individual output/pages) for an item UUID."""
         key = f"item_{item_uuid}_p{page}_n{per_page}"
         cached = self._cache_get(key)
         if cached is not None:
