@@ -421,6 +421,7 @@ def main() -> None:
         help="Suppress per-file progress output",
     )
     args = parser.parse_args()
+    args.base_url = args.base_url.rstrip("/")
 
     if args.update_manifest and not args.base_url:
         print(
