@@ -51,7 +51,7 @@ command line. All stages are optional — run only what you need.
 --detect-spreads      pipeline/detect_spreads.py          → output/{slug}/spreads_report.csv
 --split-spreads       pipeline/split_spreads.py           → *_left.jpg, *_right.jpg, *_split.json
 --select-pages        pipeline/select_sample_pages.py     → select_pages.html                 (interactive)
---generate-prompts    pipeline/generate_ocr_prompt.py     → output/{slug}/ocr_prompt.md, ner_prompt.md
+--generate-prompts    pipeline/generate_prompt.py     → output/{slug}/ocr_prompt.md, ner_prompt.md
 --surya-detect        pipeline/surya_detect.py            → output/{slug}/columns_report.csv  (preferred)
 --detect-columns      pipeline/detect_columns.py          → output/{slug}/columns_report.csv  (legacy)
 --surya-ocr           pipeline/run_surya_ocr.py           → *_surya.json, *_surya.txt         (preferred)
@@ -166,7 +166,7 @@ python pipeline/select_sample_pages.py output/the_travelers_guide_e088efa0/
 python pipeline/select_sample_pages.py output/the_travelers_guide_e088efa0/ --no-open
 ```
 
-#### `pipeline/generate_ocr_prompt.py` — Volume-specific prompt generation
+#### `pipeline/generate_prompt.py` — Volume-specific prompt generation
 Sends selected sample page images to Gemini and generates two prompts tailored to
 the specific volume's layout, typography, and entry format:
 
@@ -184,15 +184,15 @@ immediate review in addition to saving them.
 
 ```bash
 # Generate both prompts (typical workflow):
-python pipeline/generate_ocr_prompt.py output/the_travelers_guide_e088efa0/ \
+python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
     --selection output/the_travelers_guide_e088efa0/selection.txt
 
 # OCR prompt only:
-python pipeline/generate_ocr_prompt.py output/the_travelers_guide_e088efa0/ \
+python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
     --selection output/the_travelers_guide_e088efa0/selection.txt --ocr-only
 
 # Use explicit page filenames instead of a selection file:
-python pipeline/generate_ocr_prompt.py output/the_travelers_guide_e088efa0/ \
+python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
     --pages 0005_58019060.jpg 0012_58019067.jpg 0023_58019078.jpg 0041_58019096.jpg
 ```
 
@@ -507,7 +507,7 @@ directory-pipeline/
 │   ├── detect_spreads.py             # Spread detection
 │   ├── split_spreads.py              # Spread splitting
 │   ├── select_sample_pages.py        # Interactive browser UI for picking sample pages
-│   ├── generate_ocr_prompt.py        # Gemini-generated volume-specific OCR + NER prompts
+│   ├── generate_prompt.py        # Gemini-generated volume-specific OCR + NER prompts
 │   ├── surya_detect.py               # Surya neural column detection (preferred)
 │   ├── detect_columns.py             # Pixel-projection column detection (legacy)
 │   ├── run_surya_ocr.py              # Surya OCR — line-level bboxes (preferred)
@@ -629,7 +629,7 @@ extraction — about **$0.002–$0.003 per page** combined using `gemini-2.0-fla
 Dense pages that exceed the output token limit automatically retry with
 `gemini-2.5-flash`, but this affects fewer than 5% of pages in practice.
 
-`--generate-prompts` (`generate_ocr_prompt.py`) makes 2 Gemini calls (one for the
+`--generate-prompts` (`generate_prompt.py`) makes 2 Gemini calls (one for the
 OCR prompt, one for the NER prompt) with 4–8 sample images each. This is a one-time
 per-volume cost of roughly **$0.01–$0.05 total**, negligible compared to the full
 run. `gemini-2.5-flash-preview` is used by default for prompt generation because
@@ -771,11 +771,11 @@ Or run the prompt generation standalone:
 
 ```bash
 # Standalone — with explicit selection file
-python pipeline/generate_ocr_prompt.py output/the_travelers_guide_e088efa0/ \
+python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
     --selection output/the_travelers_guide_e088efa0/selection.txt
 
 # OCR prompt only, using explicit page filenames instead of selection.txt
-python pipeline/generate_ocr_prompt.py output/the_travelers_guide_e088efa0/ \
+python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
     --pages 0005_58019060.jpg 0012_58019067.jpg 0023_58019078.jpg 0041_58019096.jpg \
     --ocr-only
 ```
