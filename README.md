@@ -415,7 +415,7 @@ the CSV's parent directory for manifests.
 that opens a IIIF viewer directly at the correct page and zooms to the entry region.
 The link encodes a [IIIF Content State 1.0](https://iiif.io/api/content-state/1.0/)
 annotation as a Base64url `?iiif-content=` URL parameter. Any IIIF viewer that
-supports Content State (including the self-hosted Mirador viewer at
+supports Content State (including the demo self-hosted Mirador viewer at
 `hadro.github.io/green-book-iiif-test`) will navigate directly to the right canvas
 and scroll the entry into view.
 

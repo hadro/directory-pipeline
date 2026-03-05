@@ -32,7 +32,7 @@ command line:
   --map             pipeline/map_entries.py            (generate interactive HTML map)
 
   --select-pages        pipeline/select_sample_pages.py  (interactive browser UI for picking sample pages; opens HTML in browser)
-  --generate-prompts    pipeline/generate_ocr_prompt.py  (Gemini generates volume-specific OCR + NER prompts from sample pages)
+  --generate-prompts    pipeline/generate_prompt.py  (Gemini generates volume-specific OCR + NER prompts from sample pages)
 
   --full-run            shorthand for --download --surya-ocr --gemini-ocr --align-ocr
                           --review-alignment --extract-entries --geocode --map
@@ -104,7 +104,7 @@ PIPELINE: list[tuple[str, str, str]] = [
     ("detect_spreads",  "pipeline/detect_spreads.py",          "--detect-spreads"),
     ("split_spreads",   "pipeline/split_spreads.py",           "--split-spreads"),
     ("select_pages",    "pipeline/select_sample_pages.py",     "--select-pages"),
-    ("generate_prompts","pipeline/generate_ocr_prompt.py",     "--generate-prompts"),
+    ("generate_prompts","pipeline/generate_prompt.py",     "--generate-prompts"),
     ("surya_detect",    "pipeline/surya_detect.py",            "--surya-detect"),
     ("detect_columns",  "pipeline/detect_columns.py",          "--detect-columns"),
     ("tesseract",       "old/run_ocr.py",                      "--tesseract"),

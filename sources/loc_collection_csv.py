@@ -281,7 +281,7 @@ def process_single_item(
     writer.writerow(_make_row(item_id, title, microform))
     if verbose:
         label = title[:60] if title else item_id
-        print(f"    {item_id}: {label} ({total} image(s))", file=sys.stderr)
+        print(f"    {item_id}: {label}", file=sys.stderr)
     return 1
 
 

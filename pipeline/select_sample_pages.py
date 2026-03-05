@@ -30,16 +30,37 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 _EXCLUDE = re.compile(
-    r"_(?:viz|surya|gemini|tesseract|chandra|left|right|aligned|entries|annotations)"
+    r"_(?:viz|surya|gemini|tesseract|chandra|aligned|entries|annotations)"
 )
+_SPLIT = re.compile(r"_(left|right)$", re.IGNORECASE)
 
 
 def _source_images(item_dir: Path) -> list[Path]:
-    """Return sorted source JPGs, excluding derivative outputs."""
-    return sorted(
-        p for p in item_dir.glob("*.jpg")
-        if not _EXCLUDE.search(p.stem)
+    """Return sorted source JPGs.
+
+    When split pages (*_left.jpg / *_right.jpg) exist for a spread, those are
+    returned in place of the original double-page spread file.
+    """
+    all_jpgs = set(item_dir.glob("*.jpg"))
+
+    # Partition into base images and split pages.
+    base_jpgs = sorted(
+        p for p in all_jpgs
+        if not _EXCLUDE.search(p.stem) and not _SPLIT.search(p.stem)
     )
+    split_jpgs = {p for p in all_jpgs if _SPLIT.search(p.stem)}
+
+    result: list[Path] = []
+    for base in base_jpgs:
+        left = item_dir / f"{base.stem}_left.jpg"
+        right = item_dir / f"{base.stem}_right.jpg"
+        splits = [p for p in (left, right) if p in split_jpgs]
+        if splits:
+            result.extend(splits)
+        else:
+            result.append(base)
+
+    return result
 
 
 def _find_item_dirs(root: Path) -> list[Path]:

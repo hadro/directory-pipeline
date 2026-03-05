@@ -24,6 +24,11 @@ Usage
     python extract_entries.py output/greenbooks/feb978b0 --mode multimodal
     python extract_entries.py output/greenbooks/ --force
     python extract_entries.py output/greenbooks/feb978b0 --dry-run
+    python pipeline/extract_entries.py output/woods_directory_73644404 \
+  --model gemini-2.5-flash-preview-04-17 \
+  --aligned-model gemini-2.0-flash \
+  --force
+
 """
 
 import argparse

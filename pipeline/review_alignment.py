@@ -843,7 +843,7 @@ def main() -> None:
     _load_surya()
     print("Models ready.", flush=True)
     print(f"Alignment review server — http://{args.host}:{args.port}", flush=True)
-    app.run(host=args.host, port=args.port, debug=False)
+    app.run(host=args.host, port=args.port, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":
