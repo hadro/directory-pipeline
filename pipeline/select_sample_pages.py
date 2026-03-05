@@ -375,7 +375,9 @@ def generate_html(item_dir: Path, images: list[Path]) -> Path:
     """Write select_pages.html into item_dir and return its path."""
     # Image filenames relative to item_dir (they're siblings of the HTML file)
     import json
-    fnames = [p.name for p in images]
+    # Encode bare % as %25 so browsers don't mis-decode percent-encoded characters
+    # that appear literally in filenames (e.g. %2F from IA download paths).
+    fnames = [p.name.replace("%", "%25") for p in images]
     volume = item_dir.parent.name + "/" + item_dir.name
 
     html = _HTML_TEMPLATE.format(
