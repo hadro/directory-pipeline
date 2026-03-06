@@ -100,48 +100,57 @@ no preamble, no section headers of your own, no explanation outside the prompt t
 """
 
 _NER_META_PROMPT = """\
-You are calibrating a named entity recognition pipeline for a digitized historical print directory.
+You are calibrating a named entity recognition pipeline for a digitized historical document.
 
 I am sharing {n} sample page images from this collection. Study them carefully — \
-pay attention to the heading hierarchy, entry format, category types present, address \
-conventions, continuation markers, and any unusual structural features.
+pay attention to the heading hierarchy, entry format, recurring patterns, continuation \
+markers, and any unusual structural features.
 
 Then write a tailored NER system prompt that will help a language model extract \
 structured entries from the transcribed text of pages from this volume.
 
-The pipeline gives the NER model the OCR transcription of one page at a time, along \
-with the last known state/city/category context carried forward from the prior page. \
-The model returns a JSON object with one entry per business or listing.
+The pipeline works as follows: the NER model receives the OCR transcription of one \
+page at a time, along with context carried forward from the prior page (the last active \
+heading values). The model returns a JSON object. **The only fixed structural \
+requirement is this JSON envelope:**
 
-Here is the existing NER prompt template used for the Negro Motorist Green Book. \
-Use it as your structural guide — preserve the JSON schema and output format exactly, \
-but adapt all descriptions, examples, category lists, and rules to match what you \
-observe in the sample pages:
+{{
+  "page_context": {{ ... }},
+  "entries": [ ... ]
+}}
 
---- BEGIN TEMPLATE ---
+Write a prompt that specifies:
+
+1. **Document identity** — what this document is and what kind of records it contains \
+   (one to two sentences).
+
+2. **Heading hierarchy and context** — the nesting of headings and what each level \
+   represents. Define the `page_context` fields: the heading values that must be \
+   tracked and carried between pages. Use field names that match the actual content \
+   (e.g. `state`/`city`/`category` for a place directory; `insect_type`/`chapter` \
+   for a natural history volume; whatever fits this document).
+
+3. **Entry schema** — the specific fields each entry should contain, named to match \
+   the actual content. Choose field names that are clear and meaningful for this \
+   document type. Do not force a schema from a different document type onto this one.
+
+4. **Extraction rules** — 4–6 rules specific to this volume: what counts as an entry, \
+   what to skip (page numbers, headings, decorative elements), how continuation \
+   markers work, whether entries can span pages, etc.
+
+5. **Output format** — instruct the model to return only valid JSON with no markdown \
+   code fences and no explanatory text.
+
+Here is a reference prompt from a different collection type. Use it as a structural \
+example only — do not copy its field names, category lists, or document-specific \
+content. Adapt everything to match what you observe in the sample pages:
+
+--- BEGIN REFERENCE ---
 {ner_template}
---- END TEMPLATE ---
-
-Adaptation guidelines:
-- If this publication does not have a state-level heading hierarchy, remove STATE \
-  from the context tracking and entry schema description accordingly.
-- Update the category mapping to reflect the heading types actually present in \
-  this volume. Map each to the closest canonical value from this fixed set \
-  (required for downstream compatibility): \
-  formal_accommodations, informal_accommodations, eating_drinking, \
-  barber_beauty, service_station, other.
-- If entries span multiple lines or have a format different from a simple \
-  "Name, Address" one-liner, describe that format clearly.
-- Replace all Green Book–specific examples with terminology and formatting \
-  drawn from this specific volume.
-- Preserve the JSON field names exactly (establishment_name, raw_address, \
-  address_type, city, state, category, is_advertisement, phone, notes) \
-  for compatibility with downstream scripts.
-- Update the continuation marker description if this volume uses different \
-  conventions (e.g. "—cont." instead of "Contd.").
+--- END REFERENCE ---
 
 Write the prompt in the second person ("You are a structured data extractor…"). \
-Output only the adapted prompt — no preamble, no explanation, no section headers \
+Output only the tailored prompt — no preamble, no explanation, no section headers \
 of your own.
 """
 

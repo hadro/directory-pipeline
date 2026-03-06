@@ -19,9 +19,15 @@ Usage
 """
 
 import argparse
+import functools
+import http.server
+import json
 import re
+import socketserver
 import subprocess
 import sys
+import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -73,6 +79,37 @@ def _find_item_dirs(root: Path) -> list[Path]:
     candidates = sorted(p for p in root.iterdir() if p.is_dir())
     found = [d for d in candidates if _source_images(d)]
     return found
+
+
+# ---------------------------------------------------------------------------
+# Local HTTP server for direct save
+# ---------------------------------------------------------------------------
+
+class _SaveHandler(http.server.SimpleHTTPRequestHandler):
+    """Serve images from item_dir and accept POST /save to write selection.txt."""
+    save_path: Path  # set as a class variable before the server starts
+
+    def do_POST(self):
+        if self.path == "/save":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length))
+                text = body.get("selection", "")
+                out = type(self).save_path
+                out.write_text(text, encoding="utf-8")
+                payload = json.dumps({"path": str(out)}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(payload)
+                print(f"\n  Saved selection.txt → {out}", file=sys.stderr)
+            except Exception as exc:
+                self.send_error(500, str(exc))
+        else:
+            self.send_error(404)
+
+    def log_message(self, *_):
+        pass  # suppress per-request logging
 
 
 # ---------------------------------------------------------------------------
@@ -251,11 +288,12 @@ _HTML_TEMPLATE = """\
 <footer>
   <span id="selection-list">No pages selected.</span>
   <button class="btn btn-secondary" onclick="copyToClipboard()" id="copy-btn" disabled>Copy filenames</button>
-  <button class="btn btn-primary"   onclick="downloadSelection()" id="dl-btn" disabled>Download selection.txt</button>
+  <button class="btn btn-primary"   onclick="saveSelection()" id="dl-btn" disabled>{save_button_label}</button>
 </footer>
 
 <script>
   const IMAGES = {images_json};
+  const SAVE_URL = {save_url_json};
   const MIN_SEL = 4;
   const MAX_SEL = 10;
 
@@ -363,7 +401,24 @@ _HTML_TEMPLATE = """\
     return [...selected].join("\\n") + "\\n";
   }}
 
-  function downloadSelection() {{
+  async function saveSelection() {{
+    if (SAVE_URL) {{
+      try {{
+        const r = await fetch(SAVE_URL, {{
+          method: "POST",
+          headers: {{"Content-Type": "application/json"}},
+          body: JSON.stringify({{selection: getSelectionText()}})
+        }});
+        const d = await r.json();
+        const btn = document.getElementById("dl-btn");
+        btn.textContent = "Saved \u2713";
+        btn.style.background = "#15803d";
+        return;
+      }} catch(e) {{
+        console.warn("Save to folder failed, falling back to download", e);
+      }}
+    }}
+    // fallback: browser download
     const blob = new Blob([getSelectionText()], {{type: "text/plain"}});
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -391,16 +446,17 @@ _HTML_TEMPLATE = """\
 # Main
 # ---------------------------------------------------------------------------
 
-def generate_html(item_dir: Path, images: list[Path]) -> Path:
+def generate_html(item_dir: Path, images: list[Path], save_url: str | None = None) -> Path:
     """Write select_pages.html into item_dir and return its path."""
-    # Image filenames relative to item_dir (they're siblings of the HTML file)
-    import json
     fnames = [p.name for p in images]
     volume = item_dir.parent.name + "/" + item_dir.name
+    save_button_label = "Save to output folder" if save_url else "Download selection.txt"
 
     html = _HTML_TEMPLATE.format(
         volume=volume,
         images_json=json.dumps(fnames),
+        save_url_json=json.dumps(save_url),
+        save_button_label=save_button_label,
     )
     out_path = item_dir / "select_pages.html"
     out_path.write_text(html, encoding="utf-8")
@@ -436,18 +492,35 @@ def main() -> None:
 
     for item_dir in item_dirs:
         images = _source_images(item_dir)
-        out_path = generate_html(item_dir, images)
-        print(f"Generated: {out_path}  ({len(images)} pages)", file=sys.stderr)
-        if not args.no_open:
-            webbrowser.open(out_path.as_uri())
 
-    print(
-        "\nSelect 4–10 pages and click 'Download selection.txt'.\n"
-        "Then run:\n"
-        "  python pipeline/generate_prompt.py <output_dir> "
-        "--selection path/to/selection.txt",
-        file=sys.stderr,
-    )
+        if args.no_open:
+            # No server — generate static file:// HTML with download fallback
+            out_path = generate_html(item_dir, images, save_url=None)
+            print(f"Generated: {out_path}  ({len(images)} pages)", file=sys.stderr)
+        else:
+            # Start a local HTTP server so the Save button writes directly to item_dir
+            _SaveHandler.save_path = item_dir / "selection.txt"
+            handler = functools.partial(_SaveHandler, directory=str(item_dir))
+            with socketserver.TCPServer(("127.0.0.1", 0), handler) as server:
+                server.allow_reuse_address = True
+                port = server.server_address[1]
+                save_url = f"http://127.0.0.1:{port}/save"
+
+                out_path = generate_html(item_dir, images, save_url=save_url)
+                url = f"http://127.0.0.1:{port}/select_pages.html"
+                print(f"Serving: {url}  ({len(images)} pages)", file=sys.stderr)
+                print("Press Ctrl+C when done selecting.", file=sys.stderr)
+
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                webbrowser.open(url)
+
+                try:
+                    while True:
+                        time.sleep(1)
+                except KeyboardInterrupt:
+                    server.shutdown()
+                    print("", file=sys.stderr)
 
 
 if __name__ == "__main__":

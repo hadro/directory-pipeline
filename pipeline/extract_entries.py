@@ -68,13 +68,13 @@ def _find_ner_prompt(output_root: Path) -> Path:
             return p
     return NER_PROMPT_FILE
 
-ENTRY_FIELDS = [
-    "image", "page",
-    "establishment_name", "raw_address", "address_type",
-    "city", "state", "category",
-    "is_advertisement", "phone", "notes",
-    "line_text", "canvas_fragment",
-]
+def _infer_fields(entries: list[dict]) -> list[str]:
+    """Return column order inferred from the union of all entry keys."""
+    seen: dict[str, None] = {}
+    for e in entries:
+        for k in e:
+            seen[k] = None
+    return list(seen)
 
 _print_lock = threading.Lock()
 
@@ -251,14 +251,10 @@ def _page_text_from_aligned(aligned: dict) -> str:
 
 
 def _build_user_message(page_text: str, prior_context: dict) -> str:
-    state = prior_context.get("state") or "unknown"
-    city = prior_context.get("city") or "unknown"
-    category = prior_context.get("category") or "unknown"
+    ctx_lines = "\n".join(f"{k}: {v}" for k, v in prior_context.items()) or "(none)"
     return (
         f"## Prior page context\n"
-        f"State: {state}\n"
-        f"City: {city}\n"
-        f"Category: {category}\n\n"
+        f"{ctx_lines}\n\n"
         f"## Page text\n"
         f"{page_text}\n\n"
         f"Return the JSON extraction."
@@ -431,11 +427,16 @@ def process_page(
     new_context = result.get("page_context") or prior_context
 
     # Link canvas fragments from the aligned JSON.
-    # Use line_text if present (legacy), otherwise match on establishment_name.
+    # Try known text fields first, then fall back to the first non-trivial string value.
     aligned_lines = aligned.get("lines", [])
     canvas_uri = aligned.get("canvas_uri", "")
     for entry in entries:
         lt = entry.get("line_text", "") or entry.get("establishment_name", "")
+        if not lt:
+            for v in entry.values():
+                if isinstance(v, str) and len(v) > 3:
+                    lt = v
+                    break
         cf = _find_fragment(lt, aligned_lines)
         entry["canvas_fragment"] = cf or canvas_uri  # fall back to full canvas
         entry["image"] = aligned.get("image", "")
@@ -487,7 +488,7 @@ def process_item(
         return []
 
     all_entries: list[dict] = []
-    context: dict = {"state": "", "city": "", "category": ""}
+    context: dict = {}
 
     # Resume: load persisted context from a previous run
     context_file = item_dir / f"extraction_context_{slug}.json"
@@ -520,7 +521,7 @@ def process_item(
         ctx = result.get("page_context", context)
 
         if not quiet:
-            ctx_str = f"{ctx.get('state','?')} > {ctx.get('city','?')} > {ctx.get('category','?')}"
+            ctx_str = " > ".join(str(v) for v in ctx.values()) if ctx else "?"
             _log(f"  [{i:03d}/{len(aligned_files)}] {aligned_path.name}  {status}  {n} entries  [{ctx_str}]")
 
         context = ctx
@@ -538,12 +539,16 @@ def process_item(
 # ---------------------------------------------------------------------------
 
 def write_csv(entries: list[dict], out_path: Path) -> None:
-    """Write a flat CSV of all entries."""
+    """Write a flat CSV, inferring column order from the entries themselves."""
+    fields = _infer_fields(entries)
+    if not fields:
+        out_path.write_text("", encoding="utf-8")
+        return
     with open(out_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=ENTRY_FIELDS, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for e in entries:
-            writer.writerow({k: e.get(k, "") for k in ENTRY_FIELDS})
+            writer.writerow({k: e.get(k, "") for k in fields})
 
 
 # ---------------------------------------------------------------------------

@@ -1,10 +1,19 @@
 # directory-pipeline
 
 A pipeline for ingesting, OCR-ing, aligning, and extracting structured data from
-digitized print directories and similar historical collections. Works with items from
-the [Library of Congress](https://www.loc.gov/collections/), [Internet Archive](https://archive.org/), and [NYPL Digital Collections](https://digitalcollections.nypl.org/). The primary test collection is the
-*Negro Motorist Green Book* (1936–1966), though the pipeline accepts any IIIF
-Presentation v2 or v3 manifest.
+digitized historical print documents — city directories, travel guides, natural history
+volumes, and other periodically-structured publications. Works with items from
+the [Library of Congress](https://www.loc.gov/collections/), [Internet Archive](https://archive.org/), and [NYPL Digital Collections](https://digitalcollections.nypl.org/),
+and accepts any IIIF Presentation v2 or v3 manifest URL.
+
+The pipeline is collection-agnostic: a short prompt-calibration step (select
+sample pages → generate prompts) teaches both the OCR and NER models the
+conventions of a specific volume, producing volume-specific prompts that are
+auto-discovered by all downstream stages. The *Negro Motorist Green Book*
+(1936–1966) is the primary development collection. Geographic stages
+(`--geocode`, `--map`, `--export-entry-boxes`) are designed for directory-style
+collections with address data; they degrade gracefully but are less useful for
+other document types.
 
 ## What it does
 
@@ -25,7 +34,7 @@ combination of the following stages:
 11. **Align** Gemini text to Surya (or Tesseract) bounding boxes using anchored Needleman-Wunsch
 12. **Visualize** alignment quality by drawing color-coded boxes on images
 13. **Review and correct alignment** interactively — draw bounding boxes over unmatched regions, re-run Surya OCR on crops, and save accepted matches back to the aligned JSON
-14. **Extract structured entries** (name, address, city, state, category) via Gemini NER
+14. **Extract structured entries** via Gemini NER — fields are defined by the volume-specific NER prompt and inferred dynamically from the model's output
 15. **Geocode entries** to lat/lon using Google Maps (address-level) or Nominatim (city-level)
 16. **Generate an interactive map** from geocoded entries
 
@@ -62,10 +71,12 @@ command line. All stages are optional — run only what you need.
 --visualize           analysis/visualize_alignment.py     → *_{model}_viz.jpg
 --review-alignment    pipeline/review_alignment.py        → updated *_{model}_aligned.json    (interactive)
 --extract-entries     pipeline/extract_entries.py         → entries_{model}.csv, *_{model}_entries.json
---geocode             pipeline/geocode_entries.py         → entries_{model}_geocoded.csv
---map                 pipeline/map_entries.py             → entries_{model}.html
-(standalone)          pipeline/export_annotations.py     → *_{model}_annotations.json, *_{model}_entry_annotations.json
-(standalone)          pipeline/export_entry_boxes.py     → *_{model}_box_annotations.json
+--geocode             pipeline/geo/geocode_entries.py         → entries_{model}_geocoded.csv
+--map                 pipeline/geo/map_entries.py             → entries_{model}.html
+(standalone)          pipeline/iiif/export_annotations.py     → *_{model}_annotations.json, *_{model}_entry_annotations.json
+(standalone)          pipeline/iiif/export_entry_boxes.py     → *_{model}_box_annotations.json
+(standalone)          pipeline/iiif/build_ranges.py           → ranges_{model}.json               (directory collections)
+(standalone)          scripts/make-git-repo.sh                   → GitHub Pages deployable folder    (viewer + map + annotations)
 ```
 
 There is also a `--full-run` shorthand that expands to
@@ -152,14 +163,19 @@ gutter column into `{stem}_left.jpg` and `{stem}_right.jpg`. Also writes a
 `{stem}_split.json` sidecar with the pixel offsets. Original images are untouched.
 
 #### `pipeline/select_sample_pages.py` — Sample page selector (interactive)
-Generates a self-contained `select_pages.html` browser UI for visually picking 4–10
-representative pages from a volume to use as prompt-calibration samples. Opens the
-page in the default browser automatically (pass `--no-open` to suppress).
+Generates a browser UI for visually picking 4–10 representative pages from a
+volume to use as prompt-calibration samples. Opens the page in the default browser
+automatically (pass `--no-open` to suppress).
 
 In the browser: click thumbnails to select or deselect pages; the header shows the
-current count (green when 4–10 are chosen). Click **Download selection.txt** to save
-a plain-text list of selected filenames. Place the downloaded `selection.txt` in
-`output/{slug}/` before running `--generate-prompts`.
+current count (green when 4–10 are chosen). A thumbnail size slider lets you scale
+thumbnails for small-text volumes.
+
+**Saving the selection:** when run normally (server mode), the script starts a local
+HTTP server and the **Save to output folder** button writes `selection.txt` directly
+into `output/{slug}/` — no manual file moving required. Press Ctrl+C in the terminal
+when done. When run with `--no-open` (headless/Colab), the page is generated as a
+static file with a **Download selection.txt** browser-download button instead.
 
 ```bash
 python pipeline/select_sample_pages.py output/the_travelers_guide_e088efa0/
@@ -178,6 +194,17 @@ when they exist in the slug directory — no explicit `--prompt-file` flag neede
 Falls back to the global `prompts/ocr_prompt.md` / `prompts/ner_prompt.md` if no
 volume-specific prompt is found.
 
+The NER meta-prompt instructs Gemini to define `page_context` fields and entry fields
+appropriate to the document it sees — it does not prescribe Green Book field names.
+The only fixed requirement is the JSON response envelope:
+`{"page_context": {...}, "entries": [...]}`. `extract_entries.py` infers CSV column
+names dynamically from whatever fields the model returns, so **no code changes are
+needed for new collection types**.
+
+Pass `--ner-template` to specify a reference prompt shown to Gemini as a structural
+example (defaults to `prompts/ner_prompt.md`; use `prompts/ner_prompt_greenbook.md`
+for a richer directory-style example).
+
 Requires a `selection.txt` file (from `--select-pages`). Pass `--ocr-only` or
 `--ner-only` to generate a single prompt. Prints both prompts to stdout for
 immediate review in addition to saving them.
@@ -186,6 +213,11 @@ immediate review in addition to saving them.
 # Generate both prompts (typical workflow):
 python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
     --selection output/the_travelers_guide_e088efa0/selection.txt
+
+# Use the Green Book prompt as a structural reference:
+python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
+    --selection output/the_travelers_guide_e088efa0/selection.txt \
+    --ner-template prompts/ner_prompt_greenbook.md
 
 # OCR prompt only:
 python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
@@ -342,6 +374,10 @@ to work through problematic pages before proceeding to `--extract-entries`.
 7. Click *Save accepted*. Matched pairs are written back to `*_aligned.json`
    with `"confidence": "manual"` and the page's unmatched count updates immediately.
 
+**Keyboard navigation:** press ↑/↓ arrow keys to move between pages in the sidebar
+(when focus is not in the search field). The selected page scrolls into view
+automatically.
+
 Surya models are pre-loaded at server startup (~30 s) so all subsequent
 annotation requests are fast.
 
@@ -354,28 +390,28 @@ python main.py collections.txt --review-alignment --model gemini-2.0-flash
 ```
 
 #### `pipeline/extract_entries.py` — Entry extraction
-Reads each `*_aligned.json` file and calls Gemini with a NER prompt
-(`prompts/ner_prompt.md`) to identify structured directory entries. Each entry is
-extracted with the following fields when present:
+Reads each `*_aligned.json` file and calls Gemini with the volume-specific NER
+prompt (auto-discovered from `output/{slug}/ner_prompt.md`, falling back to
+`prompts/ner_prompt.md`) to identify structured entries.
 
-| Field | Description |
-|---|---|
-| `establishment_name` | Business or individual name |
-| `raw_address` | Street address as it appears in the source |
-| `city` | City |
-| `state` | State (full name or abbreviation) |
-| `category` | Type of establishment (e.g. Hotels, Restaurants, Beauty Parlors) |
-| `canvas_fragment` | IIIF `#xywh=` fragment pointing to the source line on the canvas |
+**Schema-agnostic:** entry fields are defined entirely by the NER prompt and inferred
+dynamically from the model's output. The aggregate `entries_{model}.csv` columns
+reflect exactly what the prompt asks for. Context is carried between pages using
+whatever `page_context` fields the prompt defines. No code changes are needed for
+a new collection type — only a new NER prompt.
 
-Outputs a per-page `*_entries.json` sidecar and an aggregate `entries_{model}.csv`
-for the entire collection.
+For Green Book collections the typical fields are `establishment_name`, `raw_address`,
+`city`, `state`, `category`, and `canvas_fragment`. For natural history volumes or
+other document types the fields will match that volume's NER prompt.
+
+Outputs a per-page `*_entries.json` sidecar and an aggregate `entries_{model}.csv`.
 
 By default uses `gemini-2.0-flash` (fast and cheap). Dense pages that exceed the
 model's output token limit automatically fall back to `gemini-2.5-flash` (higher
 output limit), and then to partial JSON recovery if needed. Previously failed pages
 (where a `*_entries_error.txt` sidecar exists) are auto-retried without `--force`.
 
-#### `pipeline/geocode_entries.py` — Geocoding
+#### `pipeline/geo/geocode_entries.py` — Geocoding
 Reads an `entries_{model}.csv` (or an images directory containing one) and resolves
 each entry to geographic coordinates:
 
@@ -389,11 +425,11 @@ the network for new queries. Writes `entries_{model}_geocoded.csv` with added
 `lat`, `lon`, and `geocode_level` (`"address"` | `"city"` | `""`) columns.
 
 ```bash
-GOOGLE_MAPS_API_KEY=... python pipeline/geocode_entries.py \
+GOOGLE_MAPS_API_KEY=... python pipeline/geo/geocode_entries.py \
     output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
 ```
 
-#### `pipeline/map_entries.py` — Interactive map
+#### `pipeline/geo/map_entries.py` — Interactive map
 Reads a `entries_{model}_geocoded.csv` and generates a self-contained Leaflet HTML
 map (`entries_{model}.html`) with:
 - Clustered markers (MarkerCluster) color-coded by establishment category
@@ -423,15 +459,15 @@ Pass `--manifest-url` to specify the manifest explicitly; if omitted the script
 derives it as `{viewer-url}/manifest.json`.
 
 ```bash
-python pipeline/map_entries.py output/green_book_1940_feb978b0/ --model gemini-2.0-flash
-python pipeline/map_entries.py path/to/entries.csv --output-dir output/
-python pipeline/map_entries.py output/green_book_1947_xxx/ \
+python pipeline/geo/map_entries.py output/green_book_1940_feb978b0/ --model gemini-2.0-flash
+python pipeline/geo/map_entries.py path/to/entries.csv --output-dir output/
+python pipeline/geo/map_entries.py output/green_book_1947_xxx/ \
     --model gemini-2.0-flash \
     --viewer-url https://hadro.github.io/green-book-iiif-test \
     --manifest-url https://hadro.github.io/green-book-iiif-test/manifest.json
 ```
 
-#### `pipeline/export_annotations.py` — IIIF Annotation Pages export
+#### `pipeline/iiif/export_annotations.py` — IIIF Annotation Pages export
 Converts `*_{model}_aligned.json` files to W3C Annotation Pages (JSON-LD), the
 standard format for overlaying transcription text on IIIF images in viewers like
 Mirador, Universal Viewer, and Clover.
@@ -449,14 +485,14 @@ self-contained local files). Add `--base-url` to embed persistent URIs so viewer
 can reload annotations from a known endpoint.
 
 ```bash
-python pipeline/export_annotations.py output/green_book_1940_feb978b0/uuid/
-python pipeline/export_annotations.py output/green_book_1940_feb978b0/uuid/ \
+python pipeline/iiif/export_annotations.py output/green_book_1940_feb978b0/uuid/
+python pipeline/iiif/export_annotations.py output/green_book_1940_feb978b0/uuid/ \
     --base-url https://example.org/annotations --model gemini-2.0-flash
-python pipeline/export_annotations.py output/green_book_1940_feb978b0/uuid/ \
+python pipeline/iiif/export_annotations.py output/green_book_1940_feb978b0/uuid/ \
     --no-entries   # line-level transcription only
 ```
 
-#### `pipeline/export_entry_boxes.py` — IIIF colored bounding boxes
+#### `pipeline/iiif/export_entry_boxes.py` — IIIF colored bounding boxes
 Reads `*_{model}_entries.json` files and produces `*_{model}_box_annotations.json`
 — W3C Annotation Pages with colored rectangular overlays, one annotation per
 entry. Color coding matches `analysis/visualize_entries.py`:
@@ -486,13 +522,53 @@ With `--update-manifest`, the script also:
    Requires `--base-url`. Original manifest is backed up as `manifest_bak.json`.
 
 ```bash
-python pipeline/export_entry_boxes.py output/green_book_1947_xxx/uuid/
-python pipeline/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \
+python pipeline/iiif/export_entry_boxes.py output/green_book_1947_xxx/uuid/
+python pipeline/iiif/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \
     --model gemini-2.0-flash
-python pipeline/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \
+python pipeline/iiif/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \
     --base-url https://hadro.github.io/green-book-iiif-test/annotations \
     --update-manifest
 ```
+
+#### `pipeline/iiif/build_ranges.py` — IIIF table of contents (directory collections)
+Builds a IIIF Presentation API v3 `structures` array (Range hierarchy) from a
+geocoded entries CSV, grouping entries by State → City → Category. Each range
+node points to the first canvas where that group appears in document order.
+
+Designed for directory-style collections with `state`, `city`, and `category`
+fields. Outputs a standalone `ranges_{model}.json` that can be loaded by IIIF
+viewers, or merged directly into `manifest.json` with `--update-manifest`.
+
+```bash
+python pipeline/iiif/build_ranges.py output/green_book_1947_4bea2040/uuid/
+python pipeline/iiif/build_ranges.py output/green_book_1947_4bea2040/uuid/ \
+    --model gemini-2.0-flash --depth 2 --update-manifest \
+    --base-url https://hadro.github.io/green-book-iiif-test
+```
+
+#### `scripts/make-git-repo.sh` — GitHub Pages deployable folder
+Assembles all pipeline outputs for a single item into a self-contained folder
+suitable for GitHub Pages deployment with a self-hosted IIIF viewer.
+
+```bash
+./scripts/make-git-repo.sh <ITEM_DIR> <DEST_DIR> <GITHUB_PAGES_URL>
+# e.g.:
+./scripts/make-git-repo.sh output/green_book_1947_xxx/uuid/ \
+    ~/github/green-book-1947 \
+    https://hadro.github.io/green-book-1947
+```
+
+The script:
+- Copies and patches `manifest.json` — sets the `id` to the GitHub Pages URL
+  (required: IIIF spec requires `id` to match the served URL; mismatching causes
+  Mirador to re-fetch from the source institution and hit 403 errors)
+- Fixes LoC manifests that declare `ImageService3` for tiles that actually serve
+  IIIF Image API 2 (Mirador's ThumbnailFactory crashes on the mismatch)
+- Adds sequential labels to canvases that lack them (prevents "NaN" in thumbnail strip)
+- Copies annotation and ranges JSON files
+- Patches `map.html` title/heading from the geocoded map
+- Generates `index.html` — a Mirador 3 viewer with IIIF Content State deep-link
+  support (`?iiif-content=BASE64URL` parameter)
 
 ---
 
@@ -515,10 +591,13 @@ directory-pipeline/
 │   ├── align_ocr.py                  # NW alignment (Surya preferred, Tesseract fallback)
 │   ├── review_alignment.py           # Interactive alignment review UI (Flask)
 │   ├── extract_entries.py            # Structured entry extraction (NER)
-│   ├── geocode_entries.py            # Entry geocoding
-│   ├── map_entries.py                # Interactive map generation (IIIF popup thumbnails + Content State links)
-│   ├── export_annotations.py         # IIIF Annotation Pages export (W3C Web Annotation)
-│   └── export_entry_boxes.py         # IIIF colored entry bounding boxes (standalone)
+│   ├── geo/
+│   │   ├── geocode_entries.py        # Entry geocoding
+│   │   └── map_entries.py            # Interactive map generation (IIIF popup thumbnails + Content State links)
+│   └── iiif/
+│       ├── export_annotations.py     # IIIF Annotation Pages export (W3C Web Annotation)
+│       ├── export_entry_boxes.py     # IIIF colored entry bounding boxes (standalone)
+│       └── build_ranges.py           # IIIF table of contents from geocoded entries (standalone)
 │
 ├── sources/                          # Collection metadata exporters
 │   ├── loc_collection_csv.py         # Library of Congress
@@ -540,9 +619,14 @@ directory-pipeline/
 │   └── iiif_utils.py                 # IIIF v2/v3 manifest parsing
 │
 ├── prompts/                          # Gemini system prompts
-│   ├── ocr_prompt.md                 # OCR transcription prompt
-│   └── ner_prompt.md                 # NER / entry extraction prompt
+│   ├── ocr_prompt.md                 # Generic OCR transcription prompt (global fallback)
+│   ├── ner_prompt.md                 # Generic NER extraction prompt (global fallback)
+│   ├── ocr_prompt_greenbook.md       # Green Book–specific OCR prompt (reference artifact)
+│   └── ner_prompt_greenbook.md       # Green Book–specific NER prompt (reference artifact)
 │
+├── scripts/
+│   ├── make-git-repo.sh              # Assemble pipeline output into a GitHub Pages folder
+│   └── colab.sh                      # Example commands for Google Colab runs
 ├── pyproject.toml                    # Python project config and dependencies
 ├── collection_csv/                   # Output of --*-csv stages (one CSV per collection)
 └── output/
@@ -748,15 +832,17 @@ python main.py collections.txt --extract-entries --geocode --map \
 
 ### Volume-specific prompt calibration
 
-For a new collection type whose layout or entry format differs significantly from the
-Green Books, generate tailored OCR and NER prompts before running OCR:
+For any new collection type, generate tailored OCR and NER prompts before running OCR.
+The generated NER prompt defines whatever entry fields are appropriate for the
+document — no code changes are needed.
 
 ```bash
 # Step 1: Download images
 python main.py collections.txt --nypl-csv --download
 
 # Step 2: Open the browser UI and pick 4–8 representative sample pages
-#         Click "Download selection.txt" and save it to output/{slug}/selection.txt
+#         Click "Save to output folder" — selection.txt is written automatically.
+#         Press Ctrl+C in the terminal when done.
 python main.py collections.txt --select-pages
 
 # Step 3: Generate volume-specific prompts (Gemini analyzes the selected pages)
@@ -813,10 +899,10 @@ python pipeline/align_ocr.py output/the_negro_motorist_green_book_1940_feb978b0 
 python pipeline/extract_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
     --model gemini-2.0-flash
 
-python pipeline/geocode_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
+python pipeline/geo/geocode_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
     --model gemini-2.0-flash
 
-python pipeline/map_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
+python pipeline/geo/map_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
     --model gemini-2.0-flash
 ```
 
@@ -834,21 +920,21 @@ python analysis/compare_extraction.py \
 
 ```bash
 # Export line-level and entry-level IIIF annotation pages
-python pipeline/export_annotations.py \
+python pipeline/iiif/export_annotations.py \
     output/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
 
 # Export colored entry bounding boxes (standalone — not in --full-run)
-python pipeline/export_entry_boxes.py \
+python pipeline/iiif/export_entry_boxes.py \
     output/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
 
 # Export boxes and update manifest so viewers auto-load them
-python pipeline/export_entry_boxes.py \
+python pipeline/iiif/export_entry_boxes.py \
     output/green_book_1947_xxx/uuid/ \
     --base-url https://hadro.github.io/green-book-iiif-test/annotations \
     --update-manifest
 
 # Generate map with IIIF Content State deep-links (open viewer at correct page/region)
-python pipeline/map_entries.py output/green_book_1947_xxx/ \
+python pipeline/geo/map_entries.py output/green_book_1947_xxx/ \
     --model gemini-2.0-flash \
     --viewer-url https://hadro.github.io/green-book-iiif-test \
     --manifest-url https://hadro.github.io/green-book-iiif-test/manifest.json
@@ -892,6 +978,18 @@ Lines are re-sorted before alignment using two strategies:
 Column breaks are detected in two stages: an x1-gap threshold of 8% of page width
 (stage 1), with a bimodal histogram fallback (stage 2) for pages where a
 page-number outlier in the margin creates a degenerate one-line pseudo-column.
+
+**Schema-agnostic entry extraction.** `extract_entries.py` does not hard-code
+any field names. The NER prompt (volume-specific or global fallback) defines both
+the `page_context` fields (heading values carried between pages) and the per-entry
+schema. `extract_entries.py` forwards whatever context keys the model returns to
+the next page's prompt, and infers CSV column names from the union of all keys
+returned across all pages. Adding support for a new collection type requires only
+a new `ner_prompt.md` in the output slug directory — generated automatically by
+`--generate-prompts` or written by hand. Geographic downstream stages
+(`--geocode`, `--map`, `build_ranges.py`, `export_entry_boxes.py`) expect Green
+Book-style fields (`city`, `state`, `category`, `canvas_fragment`) and degrade
+gracefully when those fields are absent.
 
 **Fallback model for dense pages.** `extract_entries.py` defaults to
 `gemini-2.0-flash` (fast and cheap) but escalates to `gemini-2.5-flash` for pages
@@ -962,3 +1060,7 @@ Provides the key OCR benchmarks on historical US newspapers: off-the-shelf Tesse
 **HuggingFace (2025) — "Supercharge your OCR Pipelines with Open Models"** ([huggingface.co/blog/ocr-open-models](https://huggingface.co/blog/ocr-open-models))
 
 A practitioner survey of the current open-weight VLM-based OCR landscape (Nanonets-OCR2, PaddleOCR-VL, dots.ocr, OlmOCR-2, Granite-Docling, DeepSeek-OCR, Chandra, Qwen3-VL) that introduces "locality awareness" — the ability to produce corrected text paired with bounding boxes — as a first-class capability distinction. Models with grounding support (Chandra, OlmOCR-2, dots.ocr, Granite-Docling) could in principle replace the Tesseract → Needleman-Wunsch alignment pipeline with a single-pass architecture. None has been tested on degraded historical scans; Granite-Docling (258M parameters, CPU-runnable, DocTags structured output) is the most tractable starting point for empirical evaluation on Green Books pages.
+
+**Wolf, Chioh, Balogh & Spaan (2020) — "New York City Directories Extracted Persons Entries, 1850–1890"** ([NYU Faculty Digital Archive, hdl.handle.net/2451/61521](https://archive.nyu.edu/handle/2451/61521))
+
+A dataset of machine-readable entries extracted from NYPL-digitized New York City directories (Doggett's 1850–51; Trow/Wilson 1852–1890), covering names, occupations, and work and home addresses across forty annual editions. Released as 40 NDJSON files under CC-BY-SA-NC 4.0. A direct precedent for applying this pipeline to city directories: the same NYPL collections, the same structured entry types (name, occupation, address), and a concrete existence proof that machine-readable extraction at scale is achievable for this document type.

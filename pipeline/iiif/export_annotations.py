@@ -26,11 +26,11 @@ lets viewers like Mirador reload annotations from a known URL.
 
 Usage
 -----
-    python pipeline/export_annotations.py output/green_book_1940_feb978b0/uuid/
-    python pipeline/export_annotations.py output/green_book_1940_feb978b0/uuid/ \\
+    python pipeline/iiif/export_annotations.py output/green_book_1940_feb978b0/uuid/
+    python pipeline/iiif/export_annotations.py output/green_book_1940_feb978b0/uuid/ \\
         --model gemini-2.0-flash \\
         --base-url https://example.org/annotations
-    python pipeline/export_annotations.py output/green_book_1940_feb978b0/uuid/ \\
+    python pipeline/iiif/export_annotations.py output/green_book_1940_feb978b0/uuid/ \\
         --no-entries
 """
 

@@ -6,12 +6,12 @@ a self-contained HTML file with a Leaflet map and a sidebar for filtering
 by name/address, state, and category.
 
 Run geocode_entries.py first to produce entries_{slug}_geocoded.csv:
-    python geocode_entries.py output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
+    python pipeline/geo/geocode_entries.py output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
 
 Then build the map:
-    python map_entries.py output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
-    python map_entries.py path/to/entries_gemini-2.0-flash_geocoded.csv
-    python map_entries.py path/to/entries.csv --out my_map.html
+    python pipeline/geo/map_entries.py output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
+    python pipeline/geo/map_entries.py path/to/entries_gemini-2.0-flash_geocoded.csv
+    python pipeline/geo/map_entries.py path/to/entries.csv --out my_map.html
 """
 
 import argparse

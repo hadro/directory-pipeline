@@ -32,10 +32,10 @@ Advertisements receive a stroke twice as thick as regular entries.
 
 Usage
 -----
-    python pipeline/export_entry_boxes.py output/green_book_1947_xxx/uuid/
-    python pipeline/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \\
+    python pipeline/iiif/export_entry_boxes.py output/green_book_1947_xxx/uuid/
+    python pipeline/iiif/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \\
         --model gemini-2.0-flash
-    python pipeline/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \\
+    python pipeline/iiif/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \\
         --base-url https://example.org/annotations \\
         --update-manifest
 """

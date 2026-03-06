@@ -28,8 +28,8 @@ command line:
   --visualize       analysis/visualize_alignment.py   (draw alignment boxes on images → *_viz.jpg)
   --review-alignment pipeline/review_alignment.py     (interactive UI to correct unmatched entries → *_aligned.json)
   --extract-entries pipeline/extract_entries.py        (extract structured entries from aligned OCR)
-  --geocode         pipeline/geocode_entries.py        (geocode entries to lat/lon)
-  --map             pipeline/map_entries.py            (generate interactive HTML map)
+  --geocode         pipeline/geo/geocode_entries.py    (geocode entries to lat/lon)
+  --map             pipeline/geo/map_entries.py        (generate interactive HTML map)
 
   --select-pages        pipeline/select_sample_pages.py  (interactive browser UI for picking sample pages; opens HTML in browser)
   --generate-prompts    pipeline/generate_prompt.py  (Gemini generates volume-specific OCR + NER prompts from sample pages)
@@ -115,8 +115,8 @@ PIPELINE: list[tuple[str, str, str]] = [
     ("visualize",       "analysis/visualize_alignment.py",     "--visualize"),
     ("review_alignment","pipeline/review_alignment.py",        "--review-alignment"),
     ("extract_entries", "pipeline/extract_entries.py",         "--extract-entries"),
-    ("geocode",         "pipeline/geocode_entries.py",         "--geocode"),
-    ("map",             "pipeline/map_entries.py",             "--map"),
+    ("geocode",         "pipeline/geo/geocode_entries.py",     "--geocode"),
+    ("map",             "pipeline/geo/map_entries.py",         "--map"),
 ]
 
 

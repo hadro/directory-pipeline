@@ -790,6 +790,26 @@ function finishReview() {
     .then(() => setStatus('Done. Server shut down — you may close this tab.'))
     .catch(() => setStatus('Done. Server shut down — you may close this tab.'));
 }
+
+// ── keyboard navigation ────────────────────────────────────────────────────
+document.addEventListener('keydown', function(e) {
+  // Don't hijack keys while typing in inputs
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  e.preventDefault();
+
+  const items = [...document.querySelectorAll('#page-list .pi')]
+    .filter(el => el.style.display !== 'none');
+  if (!items.length) return;
+
+  const active = document.querySelector('#page-list .pi.active');
+  let idx = active ? items.indexOf(active) : -1;
+  idx = e.key === 'ArrowDown' ? Math.min(idx + 1, items.length - 1)
+                               : Math.max(idx - 1, 0);
+  const next = items[idx];
+  next.scrollIntoView({ block: 'nearest' });
+  loadPage(next);
+});
 </script>
 </body>
 </html>

@@ -4,6 +4,7 @@ output/*
 ideas_and_questions.md
 old/*
 colab.sh
+spacetime/*
 
 # tmp files
 .tmp*
