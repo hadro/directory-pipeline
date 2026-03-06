@@ -3,6 +3,7 @@ collection_csv/*
 output/*
 ideas_and_questions.md
 old/*
+colab.sh
 
 # tmp files
 .tmp*

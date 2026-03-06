@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate an HTML page for selecting 4–8 sample pages from a collection volume.
+"""Generate an HTML page for selecting 4–10 sample pages from a collection volume.
 
 Writes select_pages.html into the item directory (alongside the images) so that
 thumbnail <img> tags resolve as relative paths — no server required.
@@ -138,10 +138,25 @@ _HTML_TEMPLATE = """\
     .btn-secondary {{ background: #475569; color: #fff; }}
     .btn-clear {{ background: #64748b; color: #fff; font-size: 12px; }}
 
+    /* ── size slider ────────────────────────────────────────────────── */
+    .size-control {{
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #94a3b8;
+      margin-left: auto;
+    }}
+    .size-control input[type=range] {{
+      width: 90px;
+      accent-color: #2563eb;
+      cursor: pointer;
+    }}
+
     /* ── grid ──────────────────────────────────────────────────────── */
     #grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size, 140px), 1fr));
       gap: 8px;
       padding: 14px;
     }}
@@ -222,8 +237,13 @@ _HTML_TEMPLATE = """\
 <header>
   <h1>Select sample pages</h1>
   <span class="volume">{volume}</span>
-  <span id="status" class="too-few">0 selected (need 4–8)</span>
+  <span id="status" class="too-few">0 selected (need 4–10)</span>
   <button class="btn btn-clear" onclick="clearAll()">Clear</button>
+  <label class="size-control" title="Thumbnail size">
+    🔍
+    <input type="range" id="size-slider" min="100" max="400" value="140"
+           oninput="document.documentElement.style.setProperty('--thumb-size', this.value + 'px')">
+  </label>
 </header>
 
 <div id="grid"></div>
@@ -237,7 +257,7 @@ _HTML_TEMPLATE = """\
 <script>
   const IMAGES = {images_json};
   const MIN_SEL = 4;
-  const MAX_SEL = 8;
+  const MAX_SEL = 10;
 
   let selected = new Set();
 
@@ -256,7 +276,7 @@ _HTML_TEMPLATE = """\
     card.appendChild(badge);
 
     const img = document.createElement("img");
-    img.src = fname;
+    img.src = fname.replace(/%/g, "%25");  // encode literal % so %2F isn't decoded as /
     img.alt = fname;
     img.loading = "lazy";
     card.appendChild(img);
@@ -308,7 +328,7 @@ _HTML_TEMPLATE = """\
     const cpBtn = document.getElementById("copy-btn");
 
     if (n === 0) {{
-      st.textContent = "0 selected (need 4–8)";
+      st.textContent = "0 selected (need 4–10)";
       st.className = "too-few";
     }} else if (n < MIN_SEL) {{
       st.textContent = n + " selected (need " + (MIN_SEL - n) + " more)";
@@ -375,9 +395,7 @@ def generate_html(item_dir: Path, images: list[Path]) -> Path:
     """Write select_pages.html into item_dir and return its path."""
     # Image filenames relative to item_dir (they're siblings of the HTML file)
     import json
-    # Encode bare % as %25 so browsers don't mis-decode percent-encoded characters
-    # that appear literally in filenames (e.g. %2F from IA download paths).
-    fnames = [p.name.replace("%", "%25") for p in images]
+    fnames = [p.name for p in images]
     volume = item_dir.parent.name + "/" + item_dir.name
 
     html = _HTML_TEMPLATE.format(
@@ -424,7 +442,7 @@ def main() -> None:
             webbrowser.open(out_path.as_uri())
 
     print(
-        "\nSelect 4–8 pages and click 'Download selection.txt'.\n"
+        "\nSelect 4–10 pages and click 'Download selection.txt'.\n"
         "Then run:\n"
         "  python pipeline/generate_prompt.py <output_dir> "
         "--selection path/to/selection.txt",

@@ -152,12 +152,12 @@ gutter column into `{stem}_left.jpg` and `{stem}_right.jpg`. Also writes a
 `{stem}_split.json` sidecar with the pixel offsets. Original images are untouched.
 
 #### `pipeline/select_sample_pages.py` — Sample page selector (interactive)
-Generates a self-contained `select_pages.html` browser UI for visually picking 4–8
+Generates a self-contained `select_pages.html` browser UI for visually picking 4–10
 representative pages from a volume to use as prompt-calibration samples. Opens the
 page in the default browser automatically (pass `--no-open` to suppress).
 
 In the browser: click thumbnails to select or deselect pages; the header shows the
-current count (green when 4–8 are chosen). Click **Download selection.txt** to save
+current count (green when 4–10 are chosen). Click **Download selection.txt** to save
 a plain-text list of selected filenames. Place the downloaded `selection.txt` in
 `output/{slug}/` before running `--generate-prompts`.
 

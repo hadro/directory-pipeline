@@ -133,6 +133,18 @@ for canvas in m.get("items", []):
 if fixed:
     import sys as _sys
     print(f"  (patched {fixed} ImageService3→ImageService2 declarations)", file=_sys.stderr)
+# Add sequential labels to canvases that lack them so Mirador shows page numbers
+# instead of "NaN" in the thumbnail strip.
+import re as _re
+labeled = 0
+for i, canvas in enumerate(m.get("items", [])):
+    if not canvas.get("label"):
+        m2 = _re.search(r"/canvas/(\d+)$", canvas.get("id", ""))
+        canvas["label"] = {"en": [m2.group(1) if m2 else str(i + 1)]}
+        labeled += 1
+if labeled:
+    import sys as _sys2
+    print(f"  (added labels to {labeled} unlabeled canvases)", file=_sys2.stderr)
 print(json.dumps(m, ensure_ascii=False, indent=2))
 PYEOF
 echo "  Copied manifest.json (id → ${MANIFEST_URL})"

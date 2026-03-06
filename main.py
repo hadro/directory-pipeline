@@ -1143,8 +1143,23 @@ def main() -> None:
     outcomes: dict[str, list[str]] = {"ok": [], "partial": [], "failed": []}
 
     for i, target in enumerate(targets, 1):
+        # Existing output directory: slug comes from the path, no URL/UUID needed.
+        # Accepts either output/{slug} or output/{slug}/{item_id}.
+        if Path(target).is_dir():
+            p = Path(target).resolve()
+            # Walk up to find the path component right under an "output" dir.
+            parts = p.parts
+            try:
+                out_idx = next(j for j in range(len(parts) - 1, -1, -1) if parts[j] == "output")
+                slug = args.slug or parts[out_idx + 1]
+            except StopIteration:
+                slug = args.slug or p.name
+            uuid = None
+            label = slug
+            kind = "dir"
+
         # CSV-as-source: slug comes from the filename; no UUID or title fetch needed
-        if target.lower().endswith(".csv"):
+        elif target.lower().endswith(".csv"):
             slug = args.slug or Path(target).stem
             uuid = None
             label = slug
