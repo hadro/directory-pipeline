@@ -11,6 +11,9 @@ from the prior page are correctly attributed.
 
 Input (per page):
   {stem}_{model_slug}_aligned.json   — Gemini-corrected lines with bounding boxes
+                                       (preferred; includes precise canvas fragments)
+  {stem}_{model_slug}.txt            — raw Gemini OCR text (fallback; canvas_fragment
+                                       will be the bare canvas URI, not a spatial rect)
 
 Output (per page):
   {stem}_{model_slug}_entries.json   — extracted entries with canvas fragments
@@ -20,10 +23,13 @@ Output (per item directory):
 
 Usage
 -----
-    python extract_entries.py output/greenbooks/feb978b0
-    python extract_entries.py output/greenbooks/feb978b0 --mode multimodal
-    python extract_entries.py output/greenbooks/ --force
-    python extract_entries.py output/greenbooks/feb978b0 --dry-run
+Core path (no alignment required):
+    python pipeline/extract_entries.py output/greenbooks/feb978b0
+
+With aligned JSON (adds precise bounding-box fragments):
+    python pipeline/extract_entries.py output/greenbooks/feb978b0 --mode multimodal
+    python pipeline/extract_entries.py output/greenbooks/ --force
+    python pipeline/extract_entries.py output/greenbooks/feb978b0 --dry-run
     python pipeline/extract_entries.py output/woods_directory_73644404 \
   --model gemini-2.5-flash-preview-04-17 \
   --aligned-model gemini-2.0-flash \
@@ -48,11 +54,31 @@ from google import genai
 load_dotenv()
 from google.genai.types import GenerateContentConfig, Part
 
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-2.5-flash-lite"
 # Fallback used when the primary model appears to have hit its output token limit.
-# gemini-2.0-flash caps output at ~8 k tokens; gemini-2.5-flash allows up to 65 k.
-FALLBACK_MODEL = "gemini-2.5-flash"
+# Lite models cap output at ~8 k tokens; the fallback handles dense pages with 100+ entries.
+FALLBACK_MODEL = "gemini-3.1-flash-lite-preview"
 NER_PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ner_prompt.md"
+
+
+def _discover_ocr_slug(output_root: Path) -> str | None:
+    """Scan *output_root* for Gemini OCR files and return the most-common model slug."""
+    from collections import Counter
+    counts: Counter[str] = Counter()
+    for pattern, regex_str in [
+        ("*_aligned.json", r"^\d{4}_\d+_(.+)_aligned\.json$"),
+        ("*.txt",          r"^\d{4}_\d+_(.+)\.txt$"),
+    ]:
+        rx = re.compile(regex_str)
+        dirs = [output_root] + [d for d in sorted(output_root.iterdir()) if d.is_dir()]
+        for d in dirs:
+            for f in d.glob(pattern):
+                m = rx.match(f.name)
+                if m:
+                    counts[m.group(1)] += 1
+        if counts:
+            return counts.most_common(1)[0][0]
+    return None
 
 
 def _find_ner_prompt(output_root: Path) -> Path:
@@ -67,6 +93,27 @@ def _find_ner_prompt(output_root: Path) -> Path:
         if p.exists():
             return p
     return NER_PROMPT_FILE
+
+def _load_canvas_uris(item_dir: Path) -> list[str]:
+    """Return canvas URIs in page order from manifest.json in item_dir.
+
+    Supports IIIF v2 (sequences[0].canvases) and v3 (items).
+    Returns [] if the manifest is absent or unreadable.
+    """
+    p = item_dir / "manifest.json"
+    if not p.exists():
+        return []
+    try:
+        m = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    # IIIF v2
+    seqs = m.get("sequences", [])
+    if seqs:
+        return [c.get("@id", "") for c in seqs[0].get("canvases", [])]
+    # IIIF v3
+    return [c.get("id", "") for c in m.get("items", [])]
+
 
 def _infer_fields(entries: list[dict]) -> list[str]:
     """Return column order inferred from the union of all entry keys."""
@@ -391,8 +438,7 @@ def process_page(
     result = _parse_json_response(last_raw)
 
     # If the primary model failed, try once with the fallback model.
-    # gemini-2.0-flash caps output at ~8 k tokens; the fallback (gemini-2.5-flash)
-    # allows up to 65 k, which handles dense pages with 100+ entries.
+    # Lite models cap output at ~8 k tokens; the fallback handles dense pages with 100+ entries.
     if result is None and fallback_model and fallback_model != model:
         _log(
             f"    [{aligned_path.name}] primary model exhausted — retrying once"
@@ -455,6 +501,129 @@ def process_page(
     return {"entries": entries, "page_context": new_context, "status": "partial_recovery" if partial else "ok"}
 
 
+def process_page_txt(
+    client: genai.Client,
+    txt_path: Path,
+    canvas_uri: str,
+    model: str,
+    system_prompt: str,
+    prior_context: dict,
+    mode: str,
+    force: bool,
+    dry_run: bool,
+    aligned_model: str | None = None,
+    fallback_model: str | None = FALLBACK_MODEL,
+) -> dict:
+    """Extract entries from one raw Gemini .txt page (no alignment data).
+
+    Used when *_aligned.json files are not available. canvas_fragment for all
+    entries is set to the bare canvas_uri — a link to the IIIF canvas page
+    without spatial coordinates.
+
+    Returns the same structure as process_page().
+    """
+    slug = model_slug(model)
+    aligned_slug = model_slug(aligned_model) if aligned_model else slug
+    suffix = f"_{aligned_slug}.txt"
+    stem = txt_path.name[: -len(suffix)]
+    out_path = txt_path.parent / f"{stem}_{slug}_entries.json"
+
+    # Return cached result if it exists and --force is not set
+    if not force and not dry_run and out_path.exists() and out_path.stat().st_size > 0:
+        try:
+            data = json.loads(out_path.read_text(encoding="utf-8"))
+            return {
+                "entries": data.get("entries", []),
+                "page_context": data.get("page_context", prior_context),
+                "status": "skipped",
+            }
+        except Exception:
+            pass  # corrupt file — re-run
+
+    # Read and normalise the raw text
+    try:
+        raw = txt_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return {"entries": [], "page_context": prior_context, "status": f"error:{exc}"}
+
+    page_text = "\n".join(_normalize_line(ln) for ln in raw.splitlines() if ln.strip())
+    if not page_text.strip():
+        return {"entries": [], "page_context": prior_context, "status": "empty"}
+
+    if dry_run:
+        return {
+            "entries": [],
+            "page_context": prior_context,
+            "status": f"dry_run ({len(page_text.splitlines())} lines)",
+        }
+
+    user_msg = _build_user_message(page_text, prior_context)
+
+    # Resolve image path for multimodal mode
+    image_path: Path | None = None
+    if mode == "multimodal":
+        candidate = txt_path.parent / f"{stem}.jpg"
+        if candidate.exists():
+            image_path = candidate
+        else:
+            _log(f"    Warning: image not found for {txt_path.name}; falling back to text-only")
+
+    error_path = txt_path.parent / f"{stem}_{slug}_entries_error.txt"
+
+    # Call primary model once
+    try:
+        last_raw = _call_gemini(client, model, system_prompt, user_msg, image_path)
+    except Exception as exc:
+        return {"entries": [], "page_context": prior_context, "status": f"api_error:{exc}"}
+    result = _parse_json_response(last_raw)
+
+    if result is None and fallback_model and fallback_model != model:
+        _log(
+            f"    [{txt_path.name}] primary model exhausted — retrying once"
+            f" with fallback model {fallback_model}"
+        )
+        try:
+            last_raw = _call_gemini(client, fallback_model, system_prompt, user_msg, image_path)
+            result = _parse_json_response(last_raw)
+        except Exception as exc:
+            _log(f"    [{txt_path.name}] fallback model error: {exc}")
+
+    partial = False
+    if result is None:
+        result = _recover_partial_json(last_raw)
+        if result is None:
+            error_path.write_text(last_raw, encoding="utf-8")
+            return {"entries": [], "page_context": prior_context, "status": "parse_error"}
+        partial = True
+        _log(
+            f"    [{txt_path.name}] WARNING: response was truncated; "
+            f"recovered {len(result.get('entries', []))} entries (may be incomplete)"
+        )
+
+    if error_path.exists():
+        error_path.unlink()
+
+    entries = result.get("entries", [])
+    new_context = result.get("page_context") or prior_context
+
+    # No alignment data — canvas_fragment is always the bare canvas URI
+    for entry in entries:
+        entry["canvas_fragment"] = canvas_uri
+        entry["image"] = f"{stem}.jpg"
+
+    output = {
+        "image": f"{stem}.jpg",
+        "model": model,
+        "mode": mode,
+        "prior_context": prior_context,
+        "page_context": new_context,
+        "entries": entries,
+    }
+    out_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return {"entries": entries, "page_context": new_context, "status": "partial_recovery" if partial else "ok"}
+
+
 # ---------------------------------------------------------------------------
 # Per-item processing
 # ---------------------------------------------------------------------------
@@ -485,7 +654,39 @@ def process_item(
     aligned_slug = model_slug(aligned_model) if aligned_model else slug
     aligned_files = sorted(item_dir.glob(f"*_{aligned_slug}_aligned.json"))
     if not aligned_files:
-        return []
+        # Fallback: read raw Gemini text files (no bounding boxes)
+        txt_files = sorted(item_dir.glob(f"*_{aligned_slug}.txt"))
+        if not txt_files:
+            return []
+        canvas_uris = _load_canvas_uris(item_dir)
+        all_entries: list[dict] = []
+        context: dict = {}
+        context_file = item_dir / f"extraction_context_{slug}.json"
+        if not force and context_file.exists():
+            try:
+                context = json.loads(context_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        if not quiet:
+            _log(f"  {item_dir.name}: {len(txt_files)} page(s) [text-only fallback], model={model}")
+        for i, txt_path in enumerate(txt_files):
+            canvas_uri = canvas_uris[i] if i < len(canvas_uris) else ""
+            result = process_page_txt(
+                client, txt_path, canvas_uri, model, system_prompt,
+                context, mode, force, dry_run, aligned_model,
+                fallback_model=fallback_model,
+            )
+            status = result["status"]
+            n = len(result["entries"])
+            ctx = result.get("page_context", context)
+            if not quiet:
+                ctx_str = " > ".join(str(v) for v in ctx.values()) if ctx else "?"
+                _log(f"  [{i + 1:03d}/{len(txt_files)}] {txt_path.name}  {status}  {n} entries  [{ctx_str}]")
+            context = ctx
+            all_entries.extend(result.get("entries", []))
+            if not dry_run:
+                context_file.write_text(json.dumps(context, ensure_ascii=False), encoding="utf-8")
+        return all_entries
 
     all_entries: list[dict] = []
     context: dict = {}
@@ -639,9 +840,19 @@ def main() -> None:
         sys.exit(1)
 
     aligned_model = args.aligned_model
+    output_root = Path(args.output_dir)
+
+    # If --aligned-model was not given, auto-detect the OCR model slug from
+    # existing files so the user doesn't need to remember which model was used.
+    if aligned_model is None and args.model == DEFAULT_MODEL:
+        discovered = _discover_ocr_slug(output_root)
+        if discovered and discovered != model_slug(args.model):
+            aligned_model = discovered
+            if not args.quiet:
+                print(f"  Auto-detected OCR model for file lookup: {aligned_model}", file=sys.stderr)
+
     slug = model_slug(args.model)
     aligned_slug = model_slug(aligned_model) if aligned_model else slug
-    output_root = Path(args.output_dir)
 
     # NER prompt — explicit flag > volume-specific > global default
     if args.prompt:
@@ -661,19 +872,24 @@ def main() -> None:
     client = genai.Client(api_key=api_key) if not args.dry_run else None  # type: ignore[assignment]
 
     # Discover item directories: either the given dir itself (if it has aligned
-    # JSONs directly) or its immediate subdirectories.
-    slug_pattern = f"*_{aligned_slug}_aligned.json"
-    direct = list(output_root.glob(slug_pattern))
+    # JSONs or raw txt files directly) or its immediate subdirectories.
+    aligned_pattern = f"*_{aligned_slug}_aligned.json"
+    txt_pattern = f"*_{aligned_slug}.txt"
+    direct = list(output_root.glob(aligned_pattern)) or list(output_root.glob(txt_pattern))
     if direct:
         item_dirs = [output_root]
     else:
         item_dirs = [
             d for d in sorted(output_root.iterdir())
-            if d.is_dir() and list(d.glob(slug_pattern))
+            if d.is_dir() and (list(d.glob(aligned_pattern)) or list(d.glob(txt_pattern)))
         ]
 
     if not item_dirs:
-        print(f"No *_{aligned_slug}_aligned.json files found under {output_root}", file=sys.stderr)
+        print(
+            f"No aligned JSON or Gemini text files found under {output_root}\n"
+            f"  (looked for *_{aligned_slug}_aligned.json and *_{aligned_slug}.txt)",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     fallback_model = args.fallback_model or None  # empty string → disabled

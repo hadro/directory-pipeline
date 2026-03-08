@@ -6,15 +6,15 @@ passed directly) and runs the requested pipeline stages in order for each.
 A human-readable slug is derived automatically and used as the base name for
 every output file and directory, so all stages stay in sync:
 
-    collection_csv/{slug}.csv
+    output/{slug}/{slug}.csv
     output/{slug}/
 
 Stages run in this fixed order regardless of the order flags appear on the
 command line:
 
-  --nypl-csv        sources/nypl_collection_csv.py  → collection_csv/{slug}.csv  (NYPL only)
-  --loc-csv         sources/loc_collection_csv.py   → collection_csv/{slug}.csv  (LoC only)
-  --ia-csv          sources/ia_collection_csv.py    → collection_csv/{slug}.csv  (Internet Archive only)
+  --nypl-csv        sources/nypl_collection_csv.py  → output/{slug}/{slug}.csv  (NYPL only)
+  --loc-csv         sources/loc_collection_csv.py   → output/{slug}/{slug}.csv  (LoC only)
+  --ia-csv          sources/ia_collection_csv.py    → output/{slug}/{slug}.csv  (Internet Archive only)
   --download        pipeline/download_images.py       → output/{slug}/
   --detect-spreads  pipeline/detect_spreads.py        (double-page spread detection)
   --split-spreads   pipeline/split_spreads.py         (split spreads into left/right pages)
@@ -40,7 +40,7 @@ command line:
                           run --select-pages + --generate-prompts first for new collection types)
 
 Key model flags:
-  --ocr-model MODEL     Gemini model for OCR and downstream stages (default: gemini-2.0-flash)
+  --ocr-model MODEL     Gemini model for OCR and downstream stages (each stage uses its own default if omitted)
   --prompt-model MODEL  Gemini model for --generate-prompts (default: gemini-3-flash-preview)
 
 Usage
@@ -63,7 +63,7 @@ Usage
         --ia-csv --download --gemini-ocr
 
     # Pre-built CSV (any source):
-    python main.py collection_csv/my_items.csv --download --gemini-ocr
+    python main.py output/my_items/my_items.csv --download --gemini-ocr
 
     # Multiple models / parallel workers:
     python main.py collections.txt --nypl-csv --download \\
@@ -379,7 +379,7 @@ def build_stage_args(
     In dry-run mode, existence checks are bypassed so every selected stage
     shows the command it would run.
     """
-    csv_path = Path("collection_csv") / f"{slug}.csv"
+    csv_path = Path("output") / slug / f"{slug}.csv"
     output_dir = Path("output") / slug
 
     def _require_images() -> bool:
@@ -427,7 +427,7 @@ def build_stage_args(
                 file=sys.stderr,
             )
             return None
-        return [source, "--output", f"{slug}.csv"]
+        return [source, "--output", str(Path("output") / slug / f"{slug}.csv")]
 
     if stage == "ia_csv":
         if source.lower().endswith(".csv"):
@@ -443,7 +443,7 @@ def build_stage_args(
                 file=sys.stderr,
             )
             return None
-        return [source, "--output", f"{slug}.csv"]
+        return [source, "--output", str(Path("output") / slug / f"{slug}.csv")]
 
     if stage == "download":
         actual_csv = Path(source) if source.lower().endswith(".csv") else csv_path
@@ -486,12 +486,16 @@ def build_stage_args(
     if stage == "gemini_ocr":
         if not _require_images():
             return None
-        models = parsed.models if parsed.models else [parsed.ocr_model]
+        model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
         runs = []
-        for m in models:
-            a = [str(output_dir), "--model", m]
+        for m in model_list:
+            a = [str(output_dir)]
+            if m:
+                a += ["--model", m]
             if parsed.workers is not None:
                 a += ["--workers", str(parsed.workers)]
+            if getattr(parsed, "expand_dittos", False):
+                a += ["--expand-dittos"]
             runs.append(a)
         return runs  # list[list[str]] — one run per model
 
@@ -508,18 +512,12 @@ def build_stage_args(
     if stage == "align_ocr":
         if not _require_images():
             return None
-        models = parsed.models if parsed.models else (
-            [parsed.ocr_model] if getattr(parsed, "ocr_model", None) else []
-        )
-        if not models:
-            print(
-                "    Skipping: --align-ocr requires --ocr-model or --models.",
-                file=sys.stderr,
-            )
-            return None
+        model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
         runs = []
-        for m in models:
-            a = [str(output_dir), "--model", m]
+        for m in model_list:
+            a = [str(output_dir)]
+            if m:
+                a += ["--model", m]
             if parsed.workers is not None:
                 a += ["--workers", str(parsed.workers)]
             if getattr(parsed, "force", False):
@@ -530,18 +528,12 @@ def build_stage_args(
     if stage == "visualize":
         if not _require_images():
             return None
-        models = parsed.models if parsed.models else (
-            [parsed.ocr_model] if getattr(parsed, "ocr_model", None) else []
-        )
-        if not models:
-            print(
-                "    Skipping: --visualize requires --ocr-model or --models.",
-                file=sys.stderr,
-            )
-            return None
+        model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
         runs = []
-        for m in models:
-            a = [str(output_dir), "--model", m]
+        for m in model_list:
+            a = [str(output_dir)]
+            if m:
+                a += ["--model", m]
             if getattr(parsed, "no_text", False):
                 a += ["--no-text"]
             if getattr(parsed, "force", False):
@@ -638,30 +630,30 @@ def build_stage_args(
             a += ["--ocr-only"]
         elif getattr(parsed, "ner_only", False):
             a += ["--ner-only"]
+        if getattr(parsed, "expand_dittos", False):
+            a += ["--expand-dittos"]
         return a
 
     if stage == "review_alignment":
         if not _require_images():
             return None
-        m = (parsed.models[0] if parsed.models else None) or getattr(parsed, "ocr_model", "gemini-2.0-flash")
-        a = [str(output_dir), "--model", m]
+        a = [str(output_dir)]
+        m = (parsed.models[0] if parsed.models else None) or parsed.ocr_model
+        if m:
+            a += ["--model", m]
         return a
 
     if stage == "extract_entries":
         if not _require_images():
             return None
-        models = parsed.models if parsed.models else (
-            [parsed.ocr_model] if getattr(parsed, "ocr_model", None) else []
-        )
-        if not models:
-            print(
-                "    Skipping: --extract-entries requires --ocr-model or --models.",
-                file=sys.stderr,
-            )
-            return None
+        # Pass --aligned-model (OCR file slug) separately from --model (NER model).
+        # Omitting --model lets extract_entries use its own NER DEFAULT_MODEL.
+        ocr_models = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
         runs = []
-        for m in models:
-            a = [str(output_dir), "--model", m]
+        for ocr_m in ocr_models:
+            a = [str(output_dir)]
+            if ocr_m:
+                a += ["--aligned-model", ocr_m]
             if getattr(parsed, "force", False):
                 a += ["--force"]
             runs.append(a)
@@ -670,35 +662,25 @@ def build_stage_args(
     if stage == "geocode":
         if not _require_images():
             return None
-        models = parsed.models if parsed.models else (
-            [parsed.ocr_model] if getattr(parsed, "ocr_model", None) else []
-        )
-        if not models:
-            print(
-                "    Skipping: --geocode requires --ocr-model or --models.",
-                file=sys.stderr,
-            )
-            return None
+        model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
         runs = []
-        for m in models:
-            runs.append([str(output_dir), "--model", m])
+        for m in model_list:
+            a = [str(output_dir)]
+            if m:
+                a += ["--model", m]
+            runs.append(a)
         return runs
 
     if stage == "map":
         if not _require_images():
             return None
-        models = parsed.models if parsed.models else (
-            [parsed.ocr_model] if getattr(parsed, "ocr_model", None) else []
-        )
-        if not models:
-            print(
-                "    Skipping: --map requires --ocr-model or --models.",
-                file=sys.stderr,
-            )
-            return None
+        model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
         runs = []
-        for m in models:
-            runs.append([str(output_dir), "--model", m])
+        for m in model_list:
+            a = [str(output_dir)]
+            if m:
+                a += ["--model", m]
+            runs.append(a)
         return runs
 
     return None
@@ -732,19 +714,19 @@ def main() -> None:
         "--nypl-csv",
         dest="nypl_csv",
         action="store_true",
-        help="Export NYPL item metadata to collection_csv/{slug}.csv (NYPL URLs only)",
+        help="Export NYPL item metadata to output/{slug}/{slug}.csv (NYPL URLs only)",
     )
     stages.add_argument(
         "--loc-csv",
         dest="loc_csv",
         action="store_true",
-        help="Export Library of Congress item metadata to collection_csv/{slug}.csv (loc.gov URLs only)",
+        help="Export Library of Congress item metadata to output/{slug}/{slug}.csv (loc.gov URLs only)",
     )
     stages.add_argument(
         "--ia-csv",
         dest="ia_csv",
         action="store_true",
-        help="Export Internet Archive item metadata to collection_csv/{slug}.csv (archive.org URLs only)",
+        help="Export Internet Archive item metadata to output/{slug}/{slug}.csv (archive.org URLs only)",
     )
     stages.add_argument(
         "--download",
@@ -876,15 +858,26 @@ def main() -> None:
         help="Generate interactive HTML map from geocoded entries (see --ocr-model / --models)",
     )
     stages.add_argument(
+        "--to-csv",
+        dest="to_csv",
+        action="store_true",
+        help=(
+            "Minimal shorthand: --download --gemini-ocr --extract-entries. "
+            "Produces a structured entries CSV from any supported URL with no further steps. "
+            "Run --select-pages and --generate-prompts once first for a new collection type; "
+            "after that, --to-csv works on any subsequent volume in the same series."
+        ),
+    )
+    stages.add_argument(
         "--full-run",
         dest="full_run",
         action="store_true",
         help=(
-            "Shorthand for the standard end-to-end pipeline: "
+            "Shorthand for the maximal end-to-end pipeline: "
             "--download --surya-ocr --gemini-ocr --align-ocr --review-alignment "
             "--extract-entries --geocode --map. "
             "Defaults --batch-size to 8 and --workers to 8 unless already set. "
-            "Add --ocr-model / --models to specify the Gemini model (default: gemini-2.0-flash). "
+            "Add --ocr-model / --models to override the Gemini model (each stage uses its own default otherwise). "
             "Combine with --nypl-csv / --loc-csv / --ia-csv to also export metadata. "
             "For new collection types, run --select-pages and --generate-prompts first "
             "to create volume-specific OCR and NER prompts before --full-run."
@@ -907,11 +900,12 @@ def main() -> None:
     opts.add_argument(
         "--ocr-model",
         dest="ocr_model",
-        default="gemini-2.0-flash",
+        default=None,
         metavar="MODEL",
         help=(
-            "Gemini model for OCR, alignment, entry extraction, geocoding, and map stages "
-            "(default: gemini-2.0-flash). Also accepted as --model for backward compatibility."
+            "Gemini model for OCR, alignment, entry extraction, geocoding, and map stages. "
+            "If omitted, each stage uses its own built-in default. "
+            "Also accepted as --model for backward compatibility."
         ),
     )
     opts.add_argument(
@@ -1056,6 +1050,16 @@ def main() -> None:
         help="For --generate-prompts: generate only the NER entry-extraction prompt (skip OCR).",
     )
     opts.add_argument(
+        "--expand-dittos",
+        dest="expand_dittos",
+        action="store_true",
+        help=(
+            "For --gemini-ocr: expand ditto marks ('' or 〃, often misread as 66) "
+            "in place rather than transcribing them literally. Useful for tabular "
+            "documents where each row repeats a unit or category from the row above."
+        ),
+    )
+    opts.add_argument(
         "--skip-empty-rerun",
         dest="skip_empty_rerun",
         action="store_true",
@@ -1082,6 +1086,11 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # Expand --to-csv into its constituent stage flags (minimal automated path)
+    if args.to_csv:
+        for flag in ("download", "gemini_ocr", "extract_entries"):
+            setattr(args, flag, True)
+
     # Expand --full-run into its constituent stage flags and defaults
     if args.full_run:
         for flag in ("download", "surya_ocr", "gemini_ocr", "align_ocr",
@@ -1094,6 +1103,14 @@ def main() -> None:
 
     # Validate: at least one stage must be selected
     enabled = {stage for stage, _, _ in PIPELINE if getattr(args, stage)}
+
+    # If --download is requested without an explicit *-csv stage, auto-detect
+    # the right source CSV stage per target (based on URL type) at run time.
+    _auto_infer_csv = (
+        "download" in enabled
+        and not enabled & {"nypl_csv", "loc_csv", "ia_csv"}
+    )
+
     if not enabled:
         parser.error(
             "No pipeline stages selected. "
@@ -1217,25 +1234,38 @@ def main() -> None:
             label = title or uuid
             kind = "item" if item else "collection"
 
-        # Always create the output directories (even in dry-run, so the folder
+        # Always create the output directory (even in dry-run, so the folder
         # structure is in place for inspection or manual follow-up).
-        csv_dir = Path("collection_csv")
         output_dir = Path("output") / slug
-        csv_dir.mkdir(exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         print(
             f"\n[{i}/{len(targets)}] {label}\n"
             f"  uuid: {uuid}  |  slug: {slug}  |  type: {kind}\n"
-            f"  csv:  collection_csv/{slug}.csv\n"
+            f"  csv:  output/{slug}/{slug}.csv\n"
             f"  imgs: output/{slug}/",
             file=sys.stderr,
         )
 
         stage_outcomes: dict[str, str] = {}
 
+        # Per-target stage set — may include an auto-detected *-csv stage.
+        target_enabled = set(enabled)
+        if _auto_infer_csv:
+            csv_check = Path("output") / slug / f"{slug}.csv"
+            if not csv_check.exists() and not args.dry_run:
+                if kind in ("loc-item", "loc-collection"):
+                    target_enabled.add("loc_csv")
+                    print("  Auto-adding --loc-csv (collection CSV not found)", file=sys.stderr)
+                elif kind in ("ia-item", "ia-collection"):
+                    target_enabled.add("ia_csv")
+                    print("  Auto-adding --ia-csv (collection CSV not found)", file=sys.stderr)
+                elif kind in ("item", "collection"):
+                    target_enabled.add("nypl_csv")
+                    print("  Auto-adding --nypl-csv (collection CSV not found)", file=sys.stderr)
+
         for stage, script, _ in PIPELINE:
-            if stage not in enabled:
+            if stage not in target_enabled:
                 continue
 
             print(f"\n  ── {script}", file=sys.stderr)

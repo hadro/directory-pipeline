@@ -599,8 +599,8 @@ def main() -> None:
     )
     parser.add_argument("source",
         help="Path to a geocoded entries CSV, or a directory containing one.")
-    parser.add_argument("--model", "-m", default="gemini-2.0-flash", metavar="MODEL",
-        help="Model slug used in the CSV filename (default: gemini-2.0-flash)")
+    parser.add_argument("--model", "-m", default=None, metavar="MODEL",
+        help="Model slug used in the CSV filename. Auto-detected from entries_*.csv if omitted.")
     parser.add_argument("--out", "-o", metavar="FILE",
         help="Output HTML path (default: <csv_stem>.html next to the CSV)")
     parser.add_argument("--no-ads", action="store_true",
@@ -623,12 +623,27 @@ def main() -> None:
              "Defaults to <viewer-url>/manifest.json.")
     args = parser.parse_args()
 
+    import re
+    if args.model is None:
+        # Auto-detect from entries_*_geocoded.csv or entries_*.csv files.
+        src = Path(args.source)
+        candidates = sorted(src.rglob("entries_*.csv") if src.is_dir() else [src])
+        candidates = [c for c in candidates if "_geocoded" not in c.name]
+        geocoded = sorted(src.rglob("entries_*_geocoded.csv") if src.is_dir() else [])
+        for c in (geocoded + candidates):
+            m = re.match(r"entries_(.+?)(?:_geocoded)?\.csv", c.name)
+            if m:
+                args.model = m.group(1)
+                break
+        if args.model is None:
+            args.model = "gemini-2.0-flash"
+        print(f"  Auto-detected entries model slug: {args.model}", file=sys.stderr)
+
     slug     = args.model.replace("/", "_")
     csv_path = _find_csv(Path(args.source), slug)
     out_path = Path(args.out) if args.out else csv_path.with_suffix(".html")
 
     # Infer year from directory name
-    import re
     year = args.year
     if not year:
         for part in reversed(csv_path.parts):

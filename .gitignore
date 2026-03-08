@@ -1,10 +1,10 @@
 # Downloaded data and local files
-collection_csv/*
 output/*
 ideas_and_questions.md
 old/*
 colab.sh
 spacetime/*
+collection_csv/*
 
 # tmp files
 .tmp*
@@ -37,6 +37,7 @@ research/*
 
 # Run files
 test.txt
+pipeline.db
 collections.txt
 analysis/chandra_eval.py
 analysis/surya_eval.py

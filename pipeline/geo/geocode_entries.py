@@ -276,9 +276,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--model", "-m",
-        default="gemini-2.0-flash",
+        default=None,
         metavar="MODEL",
-        help="Model slug used in the CSV filename (default: gemini-2.0-flash)",
+        help="Model slug used in the CSV filename. Auto-detected from entries_*.csv if omitted.",
     )
     parser.add_argument(
         "--out", "-o",
@@ -319,6 +319,19 @@ def main() -> None:
             "city-level geocoding for all entries.",
             file=sys.stderr,
         )
+
+    if args.model is None:
+        # Auto-detect from entries_*.csv files in the source directory.
+        src = Path(args.source)
+        candidates = sorted(src.rglob("entries_*.csv") if src.is_dir() else [src])
+        candidates = [c for c in candidates if "_geocoded" not in c.name]
+        if candidates:
+            import re as _re
+            m = _re.match(r"entries_(.+)\.csv", candidates[0].name)
+            args.model = m.group(1) if m else "gemini-2.0-flash"
+        else:
+            args.model = "gemini-2.0-flash"
+        print(f"  Auto-detected entries model slug: {args.model}", file=sys.stderr)
 
     slug       = args.model.replace("/", "_")
     csv_path   = _find_csv(Path(args.source), slug)

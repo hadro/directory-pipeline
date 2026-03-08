@@ -1,87 +1,160 @@
 # directory-pipeline
 
-A pipeline for ingesting, OCR-ing, aligning, and extracting structured data from
-digitized historical print documents — city directories, travel guides, natural history
-volumes, and other periodically-structured publications. Works with items from
-the [Library of Congress](https://www.loc.gov/collections/), [Internet Archive](https://archive.org/), and [NYPL Digital Collections](https://digitalcollections.nypl.org/),
-and accepts any IIIF Presentation v2 or v3 manifest URL.
+Give it a URL or IIIF manifest from the [Library of Congress](https://www.loc.gov/collections/), the [Internet Archive](https://archive.org/), or [NYPL Digital Collections](https://digitalcollections.nypl.org/), — it returns a structured CSV of every
+entry in that digitized historical directory. It extracts things like name, address, city, state, category, and also always includes a `canvas_fragment` column linking each row back to the exact page in the source scan. If IIIF enrichment is done, it links directly to the specific entry!
 
-The pipeline is collection-agnostic: a short prompt-calibration step (select
-sample pages → generate prompts) teaches both the OCR and NER models the
-conventions of a specific volume, producing volume-specific prompts that are
-auto-discovered by all downstream stages. The *Negro Motorist Green Book*
-(1936–1966) is the primary development collection. Geographic stages
-(`--geocode`, `--map`, `--export-entry-boxes`) are designed for directory-style
-collections with address data; they degrade gracefully but are less useful for
-other document types.
-
-## What it does
-
-The pipeline takes a collection CSV (from LoC, Internet Archive, or NYPL), a
-pre-built CSV from any source, or a single IIIF manifest URL, and runs any
-combination of the following stages:
-
-1. **Export collection metadata** to CSV (via LoC, IA, or NYPL APIs)
-2. **Download images** from IIIF manifests at full resolution
-3. **Detect double-page spreads** (common in microfilm digitization)
-4. **Split spreads** into separate left/right page files
-5. **Select sample pages** interactively — browser UI for picking 4–8 representative pages
-6. **Generate volume-specific prompts** — Gemini analyzes sample pages and writes tailored OCR and NER system prompts
-7. **Detect column layout** per image — via Surya neural detection (preferred) or pixel-projection heuristics
-8. **Run Surya OCR** to get line-level bounding boxes (preferred), or Tesseract for word-level hOCR (legacy)
-9. **Run Gemini OCR** to get accurately transcribed text
-10. **Compare OCR models** side-by-side in an HTML report
-11. **Align** Gemini text to Surya (or Tesseract) bounding boxes using anchored Needleman-Wunsch
-12. **Visualize** alignment quality by drawing color-coded boxes on images
-13. **Review and correct alignment** interactively — draw bounding boxes over unmatched regions, re-run Surya OCR on crops, and save accepted matches back to the aligned JSON
-14. **Extract structured entries** via Gemini NER — fields are defined by the volume-specific NER prompt and inferred dynamically from the model's output
-15. **Geocode entries** to lat/lon using Google Maps (address-level) or Nominatim (city-level)
-16. **Generate an interactive map** from geocoded entries
-
-The end result is a per-page JSON file pairing Gemini's corrected text with
-Surya's pixel-level line coordinates, a structured entries CSV, an
-interactive Leaflet map with IIIF popup thumbnails and Content State deep-links
-into a self-hosted viewer, and W3C/IIIF Annotation Pages with colored bounding
-boxes that load directly in Mirador and Universal Viewer — suitable for search
-indexing, IIIF annotation, and geospatial analysis.
+No manual transcription or ground truth required to get started. No custom code per collection needed.
 
 ---
 
-## Pipeline stages
+## Quick start
+
+The first three commands:
+- pull down the images from the collection or IIIF manifest
+- Present an interface for selecting a few representative sample pages from the resource
+- Uses an LLM-meta-prompting strategy to generate OCR and entity-recognition prompts for data extraction
+
+```bash
+# One-time calibration for a new collection type:
+python main.py https://archive.org/details/ldpd_11290437_000/ --download
+python main.py https://archive.org/details/ldpd_11290437_000/ --select-pages
+python main.py https://archive.org/details/ldpd_11290437_000/ --generate-prompts
+
+# Automated run — produces a structured entries CSV:
+python main.py https://archive.org/details/ldpd_11290437_000/ --to-csv
+```
+
+For any additional volume in the same series, skip calibration entirely:
+
+```bash
+python main.py https://archive.org/details/ldpd_11290437_001/ --to-csv
+```
+
+Requires `GEMINI_API_KEY`. See [Installation](#installation).
+
+These steps are safe to-run, and will detect existing output unless told to re-do the work explicitiy (via a `--force` flag).
+
+---
+
+## How it works
+
+The core automated path:
+
+```
+--download → --gemini-ocr → --extract-entries
+```
+
+Expanded by `--to-csv`.
+
+Two interactive calibration steps run **once per collection type**:
+
+| Step | What it does | Output |
+|---|---|---|
+| `--select-pages` | Browser UI — pick 4–10 representative pages | `selection.txt` |
+| `--generate-prompts` | Gemini analyzes sample pages and writes tailored prompts | `ocr_prompt.md`, `ner_prompt.md` |
+
+> **Calibrate once, run many.** `--select-pages` and `--generate-prompts` prompt
+> the model with the vocabulary of a specific document: field names, abbreviations,
+> column structure, city/state heading conventions. Run them once for a new series.
+> Generated prompts are saved to `output/{slug}/` and auto-discovered by every
+> subsequent OCR and NER run. For additional volumes in the same series that are very
+> similar, skip calibration entirely and run `--to-csv` directly.
+
+**What each automated step produces:**
+
+| Step | Output |
+|---|---|
+| `--download` | JPEG images + `manifest.json` (IIIF canvas URIs for linking) |
+| `--gemini-ocr` | One `.txt` file per page |
+| `--extract-entries` | `entries_{model}.csv` + per-page `*_{model}_entries.json` sidecars |
+
+The output CSV includes a `canvas_fragment` column: a IIIF URI pointing back to
+the exact canvas for each row — free provenance that makes the data immediately
+useful to connect back to the original source images via any number of IIIF 
+viewers.  With the precision upgrade (`--surya-ocr --align-ocr`), the fragment 
+gains a `#xywh=` bounding box pointing to the exact line on the page.
+
+---
+
+## Going further
+
+These stages extend the core CSV output but are not required.
+
+**Precision upgrade** — adds spatial bounding boxes to `canvas_fragment`:
+
+```bash
+python main.py URL --surya-ocr --align-ocr        # adds #xywh= coordinates to every row
+python main.py URL --review-alignment              # interactive correction of unmatched lines
+```
+
+**Geocoding and mapping** — resolves and addresses present to lat/lon, builds an interactive map:
+
+```bash
+python main.py URL --geocode --map
+```
+
+**IIIF annotation export** — W3C/IIIF Annotation Pages for all entries:
+
+```bash
+python pipeline/iiif/export_entry_boxes.py output/{slug}/{item_id}/
+python pipeline/iiif/export_annotations.py output/{slug}/{item_id}/
+```
+
+**GitHub Pages viewer** — self-contained IIIF viewer with annotations:
+
+```bash
+./scripts/make-git-repo.sh output/{slug}/{item_id}/ ~/github/my-repo https://username.github.io/my-repo
+```
+
+`--full-run` is the maximal shorthand: `--download --surya-ocr --gemini-ocr
+--align-ocr --review-alignment --extract-entries --geocode --map`, with
+`--batch-size` and `--workers` defaulted to 8.
+
+---
+
+## All pipeline stages
 
 Stages always run in the fixed order below, regardless of flag order on the
 command line. All stages are optional — run only what you need.
 
-```
---nypl-csv            sources/nypl_collection_csv.py      → collection_csv/{slug}.csv
---loc-csv             sources/loc_collection_csv.py       → collection_csv/{slug}.csv
---ia-csv              sources/ia_collection_csv.py        → collection_csv/{slug}.csv
---download            pipeline/download_images.py         → output/{slug}/
---detect-spreads      pipeline/detect_spreads.py          → output/{slug}/spreads_report.csv
---split-spreads       pipeline/split_spreads.py           → *_left.jpg, *_right.jpg, *_split.json
---select-pages        pipeline/select_sample_pages.py     → select_pages.html                 (interactive)
---generate-prompts    pipeline/generate_prompt.py     → output/{slug}/ocr_prompt.md, ner_prompt.md
---surya-detect        pipeline/surya_detect.py            → output/{slug}/columns_report.csv  (preferred)
---detect-columns      pipeline/detect_columns.py          → output/{slug}/columns_report.csv  (legacy)
---surya-ocr           pipeline/run_surya_ocr.py           → *_surya.json, *_surya.txt         (preferred)
---tesseract           old/run_ocr.py                      → *_tesseract.hocr, *_tesseract.txt (legacy)
---gemini-ocr          pipeline/run_gemini_ocr.py          → *_{model}.txt
---compare-ocr         analysis/compare_ocr.py             → *_comparison.html
---align-ocr           pipeline/align_ocr.py               → *_{model}_aligned.json
---visualize           analysis/visualize_alignment.py     → *_{model}_viz.jpg
---review-alignment    pipeline/review_alignment.py        → updated *_{model}_aligned.json    (interactive)
---extract-entries     pipeline/extract_entries.py         → entries_{model}.csv, *_{model}_entries.json
---geocode             pipeline/geo/geocode_entries.py         → entries_{model}_geocoded.csv
---map                 pipeline/geo/map_entries.py             → entries_{model}.html
-(standalone)          pipeline/iiif/export_annotations.py     → *_{model}_annotations.json, *_{model}_entry_annotations.json
-(standalone)          pipeline/iiif/export_entry_boxes.py     → *_{model}_box_annotations.json
-(standalone)          pipeline/iiif/build_ranges.py           → ranges_{model}.json               (directory collections)
-(standalone)          scripts/make-git-repo.sh                   → GitHub Pages deployable folder    (viewer + map + annotations)
-```
+**Core stages (URL → CSV):**
 
-There is also a `--full-run` shorthand that expands to
-`--download --surya-ocr --gemini-ocr --align-ocr --review-alignment --extract-entries --geocode --map`
-and defaults `--batch-size` and `--workers` to 8.
+| Stage | Script | Output |
+|---|---|---|
+| `--download` | `pipeline/download_images.py` | `output/{slug}/` |
+| `--select-pages` | `pipeline/select_sample_pages.py` | `selection.txt` *(interactive, once per collection type)* |
+| `--generate-prompts` | `pipeline/generate_prompt.py` | `ocr_prompt.md`, `ner_prompt.md` *(once per collection type)* |
+| `--gemini-ocr` | `pipeline/run_gemini_ocr.py` | `*_{model}.txt` |
+| `--extract-entries` | `pipeline/extract_entries.py` | `entries_{model}.csv`, `*_{model}_entries.json` |
+
+**Precision upgrade (adds `#xywh=` bounding boxes to `canvas_fragment`):**
+
+| Stage | Script | Output |
+|---|---|---|
+| `--surya-ocr` | `pipeline/run_surya_ocr.py` | `*_surya.json`, `*_surya.txt` |
+| `--align-ocr` | `pipeline/align_ocr.py` | `*_{model}_aligned.json` |
+| `--review-alignment` | `pipeline/review_alignment.py` | updated `*_{model}_aligned.json` *(interactive)* |
+
+**Extensions:**
+
+| Stage | Script | Output |
+|---|---|---|
+| `--nypl-csv` | `sources/nypl_collection_csv.py` | `output/{slug}/{slug}.csv` |
+| `--loc-csv` | `sources/loc_collection_csv.py` | `output/{slug}/{slug}.csv` |
+| `--ia-csv` | `sources/ia_collection_csv.py` | `output/{slug}/{slug}.csv` |
+| `--detect-spreads` | `pipeline/detect_spreads.py` | `spreads_report.csv` |
+| `--split-spreads` | `pipeline/split_spreads.py` | `*_left.jpg`, `*_right.jpg` |
+| `--surya-detect` | `pipeline/surya_detect.py` | `columns_report.csv` |
+| `--detect-columns` | `pipeline/detect_columns.py` | `columns_report.csv` *(legacy)* |
+| `--tesseract` | `old/run_ocr.py` | `*_tesseract.hocr`, `*_tesseract.txt` *(legacy)* |
+| `--compare-ocr` | `analysis/compare_ocr.py` | `*_comparison.html` |
+| `--visualize` | `analysis/visualize_alignment.py` | `*_{model}_viz.jpg` |
+| `--geocode` | `pipeline/geo/geocode_entries.py` | `entries_{model}_geocoded.csv` |
+| `--map` | `pipeline/geo/map_entries.py` | `entries_{model}.html` |
+| *(standalone)* | `pipeline/iiif/export_annotations.py` | `*_{model}_annotations.json`, `*_{model}_entry_annotations.json` |
+| *(standalone)* | `pipeline/iiif/export_entry_boxes.py` | `*_{model}_box_annotations.json` |
+| *(standalone)* | `pipeline/iiif/build_ranges.py` | `ranges_{model}.json` *(directory collections)* |
+| *(standalone)* | `scripts/make-git-repo.sh` | GitHub Pages deployable folder |
 
 ### Stage descriptions
 
@@ -122,7 +195,7 @@ All three source scripts produce the same CSV schema, which feeds into `pipeline
 | `microform` | `True` if the item is a microfilm/microform scan — used by `detect_spreads.py` |
 
 #### `pipeline/download_images.py` — Download images
-Fetches full-resolution images from IIIF manifests. Two input modes:
+Fetches images from IIIF manifests. Two input modes:
 
 **CSV mode** (default): reads a collection CSV and downloads every item's images.
 ```
@@ -174,7 +247,7 @@ thumbnails for small-text volumes.
 **Saving the selection:** when run normally (server mode), the script starts a local
 HTTP server and the **Save to output folder** button writes `selection.txt` directly
 into `output/{slug}/` — no manual file moving required. Press Ctrl+C in the terminal
-when done. When run with `--no-open` (headless/Colab), the page is generated as a
+when done. When run with `--no-open` (headless/Google Colab), the page is generated as a
 static file with a **Download selection.txt** browser-download button instead.
 
 ```bash
@@ -194,12 +267,13 @@ when they exist in the slug directory — no explicit `--prompt-file` flag neede
 Falls back to the global `prompts/ocr_prompt.md` / `prompts/ner_prompt.md` if no
 volume-specific prompt is found.
 
+Safe to re-run: if both output files already exist the script exits immediately
+without calling the API. Pass `--force` to regenerate.
+
 The NER meta-prompt instructs Gemini to define `page_context` fields and entry fields
-appropriate to the document it sees — it does not prescribe Green Book field names.
-The only fixed requirement is the JSON response envelope:
+appropriate to the document it sees. The only fixed requirement is the JSON response envelope:
 `{"page_context": {...}, "entries": [...]}`. `extract_entries.py` infers CSV column
-names dynamically from whatever fields the model returns, so **no code changes are
-needed for new collection types**.
+names dynamically from whatever fields the model returns, so **no code changes are needed for new collection types**.
 
 Pass `--ner-template` to specify a reference prompt shown to Gemini as a structural
 example (defaults to `prompts/ner_prompt.md`; use `prompts/ner_prompt_greenbook.md`
@@ -406,8 +480,8 @@ other document types the fields will match that volume's NER prompt.
 
 Outputs a per-page `*_entries.json` sidecar and an aggregate `entries_{model}.csv`.
 
-By default uses `gemini-2.0-flash` (fast and cheap). Dense pages that exceed the
-model's output token limit automatically fall back to `gemini-2.5-flash` (higher
+By default uses `gemini-2.5-flash-lite` (fast and cheap). Dense pages that exceed the
+model's output token limit automatically fall back to `gemini-3.1-flash-lite` (higher
 output limit), and then to partial JSON recovery if needed. Previously failed pages
 (where a `*_entries_error.txt` sidecar exists) are auto-retried without `--force`.
 
@@ -628,9 +702,9 @@ directory-pipeline/
 │   ├── make-git-repo.sh              # Assemble pipeline output into a GitHub Pages folder
 │   └── colab.sh                      # Example commands for Google Colab runs
 ├── pyproject.toml                    # Python project config and dependencies
-├── collection_csv/                   # Output of --*-csv stages (one CSV per collection)
 └── output/
     └── {slug}/                       # e.g. the_negro_motorist_green_book_1947_4bea2040/
+        ├── {slug}.csv                                # collection metadata CSV (from --*-csv stages)
         ├── selection.txt                             # sample page filenames (from --select-pages)
         ├── ocr_prompt.md                             # volume-specific OCR prompt (from --generate-prompts)
         ├── ner_prompt.md                             # volume-specific NER prompt (from --generate-prompts)
@@ -758,7 +832,7 @@ equally fast everywhere.
 | **Mac (M-series, 16 GB+)** | $0 (electricity) | ~5–8 min (MPS, `--batch-size 4`) | Good for development and single-volume runs |
 | **Mac (8 GB)** | $0 | ~10–15 min (MPS, `--batch-size 1–2`) | Works; reduce batch size if OOM errors occur |
 | **Google Colab (free T4)** | $0 | ~2–3 min (CUDA, `--batch-size 8`) | Sessions expire; T4 not always available at peak times; `--review-alignment` requires a tunnel (e.g. ngrok) |
-| **Google Colab Pro** | ~$10/month | ~1–2 min (T4/L4, `--batch-size 8`) | Reliable GPU access, longer sessions |
+| **Google Colab Pro** | ~$10/month (also pay as you go option) | ~1–2 min (T4/L4, `--batch-size 8`) | Reliable GPU access, longer sessions |
 | **Google Colab Pro+** | ~$50/month | <1 min (A100, `--batch-size 16`) | Background execution; best for large multi-volume runs |
 
 **Chandra evaluation** (`analysis/chandra_eval.py`) runs Qwen3-VL 7B and
@@ -773,11 +847,11 @@ Chandra is practical only on Colab or a machine with a CUDA GPU.
 ### Standard end-to-end run
 
 ```bash
-# Full pipeline from download through map generation
-python main.py collections.txt --full-run --model gemini-2.0-flash
+# Minimal automated path: download → OCR → CSV
+python main.py collections.txt --to-csv
 
-# With NYPL metadata export
-python main.py collections.txt --nypl-csv --full-run --model gemini-2.0-flash
+# Full pipeline: also includes Surya alignment, geocoding, and map
+python main.py collections.txt --full-run
 ```
 
 ### Library of Congress items
@@ -840,7 +914,7 @@ document — no code changes are needed.
 # Step 1: Download images
 python main.py collections.txt --nypl-csv --download
 
-# Step 2: Open the browser UI and pick 4–8 representative sample pages
+# Step 2: Open the browser UI and pick 4–10 representative sample pages
 #         Click "Save to output folder" — selection.txt is written automatically.
 #         Press Ctrl+C in the terminal when done.
 python main.py collections.txt --select-pages
@@ -848,9 +922,11 @@ python main.py collections.txt --select-pages
 # Step 3: Generate volume-specific prompts (Gemini analyzes the selected pages)
 python main.py collections.txt --generate-prompts
 
-# Step 4: Run the standard pipeline — prompts are auto-discovered
-python main.py collections.txt --surya-ocr --gemini-ocr --align-ocr \
-    --extract-entries --geocode --map --model gemini-2.0-flash
+# Step 4: Automated CSV run — prompts are auto-discovered
+python main.py collections.txt --to-csv
+
+# Or the full pipeline with precision upgrade, geocoding, and map:
+python main.py collections.txt --full-run
 ```
 
 Or run the prompt generation standalone:
@@ -882,9 +958,8 @@ python pipeline/download_images.py \
 python main.py collections.txt --compare-ocr \
     --models gemini-2.0-flash gemini-2.5-pro
 
-# Dry run — show commands without executing
-python main.py collections.txt --download --surya-ocr --gemini-ocr \
-    --model gemini-2.0-flash --dry-run
+# Dry run — show every command the pipeline would execute, without running anything
+python main.py https://archive.org/details/ldpd_11290437_000/ --to-csv --dry-run
 
 # Force re-processing of already-completed files
 python main.py collections.txt --align-ocr --model gemini-2.0-flash --force
@@ -992,7 +1067,7 @@ Book-style fields (`city`, `state`, `category`, `canvas_fragment`) and degrade
 gracefully when those fields are absent.
 
 **Fallback model for dense pages.** `extract_entries.py` defaults to
-`gemini-2.0-flash` (fast and cheap) but escalates to `gemini-2.5-flash` for pages
+`gemini-2.5-flash-lite` (fast and cheap) but escalates to `gemini-3.1-flash-lite` for pages
 that hit the output token limit, then falls back to partial JSON recovery (salvaging
 complete entries before the truncation point) before writing an error sidecar.
 

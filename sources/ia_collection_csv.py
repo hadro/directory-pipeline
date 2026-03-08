@@ -270,8 +270,8 @@ def main() -> None:
         default=None,
         help=(
             "Output CSV file path.  If no directory component is given, written "
-            "to collection_csv/.  Defaults to collection_csv/{slug}.csv derived "
-            "from the identifier and title.  Pass '-' to write to stdout."
+            "to output/{slug}/{slug}.csv.  Defaults to output/{slug}/{slug}.csv "
+            "derived from the identifier and title.  Pass '-' to write to stdout."
         ),
     )
     parser.add_argument(
@@ -328,8 +328,11 @@ def main() -> None:
     else:
         out_path = output
         if not os.path.dirname(out_path):
-            os.makedirs("collection_csv", exist_ok=True)
-            out_path = os.path.join("collection_csv", out_path)
+            stem = os.path.splitext(out_path)[0]
+            os.makedirs(os.path.join("output", stem), exist_ok=True)
+            out_path = os.path.join("output", stem, out_path)
+        else:
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
         out_file = open(out_path, "w", newline="", encoding="utf-8")
         should_close = True
 

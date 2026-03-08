@@ -34,6 +34,13 @@ from google.genai.types import GenerateContentConfig, Part
 DEFAULT_MODEL = "gemini-2.0-flash"
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
 
+_DITTO_INSTRUCTION = (
+    "\nDitto marks: when you see small raised comma-pairs (printed as '' or 〃, "
+    "often misread as 66 or as a quotation mark) used to repeat a value from the "
+    "row above, expand them in place — write out the full repeated value rather "
+    "than transcribing the mark itself."
+)
+
 _print_lock = threading.Lock()
 
 
@@ -132,6 +139,17 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--expand-dittos",
+        dest="expand_dittos",
+        action="store_true",
+        help=(
+            "Expand ditto marks in place rather than transcribing them literally. "
+            "Ditto marks (printed as '' or 〃) are common in tabular historical "
+            "documents and are often misread as 66. When this flag is set, the model "
+            "is instructed to write out the repeated value on each row instead."
+        ),
+    )
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="Suppress per-file progress output",
@@ -156,8 +174,12 @@ def main() -> None:
         print(f"Error: prompt file not found: {prompt_path}", file=sys.stderr)
         sys.exit(1)
     system_prompt = prompt_path.read_text(encoding="utf-8")
+    if args.expand_dittos:
+        system_prompt = system_prompt.rstrip() + _DITTO_INSTRUCTION
     if not args.quiet and prompt_path != PROMPT_FILE:
         print(f"Using volume prompt: {prompt_path}", file=sys.stderr)
+    if not args.quiet and args.expand_dittos:
+        print("Ditto mark expansion: enabled", file=sys.stderr)
     if not output_root.exists():
         print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)

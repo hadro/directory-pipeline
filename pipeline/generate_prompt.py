@@ -49,6 +49,13 @@ load_dotenv()
 
 _DEFAULT_MODEL = "gemini-3-flash-preview"
 
+_DITTO_INSTRUCTION = (
+    "\n\n8. **Ditto marks** — This volume uses ditto marks (small raised comma-pairs, "
+    "sometimes printed as '' or 〃, often misread by OCR as 66 or as quotation marks) "
+    "to repeat a value from the row above. Instruct the model to expand them in place: "
+    "write out the full repeated value on each line rather than transcribing the mark itself."
+)
+
 # Locate sibling prompts/ directory (two levels up from this file)
 _PIPELINE_ROOT = Path(__file__).parent.parent
 _DEFAULT_OCR_PROMPT = _PIPELINE_ROOT / "prompts" / "ocr_prompt.md"
@@ -305,6 +312,22 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--expand-dittos",
+        dest="expand_dittos",
+        action="store_true",
+        help=(
+            "Instruct the generated OCR prompt to expand ditto marks in place "
+            "rather than transcribing them literally. Ditto marks ('' or 〃) are "
+            "common in tabular historical documents and are often misread as 66. "
+            "Off by default — verbatim transcription is the standard behavior."
+        ),
+    )
+    parser.add_argument(
+        "--force", "-f",
+        action="store_true",
+        help="Re-generate prompts even if output files already exist",
+    )
+    parser.add_argument(
         "--print-only",
         action="store_true",
         help="Print generated prompts to stdout only — do not save files",
@@ -353,6 +376,19 @@ def main() -> None:
     ocr_out = Path(args.ocr_out) if args.ocr_out else slug_dir / "ocr_prompt.md"
     ner_out = Path(args.ner_out) if args.ner_out else slug_dir / "ner_prompt.md"
 
+    # --- Skip if prompts already exist (unless --force or --print-only) ------
+    if not args.force and not args.print_only:
+        ocr_needed = not args.ner_only and not ocr_out.exists()
+        ner_needed = not args.ocr_only and not ner_out.exists()
+        if not ocr_needed and not ner_needed:
+            if not args.quiet:
+                print(
+                    f"Skipping --generate-prompts: prompts already exist "
+                    f"({ocr_out.name}, {ner_out.name}). Use --force to regenerate.",
+                    file=sys.stderr,
+                )
+            sys.exit(0)
+
     # --- Set up Gemini client + load images (shared) -------------------------
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -376,6 +412,8 @@ def main() -> None:
             print(f"\nGenerating OCR prompt ({args.model})…", file=sys.stderr)
         try:
             ocr_meta = _OCR_META_PROMPT.format(n=len(image_names))
+            if args.expand_dittos:
+                ocr_meta = ocr_meta.rstrip() + _DITTO_INSTRUCTION
             ocr_text = _call_gemini(client, args.model, ocr_meta, image_parts, args.quiet)
         except Exception as exc:
             print(f"Error generating OCR prompt: {exc}", file=sys.stderr)

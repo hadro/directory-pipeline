@@ -67,6 +67,26 @@ from urllib.parse import urlparse
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import iiif_utils
 
+DEFAULT_MODEL = "gemini-2.0-flash"
+
+
+def _discover_ocr_slug(output_root: Path) -> str | None:
+    """Scan *output_root* for Gemini OCR files and return the most-common model slug."""
+    from collections import Counter
+    counts: Counter[str] = Counter()
+    for pattern, regex in [
+        ("*_aligned.json", re.compile(r"^\d{4}_\d+_(.+)_aligned\.json$")),
+        ("*.txt",          re.compile(r"^\d{4}_\d+_(.+)\.txt$")),
+    ]:
+        for candidate in (output_root, *[d for d in sorted(output_root.iterdir()) if d.is_dir()]):
+            for f in candidate.glob(pattern):
+                m = regex.match(f.name)
+                if m:
+                    counts[m.group(1)] += 1
+            if counts:
+                return counts.most_common(1)[0][0]
+    return None
+
 _print_lock = threading.Lock()
 
 BBOX_RE = re.compile(r"bbox\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)")
@@ -1039,9 +1059,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--model", "-m",
-        required=True,
+        default=None,
         metavar="MODEL",
-        help="Gemini model name used to generate the .txt files (e.g. gemini-2.0-flash)",
+        help=(
+            "Gemini model name used to generate the .txt files "
+            f"(default: {DEFAULT_MODEL}, auto-detected from output files if omitted)."
+        ),
     )
     parser.add_argument(
         "--workers", "-w",
@@ -1066,6 +1089,11 @@ def main() -> None:
     if not output_root.exists():
         print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
+
+    if args.model is None:
+        args.model = _discover_ocr_slug(output_root) or DEFAULT_MODEL
+        if not getattr(args, "quiet", False):
+            print(f"  Auto-detected OCR model: {args.model}", file=sys.stderr)
 
     # Same split-aware image selection used across the pipeline
     all_jpgs = sorted(output_root.rglob("*.jpg"))
