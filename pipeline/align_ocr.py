@@ -75,12 +75,12 @@ def _discover_ocr_slug(output_root: Path) -> str | None:
     from collections import Counter
     counts: Counter[str] = Counter()
     for pattern, regex in [
-        ("*_aligned.json", re.compile(r"^\d{4}_\d+_(.+)_aligned\.json$")),
-        ("*.txt",          re.compile(r"^\d{4}_\d+_(.+)\.txt$")),
+        ("*_aligned.json", re.compile(r"_(gemini-[^_]+)_aligned\.json$")),
+        ("*.txt",          re.compile(r"_(gemini-[^_]+)\.txt$")),
     ]:
         for candidate in (output_root, *[d for d in sorted(output_root.iterdir()) if d.is_dir()]):
             for f in candidate.glob(pattern):
-                m = regex.match(f.name)
+                m = regex.search(f.name)
                 if m:
                     counts[m.group(1)] += 1
             if counts:

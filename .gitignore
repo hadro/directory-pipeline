@@ -5,6 +5,7 @@ old/*
 colab.sh
 spacetime/*
 collection_csv/*
+scripts/*
 
 # tmp files
 .tmp*

@@ -1,7 +1,7 @@
 # directory-pipeline
 
 Give it a URL or IIIF manifest from the [Library of Congress](https://www.loc.gov/collections/), the [Internet Archive](https://archive.org/), or [NYPL Digital Collections](https://digitalcollections.nypl.org/), — it returns a structured CSV of every
-entry in that digitized historical directory. It extracts things like name, address, city, state, category, and also always includes a `canvas_fragment` column linking each row back to the exact page in the source scan. If IIIF enrichment is done, it links directly to the specific entry!
+entry in that digitized historical directory. It extracts things like name, address, city, state, category, and also always includes a column linking each row back to the exact page in the source scan. If IIIF enrichment is done, it links directly to the specific entry!
 
 No manual transcription or ground truth required to get started. No custom code per collection needed.
 
@@ -10,9 +10,9 @@ No manual transcription or ground truth required to get started. No custom code 
 ## Quick start
 
 The first three commands:
-- pull down the images from the collection or IIIF manifest
-- Present an interface for selecting a few representative sample pages from the resource
-- Uses an LLM-meta-prompting strategy to generate OCR and entity-recognition prompts for data extraction
+- pull down the images
+- select a few representative pages
+- generate OCR and entity-recognition prompts for data extraction
 
 ```bash
 # One-time calibration for a new collection type:
@@ -24,11 +24,14 @@ python main.py https://archive.org/details/ldpd_11290437_000/ --generate-prompts
 python main.py https://archive.org/details/ldpd_11290437_000/ --to-csv
 ```
 
-For any additional volume in the same series, skip calibration entirely:
+For any additional volume in the same **series**, reuse an earlier generated prompt — no re-calibration needed:
 
 ```bash
-python main.py https://archive.org/details/ldpd_11290437_001/ --to-csv
+python main.py https://archive.org/details/ldpd_11290437_001/ --to-csv \
+  --ner-prompt output/ldpd_11290437_000/ner_prompt.md
 ```
+
+`--ner-prompt` points to the prompt generated for the first volume. If you forget it, `extract_entries.py` will warn you and suggest nearby candidates automatically.
 
 Requires `GEMINI_API_KEY`. See [Installation](#installation).
 
@@ -46,7 +49,7 @@ The core automated path:
 
 Expanded by `--to-csv`.
 
-Two interactive calibration steps run **once per collection type**:
+Two interactive calibration steps run **once per collection type/similar volumes**:
 
 | Step | What it does | Output |
 |---|---|---|
@@ -56,9 +59,12 @@ Two interactive calibration steps run **once per collection type**:
 > **Calibrate once, run many.** `--select-pages` and `--generate-prompts` prompt
 > the model with the vocabulary of a specific document: field names, abbreviations,
 > column structure, city/state heading conventions. Run them once for a new series.
-> Generated prompts are saved to `output/{slug}/` and auto-discovered by every
-> subsequent OCR and NER run. For additional volumes in the same series that are very
-> similar, skip calibration entirely and run `--to-csv` directly.
+> Generated prompts are saved to `output/{slug}/`. For additional volumes in the same
+> series, pass `--ner-prompt output/{first-slug}/ner_prompt.md` to reuse it — no
+> re-calibration needed. If you forget, `extract_entries.py` warns you and lists
+> any nearby candidate prompts it finds.
+
+![Page selector UI — Sample tab (left) and Scope tab (right) for trimming frontmatter](screenshots/select-pages.png)
 
 **What each automated step produces:**
 
@@ -70,9 +76,11 @@ Two interactive calibration steps run **once per collection type**:
 
 The output CSV includes a `canvas_fragment` column: a IIIF URI pointing back to
 the exact canvas for each row — free provenance that makes the data immediately
-useful to connect back to the original source images via any number of IIIF 
-viewers.  With the precision upgrade (`--surya-ocr --align-ocr`), the fragment 
+useful to connect back to the original source images via any number of IIIF
+viewers.  With the precision upgrade (`--surya-ocr --align-ocr`), the fragment
 gains a `#xywh=` bounding box pointing to the exact line on the page.
+
+![Interactive field-value explorer — density chart, bar charts, filterable results table, and IIIF source link](screenshots/explorer.png)
 
 ---
 
@@ -87,11 +95,17 @@ python main.py URL --surya-ocr --align-ocr        # adds #xywh= coordinates to e
 python main.py URL --review-alignment              # interactive correction of unmatched lines
 ```
 
+![NW alignment visualization — green boxes are word-confidence matches; red lines are unmatched Gemini text](screenshots/alignment-viz.jpg)
+
+![Interactive alignment review UI — draw bounding boxes over unmatched entries, run Surya, accept proposed matches](screenshots/review-alignment.png)
+
 **Geocoding and mapping** — resolves and addresses present to lat/lon, builds an interactive map:
 
 ```bash
 python main.py URL --geocode --map
 ```
+
+![Interactive Leaflet map — clustered markers color-coded by category, sidebar filters, IIIF page thumbnails in popups](screenshots/map.png)
 
 **IIIF annotation export** — W3C/IIIF Annotation Pages for all entries:
 
@@ -122,7 +136,7 @@ command line. All stages are optional — run only what you need.
 | Stage | Script | Output |
 |---|---|---|
 | `--download` | `pipeline/download_images.py` | `output/{slug}/` |
-| `--select-pages` | `pipeline/select_sample_pages.py` | `selection.txt` *(interactive, once per collection type)* |
+| `--select-pages` | `pipeline/select_pages.py` | `selection.txt`, `included_pages.txt` *(interactive, once per volume)* |
 | `--generate-prompts` | `pipeline/generate_prompt.py` | `ocr_prompt.md`, `ner_prompt.md` *(once per collection type)* |
 | `--gemini-ocr` | `pipeline/run_gemini_ocr.py` | `*_{model}.txt` |
 | `--extract-entries` | `pipeline/extract_entries.py` | `entries_{model}.csv`, `*_{model}_entries.json` |
@@ -149,6 +163,7 @@ command line. All stages are optional — run only what you need.
 | `--tesseract` | `old/run_ocr.py` | `*_tesseract.hocr`, `*_tesseract.txt` *(legacy)* |
 | `--compare-ocr` | `analysis/compare_ocr.py` | `*_comparison.html` |
 | `--visualize` | `analysis/visualize_alignment.py` | `*_{model}_viz.jpg` |
+| `--explore` | `pipeline/explore_entries.py` | `entries_{model}_explorer.html` |
 | `--geocode` | `pipeline/geo/geocode_entries.py` | `entries_{model}_geocoded.csv` |
 | `--map` | `pipeline/geo/map_entries.py` | `entries_{model}.html` |
 | *(standalone)* | `pipeline/iiif/export_annotations.py` | `*_{model}_annotations.json`, `*_{model}_entry_annotations.json` |
@@ -156,493 +171,7 @@ command line. All stages are optional — run only what you need.
 | *(standalone)* | `pipeline/iiif/build_ranges.py` | `ranges_{model}.json` *(directory collections)* |
 | *(standalone)* | `scripts/make-git-repo.sh` | GitHub Pages deployable folder |
 
-### Stage descriptions
-
-#### `sources/loc_collection_csv.py` — Export LoC metadata
-Exports items from a Library of Congress collection or single item URL to the
-same CSV schema. No API token required — the LoC JSON API is publicly accessible.
-Paginates collections automatically and derives a readable filename slug from the
-item title.
-
-```bash
-python sources/loc_collection_csv.py https://www.loc.gov/item/01015253/
-python sources/loc_collection_csv.py https://www.loc.gov/collections/civil-war-maps/
-```
-
-#### `sources/ia_collection_csv.py` — Export Internet Archive metadata
-Exports items from an Internet Archive collection or single item URL. Handles both
-IA collections (lists of items) and individual item identifiers. Derives a slug
-from the IA item title and identifier. No authentication required.
-
-```bash
-python sources/ia_collection_csv.py https://archive.org/details/ldpd_11290437_000/
-python sources/ia_collection_csv.py https://archive.org/details/durstoldyorklibrary
-```
-
-#### `sources/nypl_collection_csv.py` — Export NYPL metadata
-Walks the NYPL Digital Collections API hierarchy for a collection UUID, recursively
-descending into sub-collections. For each item found, fetches capture metadata and
-writes one row to a CSV. Requires a `NYPL_API_TOKEN` environment variable (or `--token`).
-Responses are cached locally as JSON to avoid redundant API calls on re-runs.
-
-All three source scripts produce the same CSV schema, which feeds into `pipeline/download_images.py`:
-
-| Column | Description |
-|---|---|
-| `item_id` | Item identifier — used as the per-item image directory name |
-| `item_title` | Human-readable title — used for progress display |
-| `iiif_manifest_url` | IIIF Presentation manifest URL — used to download images |
-| `microform` | `True` if the item is a microfilm/microform scan — used by `detect_spreads.py` |
-
-#### `pipeline/download_images.py` — Download images
-Fetches images from IIIF manifests. Two input modes:
-
-**CSV mode** (default): reads a collection CSV and downloads every item's images.
-```
-output/{slug}/{item_id}/{page:04d}_{image_id}.jpg
-```
-
-**Manifest mode** (`--manifest URL`): downloads a single IIIF manifest directly — no CSV needed. Accepts any public IIIF Presentation v2 or v3 manifest URL.
-```
-output/{item_id}/{page:04d}_{image_id}.jpg
-```
-
-The IIIF manifest is cached alongside the images for downstream use by `align_ocr.py`.
-Handles HTTP 429/503 with exponential backoff and retry. Falls back to an alternative
-IIIF endpoint on repeated HTTP 403 errors. Safe to re-run — existing files are skipped.
-
-**LoC-specific:** `www.loc.gov/item/{id}/manifest.json` endpoints are blocked by
-Cloudflare for non-browser clients. The downloader automatically falls back to the
-LoC item JSON API (`?fo=json`) to build a synthetic IIIF manifest, then downloads
-images from `tile.loc.gov`. The requested download width is capped at the native
-image resolution to avoid upscaling artifacts from the tile pyramid.
-
-#### `pipeline/detect_spreads.py` — Spread detection
-Analyzes each image to determine whether it contains two facing pages (a spread
-captured in a single microfilm frame) vs. a single page. Uses pixel-projection
-analysis: finds the content boundary within the dark microfilm border, checks the
-aspect ratio, then scans the central vertical band for a persistent gutter/seam.
-
-Handles three physical gutter forms: dark shadow (spine), white gap (pages splaying
-open), tonal boundary (dark cover beside white content). Outputs
-`spreads_report.csv` — does not modify images.
-
-If a collection CSV is available (via `--csv`), items flagged as microform get a
-looser detection threshold.
-
-#### `pipeline/split_spreads.py` — Split spreads
-Reads `spreads_report.csv` and, for each spread, crops the image at the detected
-gutter column into `{stem}_left.jpg` and `{stem}_right.jpg`. Also writes a
-`{stem}_split.json` sidecar with the pixel offsets. Original images are untouched.
-
-#### `pipeline/select_sample_pages.py` — Sample page selector (interactive)
-Generates a browser UI for visually picking 4–10 representative pages from a
-volume to use as prompt-calibration samples. Opens the page in the default browser
-automatically (pass `--no-open` to suppress).
-
-In the browser: click thumbnails to select or deselect pages; the header shows the
-current count (green when 4–10 are chosen). A thumbnail size slider lets you scale
-thumbnails for small-text volumes.
-
-**Saving the selection:** when run normally (server mode), the script starts a local
-HTTP server and the **Save to output folder** button writes `selection.txt` directly
-into `output/{slug}/` — no manual file moving required. Press Ctrl+C in the terminal
-when done. When run with `--no-open` (headless/Google Colab), the page is generated as a
-static file with a **Download selection.txt** browser-download button instead.
-
-```bash
-python pipeline/select_sample_pages.py output/the_travelers_guide_e088efa0/
-python pipeline/select_sample_pages.py output/the_travelers_guide_e088efa0/ --no-open
-```
-
-#### `pipeline/generate_prompt.py` — Volume-specific prompt generation
-Sends selected sample page images to Gemini and generates two prompts tailored to
-the specific volume's layout, typography, and entry format:
-
-- `output/{slug}/ocr_prompt.md` — OCR transcription system prompt
-- `output/{slug}/ner_prompt.md` — NER entry-extraction system prompt
-
-Both prompts are **auto-discovered** by `run_gemini_ocr.py` and `extract_entries.py`
-when they exist in the slug directory — no explicit `--prompt-file` flag needed.
-Falls back to the global `prompts/ocr_prompt.md` / `prompts/ner_prompt.md` if no
-volume-specific prompt is found.
-
-Safe to re-run: if both output files already exist the script exits immediately
-without calling the API. Pass `--force` to regenerate.
-
-The NER meta-prompt instructs Gemini to define `page_context` fields and entry fields
-appropriate to the document it sees. The only fixed requirement is the JSON response envelope:
-`{"page_context": {...}, "entries": [...]}`. `extract_entries.py` infers CSV column
-names dynamically from whatever fields the model returns, so **no code changes are needed for new collection types**.
-
-Pass `--ner-template` to specify a reference prompt shown to Gemini as a structural
-example (defaults to `prompts/ner_prompt.md`; use `prompts/ner_prompt_greenbook.md`
-for a richer directory-style example).
-
-Requires a `selection.txt` file (from `--select-pages`). Pass `--ocr-only` or
-`--ner-only` to generate a single prompt. Prints both prompts to stdout for
-immediate review in addition to saving them.
-
-```bash
-# Generate both prompts (typical workflow):
-python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
-    --selection output/the_travelers_guide_e088efa0/selection.txt
-
-# Use the Green Book prompt as a structural reference:
-python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
-    --selection output/the_travelers_guide_e088efa0/selection.txt \
-    --ner-template prompts/ner_prompt_greenbook.md
-
-# OCR prompt only:
-python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
-    --selection output/the_travelers_guide_e088efa0/selection.txt --ocr-only
-
-# Use explicit page filenames instead of a selection file:
-python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
-    --pages 0005_58019060.jpg 0012_58019067.jpg 0023_58019078.jpg 0041_58019096.jpg
-```
-
-#### `pipeline/surya_detect.py` — Surya column detection (preferred)
-Runs Surya's neural text-line detection model on each image to count text columns
-and detect gutter positions. Produces the same `columns_report.csv` format as
-`detect_columns.py` (with `recommended_psm` per image), so either detector feeds
-`old/run_ocr.py` unchanged. Surya's neural approach is more robust than pixel-projection
-on degraded microfilm scans and pages with irregular layouts.
-
-#### `pipeline/detect_columns.py` — Pixel-projection column detection (legacy)
-Uses a vertical pixel-projection profile (dark-pixel density per column) to count
-text columns per image and detect gutter positions. Outputs `columns_report.csv`
-with a `recommended_psm` (Tesseract page segmentation mode) for each image:
-PSM 4 for single-column pages, PSM 1 for multi-column. `old/run_ocr.py` reads this
-CSV to apply per-image PSM automatically. Prefer `--surya-detect` for new runs.
-
-#### `pipeline/run_surya_ocr.py` — Surya OCR (preferred)
-Runs Surya's recognition model on each image and saves:
-- `{stem}_surya.json` — line-level bounding boxes with text and confidence scores
-- `{stem}_surya.txt` — plain text (one line per Surya line)
-
-Surya produces line-level bounding boxes rather than word-level, which aligns
-more cleanly with Gemini's line-oriented output format. Handles multi-column
-pages via the reading-order correction in `align_ocr.py`. Runs in batches
-(default 4 images per batch; reduce with `--batch-size` if OOM).
-
-#### `old/run_ocr.py` — Tesseract OCR (legacy)
-Runs Tesseract on each image and saves:
-- `{stem}_tesseract.hocr` — full hOCR with word-level bounding boxes
-- `{stem}_tesseract.txt` — plain text
-
-Tesseract dictionary correction is **disabled by default** (`load_system_dawg=0`,
-`load_freq_dawg=0`). This preserves proper nouns, street names, and abbreviations
-as-written, which is critical for accurate NW alignment with Gemini text. Use
-`--dict` to re-enable. Runs in parallel using `--workers`.
-
-Per-image PSM is loaded from `columns_report.csv` if present; the global `--psm`
-flag always overrides it. Prefer `--surya-ocr` for new runs.
-
-#### `pipeline/run_gemini_ocr.py` — Gemini OCR
-Sends each image to the Gemini API using a system prompt from `prompts/ocr_prompt.md`
-and saves the plain-text response as `{stem}_{model_slug}.txt`. Handles HTTP 429
-rate limits with exponential backoff (up to 5 retries, starting at 10s delay).
-Skips images where the output file already exists and is non-empty.
-
-#### `analysis/compare_ocr.py` — Model comparison
-Calls multiple models (any mix of Gemini model names and the special token
-`surya`) on each image and produces:
-- `{stem}_comparison.html` — side-by-side panel view of each model's output
-- `ocr_comparison_stats.csv` — character-level similarity stats across all images
-
-Useful for evaluating which Gemini model performs best on a collection before
-committing to a full run.
-
-#### `pipeline/align_ocr.py` — NW alignment
-The core output stage. For each image that has both a Gemini `.txt` file and a
-Surya `.json` (preferred) or Tesseract `.hocr` (legacy) file, aligns the two using
-anchored [Needleman-Wunsch](https://en.wikipedia.org/wiki/Needleman%E2%80%93Wunsch_algorithm)
-global sequence alignment and saves `{stem}_{model_slug}_aligned.json`.
-
-**Approach:** Runs a single global NW pass over all Surya lines (or Tesseract words)
-and all Gemini tokens on a page. Before the NW pass, city/state headings and category
-lines that appear verbatim in both sources are committed as fixed anchors. The NW
-problem is then split into independent segments at those anchors, preventing
-misalignment drift across long pages where OCR reading order diverges from Gemini's.
-
-**Reading-order correction:** OCR on multi-column pages may read across columns
-rather than down each column. Lines are re-sorted before alignment:
-- *Row-major (default):* lines are grouped into 50 px horizontal bands and sorted
-  left-column-first within each band. Correctly places centered section headings
-  (state names, category lines) before the body columns they head.
-- *Column-major (true two-column pages):* when lines cluster into exactly two columns
-  each holding ≥ 20% of page lines, the left column is emitted top-to-bottom followed
-  by the right column top-to-bottom, matching Gemini's reading order for pages with
-  independent side-by-side city sections.
-
-Column breaks are detected in two stages: first as gaps in the x1 distribution
-exceeding 8% of page width; then a bimodal histogram fallback for pages where a
-page-number outlier creates a degenerate single-line split.
-
-**Output JSON schema:**
-
-```json
-{
-  "image": "0001_58030238.jpg",
-  "model": "gemini-2.0-flash",
-  "canvas_uri": "https://...",
-  "canvas_width": 3316,
-  "canvas_height": 4513,
-  "lines": [
-    {
-      "bbox": [x1, y1, x2, y2],
-      "canvas_fragment": "canvas_uri#xywh=x,y,w,h",
-      "confidence": "word",
-      "gemini_text": "corrected line text",
-      "words": [
-        {
-          "bbox": [x1, y1, x2, y2],
-          "canvas_fragment": "canvas_uri#xywh=...",
-          "confidence": "word",
-          "text": "word"
-        }
-      ]
-    }
-  ],
-  "unmatched_gemini": ["lines with no bbox match"]
-}
-```
-
-IIIF canvas URIs are read from the `manifest.json` cached by
-`download_images.py`. `canvas_width` and `canvas_height` reflect the **natural
-image pixel dimensions** fetched from the IIIF Image API `info.json` — not the
-dimensions declared in the manifest, which may differ (e.g. NYPL manifests
-declare 2560×2560 square canvases for portrait images). All `bbox` and
-`canvas_fragment` coordinates are in this natural pixel space, which is required
-for IIIF annotation tools and Mirador to place boxes correctly.
-
-#### `analysis/visualize_alignment.py` — Alignment visualization
-Reads each `*_aligned.json` and draws color-coded bounding boxes on the source
-image, saving `{stem}_{model_slug}_viz.jpg`:
-
-- **Green** — word-confidence boxes (per word)
-- **Red** — unmatched Gemini lines (listed in the margin, no coordinates)
-
-Visualization output files are automatically excluded from all OCR and alignment
-stages (files ending in `_viz.jpg` are skipped).
-
-#### `pipeline/review_alignment.py` — Interactive alignment review
-A local Flask web UI for manually correcting pages where automatic alignment left
-unmatched Gemini entries. Run after `--align-ocr` (and optionally `--visualize`)
-to work through problematic pages before proceeding to `--extract-entries`.
-
-**Workflow:**
-1. The sidebar lists all pages in the images directory, sorted by unmatched-entry
-   count. Filter by volume, search term, or minimum unmatched count.
-2. Click a page to load it. Matched lines are overlaid in green.
-3. The *Unmatched Gemini text* panel shows entries that have no bounding box.
-4. Draw one or more bounding boxes over the regions containing those entries —
-   each drag adds a box. Boxes are numbered on the canvas when multiple are drawn.
-   Use *Undo last* to remove the most recent box.
-5. Click *Run Surya on N boxes*. Surya re-runs OCR on each crop; all detected
-   lines are merged top-to-bottom and Needleman-Wunsch-aligned against the
-   unmatched entries.
-6. The *Proposed matches* panel shows Surya → Gemini pairs with similarity scores.
-   Pairs ≥ 40% are pre-checked in green. Uncheck or add as needed.
-7. Click *Save accepted*. Matched pairs are written back to `*_aligned.json`
-   with `"confidence": "manual"` and the page's unmatched count updates immediately.
-
-**Keyboard navigation:** press ↑/↓ arrow keys to move between pages in the sidebar
-(when focus is not in the search field). The selected page scrolls into view
-automatically.
-
-Surya models are pre-loaded at server startup (~30 s) so all subsequent
-annotation requests are fast.
-
-```bash
-# Run standalone (recommended for iterative review):
-python pipeline/review_alignment.py output/ --model gemini-2.0-flash
-
-# Or via the pipeline (blocks until Ctrl+C):
-python main.py collections.txt --review-alignment --model gemini-2.0-flash
-```
-
-#### `pipeline/extract_entries.py` — Entry extraction
-Reads each `*_aligned.json` file and calls Gemini with the volume-specific NER
-prompt (auto-discovered from `output/{slug}/ner_prompt.md`, falling back to
-`prompts/ner_prompt.md`) to identify structured entries.
-
-**Schema-agnostic:** entry fields are defined entirely by the NER prompt and inferred
-dynamically from the model's output. The aggregate `entries_{model}.csv` columns
-reflect exactly what the prompt asks for. Context is carried between pages using
-whatever `page_context` fields the prompt defines. No code changes are needed for
-a new collection type — only a new NER prompt.
-
-For Green Book collections the typical fields are `establishment_name`, `raw_address`,
-`city`, `state`, `category`, and `canvas_fragment`. For natural history volumes or
-other document types the fields will match that volume's NER prompt.
-
-Outputs a per-page `*_entries.json` sidecar and an aggregate `entries_{model}.csv`.
-
-By default uses `gemini-2.5-flash-lite` (fast and cheap). Dense pages that exceed the
-model's output token limit automatically fall back to `gemini-3.1-flash-lite` (higher
-output limit), and then to partial JSON recovery if needed. Previously failed pages
-(where a `*_entries_error.txt` sidecar exists) are auto-retried without `--force`.
-
-#### `pipeline/geo/geocode_entries.py` — Geocoding
-Reads an `entries_{model}.csv` (or an images directory containing one) and resolves
-each entry to geographic coordinates:
-
-- **Address-level** (requires `GOOGLE_MAPS_API_KEY`): calls the Google Maps Geocoding
-  API for entries with a `raw_address`. Accurate to building level.
-- **City-level fallback**: calls Nominatim with city + state for entries without an
-  address, or when no Google API key is set.
-
-Results are cached in `geocache.json` (keyed by query string) so re-runs only hit
-the network for new queries. Writes `entries_{model}_geocoded.csv` with added
-`lat`, `lon`, and `geocode_level` (`"address"` | `"city"` | `""`) columns.
-
-```bash
-GOOGLE_MAPS_API_KEY=... python pipeline/geo/geocode_entries.py \
-    output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
-```
-
-#### `pipeline/geo/map_entries.py` — Interactive map
-Reads a `entries_{model}_geocoded.csv` and generates a self-contained Leaflet HTML
-map (`entries_{model}.html`) with:
-- Clustered markers (MarkerCluster) color-coded by establishment category
-- Sidebar with live search, state dropdown, and category checkboxes
-- Live count of entries shown
-- Source-scan thumbnails in map popups (when IIIF manifests are available)
-- IIIF Content State deep-links that open a IIIF viewer directly to the correct page and region (when `--viewer-url` is supplied)
-
-Entries geocoded at city level are jittered slightly to avoid stacking. Requires the
-geocoded CSV from `geocode_entries.py`.
-
-When IIIF manifests are present alongside the images (as cached by `download_images.py`),
-each marker popup includes a thumbnail of the exact page region where the entry appears,
-fetched directly from the source institution's IIIF image server. Pass `--output-dir`
-to specify the output root if the CSV has been moved; by default the script searches
-the CSV's parent directory for manifests.
-
-**IIIF Content State deep-links.** Pass `--viewer-url` to embed a link in each popup
-that opens a IIIF viewer directly at the correct page and zooms to the entry region.
-The link encodes a [IIIF Content State 1.0](https://iiif.io/api/content-state/1.0/)
-annotation as a Base64url `?iiif-content=` URL parameter. Any IIIF viewer that
-supports Content State (including the demo self-hosted Mirador viewer at
-`hadro.github.io/green-book-iiif-test`) will navigate directly to the right canvas
-and scroll the entry into view.
-
-Pass `--manifest-url` to specify the manifest explicitly; if omitted the script
-derives it as `{viewer-url}/manifest.json`.
-
-```bash
-python pipeline/geo/map_entries.py output/green_book_1940_feb978b0/ --model gemini-2.0-flash
-python pipeline/geo/map_entries.py path/to/entries.csv --output-dir output/
-python pipeline/geo/map_entries.py output/green_book_1947_xxx/ \
-    --model gemini-2.0-flash \
-    --viewer-url https://hadro.github.io/green-book-iiif-test \
-    --manifest-url https://hadro.github.io/green-book-iiif-test/manifest.json
-```
-
-#### `pipeline/iiif/export_annotations.py` — IIIF Annotation Pages export
-Converts `*_{model}_aligned.json` files to W3C Annotation Pages (JSON-LD), the
-standard format for overlaying transcription text on IIIF images in viewers like
-Mirador, Universal Viewer, and Clover.
-
-Produces two annotation files per page:
-- `*_{model}_annotations.json` — line-level transcription (`motivation: supplementing`),
-  one annotation per aligned line with the Gemini-corrected text as the body and the
-  IIIF `#xywh=` canvas fragment as the target
-- `*_{model}_entry_annotations.json` — entry-level structured data
-  (`motivation: describing`) when `*_{model}_entries.json` sidecars are present;
-  body is `name — address, city, state` as plain text
-
-Annotation pages are valid without server-hosted IDs (omit `--base-url` for
-self-contained local files). Add `--base-url` to embed persistent URIs so viewers
-can reload annotations from a known endpoint.
-
-```bash
-python pipeline/iiif/export_annotations.py output/green_book_1940_feb978b0/uuid/
-python pipeline/iiif/export_annotations.py output/green_book_1940_feb978b0/uuid/ \
-    --base-url https://example.org/annotations --model gemini-2.0-flash
-python pipeline/iiif/export_annotations.py output/green_book_1940_feb978b0/uuid/ \
-    --no-entries   # line-level transcription only
-```
-
-#### `pipeline/iiif/export_entry_boxes.py` — IIIF colored bounding boxes
-Reads `*_{model}_entries.json` files and produces `*_{model}_box_annotations.json`
-— W3C Annotation Pages with colored rectangular overlays, one annotation per
-entry. Color coding matches `analysis/visualize_entries.py`:
-
-| Category | Color |
-|---|---|
-| Hotels / Motels | Blue |
-| Tourist Homes | Teal |
-| Restaurants / Bars | Red |
-| Barber / Beauty | Purple |
-| Service Stations | Amber |
-| Other / Unknown | Grey |
-
-Advertisements receive a stroke twice as thick as regular entries.
-
-Each annotation uses a simple `FragmentSelector` (`#xywh=` canvas fragment) as its
-target, which Mirador 3.3 and Universal Viewer handle most reliably. Coordinates are
-converted to natural image pixel space at export time (see *IIIF canvas coordinate
-space* under Key design decisions).
-
-With `--update-manifest`, the script also:
-1. Adds an `annotations` property to each canvas in `manifest.json` referencing its
-   box annotation page, so IIIF viewers load the colored boxes automatically on open.
-2. Corrects each canvas `width`/`height` in the manifest to the natural image
-   dimensions (fetched from the IIIF image service `info.json`), which is required
-   for Mirador to map annotation coordinates to the correct pixel positions.
-   Requires `--base-url`. Original manifest is backed up as `manifest_bak.json`.
-
-```bash
-python pipeline/iiif/export_entry_boxes.py output/green_book_1947_xxx/uuid/
-python pipeline/iiif/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \
-    --model gemini-2.0-flash
-python pipeline/iiif/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \
-    --base-url https://hadro.github.io/green-book-iiif-test/annotations \
-    --update-manifest
-```
-
-#### `pipeline/iiif/build_ranges.py` — IIIF table of contents (directory collections)
-Builds a IIIF Presentation API v3 `structures` array (Range hierarchy) from a
-geocoded entries CSV, grouping entries by State → City → Category. Each range
-node points to the first canvas where that group appears in document order.
-
-Designed for directory-style collections with `state`, `city`, and `category`
-fields. Outputs a standalone `ranges_{model}.json` that can be loaded by IIIF
-viewers, or merged directly into `manifest.json` with `--update-manifest`.
-
-```bash
-python pipeline/iiif/build_ranges.py output/green_book_1947_4bea2040/uuid/
-python pipeline/iiif/build_ranges.py output/green_book_1947_4bea2040/uuid/ \
-    --model gemini-2.0-flash --depth 2 --update-manifest \
-    --base-url https://hadro.github.io/green-book-iiif-test
-```
-
-#### `scripts/make-git-repo.sh` — GitHub Pages deployable folder
-Assembles all pipeline outputs for a single item into a self-contained folder
-suitable for GitHub Pages deployment with a self-hosted IIIF viewer.
-
-```bash
-./scripts/make-git-repo.sh <ITEM_DIR> <DEST_DIR> <GITHUB_PAGES_URL>
-# e.g.:
-./scripts/make-git-repo.sh output/green_book_1947_xxx/uuid/ \
-    ~/github/green-book-1947 \
-    https://hadro.github.io/green-book-1947
-```
-
-The script:
-- Copies and patches `manifest.json` — sets the `id` to the GitHub Pages URL
-  (required: IIIF spec requires `id` to match the served URL; mismatching causes
-  Mirador to re-fetch from the source institution and hit 403 errors)
-- Fixes LoC manifests that declare `ImageService3` for tiles that actually serve
-  IIIF Image API 2 (Mirador's ThumbnailFactory crashes on the mismatch)
-- Adds sequential labels to canvases that lack them (prevents "NaN" in thumbnail strip)
-- Copies annotation and ranges JSON files
-- Patches `map.html` title/heading from the geocoded map
-- Generates `index.html` — a Mirador 3 viewer with IIIF Content State deep-link
-  support (`?iiif-content=BASE64URL` parameter)
+See [docs/pipeline-stages.md](docs/pipeline-stages.md) for detailed documentation on each stage.
 
 ---
 
@@ -656,7 +185,7 @@ directory-pipeline/
 │   ├── download_images.py            # Download images from IIIF manifests
 │   ├── detect_spreads.py             # Spread detection
 │   ├── split_spreads.py              # Spread splitting
-│   ├── select_sample_pages.py        # Interactive browser UI for picking sample pages
+│   ├── select_pages.py        # Interactive browser UI for picking sample pages
 │   ├── generate_prompt.py        # Gemini-generated volume-specific OCR + NER prompts
 │   ├── surya_detect.py               # Surya neural column detection (preferred)
 │   ├── detect_columns.py             # Pixel-projection column detection (legacy)
@@ -697,6 +226,12 @@ directory-pipeline/
 │   ├── ner_prompt.md                 # Generic NER extraction prompt (global fallback)
 │   ├── ocr_prompt_greenbook.md       # Green Book–specific OCR prompt (reference artifact)
 │   └── ner_prompt_greenbook.md       # Green Book–specific NER prompt (reference artifact)
+│
+├── docs/                             # Reference documentation
+│   ├── pipeline-stages.md            # Detailed per-stage documentation
+│   ├── usage-examples.md             # Full usage examples by source and stage
+│   ├── key-design-decisions.md       # Technical architecture notes
+│   └── prior-work.md                 # Annotated citations of related work
 │
 ├── scripts/
 │   ├── make-git-repo.sh              # Assemble pipeline output into a GitHub Pages folder
@@ -844,298 +379,40 @@ Chandra is practical only on Colab or a machine with a CUDA GPU.
 
 ## Usage
 
-### Standard end-to-end run
-
 ```bash
-# Minimal automated path: download → OCR → CSV
+# Minimal: download → OCR → CSV
 python main.py collections.txt --to-csv
 
 # Full pipeline: also includes Surya alignment, geocoding, and map
 python main.py collections.txt --full-run
+
+# Dry run — show commands without running anything
+python main.py URL --to-csv --dry-run
 ```
 
-### Library of Congress items
-
-```bash
-# Export metadata and download images for a single LoC item
-python main.py https://www.loc.gov/item/01015253/ \
-    --loc-csv --download --gemini-ocr --model gemini-2.0-flash
-
-# Export metadata and download images for a full LoC collection
-python main.py https://www.loc.gov/collections/civil-war-maps/ \
-    --loc-csv --download --gemini-ocr --model gemini-2.0-flash
-
-# Override slug if desired
-python main.py https://www.loc.gov/item/01015253/ \
-    --loc-csv --download --slug brooklyn_directory_1852
-```
-
-### Internet Archive
-
-```bash
-# Download a single IA item
-python main.py https://archive.org/details/ldpd_11290437_000/ \
-    --ia-csv --download --gemini-ocr --model gemini-2.0-flash
-
-# Download an IA collection
-python main.py https://archive.org/details/durstoldyorklibrary \
-    --ia-csv --download --gemini-ocr --model gemini-2.0-flash
-```
-
-### NYPL collections
-
-```bash
-# Export metadata and download images
-python main.py collections.txt --nypl-csv --download
-
-# Detect and split spreads, then run OCR
-python main.py collections.txt --detect-spreads --split-spreads \
-    --surya-ocr --gemini-ocr --model gemini-2.0-flash
-
-# Run alignment and visualize results
-python main.py collections.txt --align-ocr --visualize \
-    --model gemini-2.0-flash
-
-# Interactively review and correct unmatched entries
-python pipeline/review_alignment.py output/ --model gemini-2.0-flash
-
-# Extract entries, geocode, and build a map
-python main.py collections.txt --extract-entries --geocode --map \
-    --model gemini-2.0-flash
-```
-
-### Volume-specific prompt calibration
-
-For any new collection type, generate tailored OCR and NER prompts before running OCR.
-The generated NER prompt defines whatever entry fields are appropriate for the
-document — no code changes are needed.
-
-```bash
-# Step 1: Download images
-python main.py collections.txt --nypl-csv --download
-
-# Step 2: Open the browser UI and pick 4–10 representative sample pages
-#         Click "Save to output folder" — selection.txt is written automatically.
-#         Press Ctrl+C in the terminal when done.
-python main.py collections.txt --select-pages
-
-# Step 3: Generate volume-specific prompts (Gemini analyzes the selected pages)
-python main.py collections.txt --generate-prompts
-
-# Step 4: Automated CSV run — prompts are auto-discovered
-python main.py collections.txt --to-csv
-
-# Or the full pipeline with precision upgrade, geocoding, and map:
-python main.py collections.txt --full-run
-```
-
-Or run the prompt generation standalone:
-
-```bash
-# Standalone — with explicit selection file
-python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
-    --selection output/the_travelers_guide_e088efa0/selection.txt
-
-# OCR prompt only, using explicit page filenames instead of selection.txt
-python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
-    --pages 0005_58019060.jpg 0012_58019067.jpg 0023_58019078.jpg 0041_58019096.jpg \
-    --ocr-only
-```
-
-### Any IIIF manifest
-
-```bash
-# Download a single manifest directly (no CSV needed)
-python pipeline/download_images.py \
-    --manifest https://example.org/iiif/item/manifest.json \
-    --output-dir output/my-item
-```
-
-### Other options
-
-```bash
-# Compare two Gemini models before committing to a full run
-python main.py collections.txt --compare-ocr \
-    --models gemini-2.0-flash gemini-2.5-pro
-
-# Dry run — show every command the pipeline would execute, without running anything
-python main.py https://archive.org/details/ldpd_11290437_000/ --to-csv --dry-run
-
-# Force re-processing of already-completed files
-python main.py collections.txt --align-ocr --model gemini-2.0-flash --force
-```
-
-### Running pipeline scripts directly
-
-```bash
-python pipeline/align_ocr.py output/the_negro_motorist_green_book_1940_feb978b0 \
-    --model gemini-2.0-flash --force
-
-python pipeline/extract_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
-    --model gemini-2.0-flash
-
-python pipeline/geo/geocode_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
-    --model gemini-2.0-flash
-
-python pipeline/geo/map_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
-    --model gemini-2.0-flash
-```
-
-Analysis tools can be run from the `analysis/` directory:
-
-```bash
-python analysis/visualize_alignment.py \
-    output/the_negro_motorist_green_book_1940_feb978b0 --model gemini-2.0-flash
-
-python analysis/compare_extraction.py \
-    output/the_negro_motorist_green_book_1940_feb978b0
-```
-
-### IIIF annotation export and self-hosted viewer
-
-```bash
-# Export line-level and entry-level IIIF annotation pages
-python pipeline/iiif/export_annotations.py \
-    output/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
-
-# Export colored entry bounding boxes (standalone — not in --full-run)
-python pipeline/iiif/export_entry_boxes.py \
-    output/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
-
-# Export boxes and update manifest so viewers auto-load them
-python pipeline/iiif/export_entry_boxes.py \
-    output/green_book_1947_xxx/uuid/ \
-    --base-url https://hadro.github.io/green-book-iiif-test/annotations \
-    --update-manifest
-
-# Generate map with IIIF Content State deep-links (open viewer at correct page/region)
-python pipeline/geo/map_entries.py output/green_book_1947_xxx/ \
-    --model gemini-2.0-flash \
-    --viewer-url https://hadro.github.io/green-book-iiif-test \
-    --manifest-url https://hadro.github.io/green-book-iiif-test/manifest.json
-```
+See [docs/usage-examples.md](docs/usage-examples.md) for full usage examples by source (LoC, IA, NYPL, IIIF manifest) and stage.
 
 ---
 
 ## Key design decisions
 
-**Gemini for accuracy, Surya for coordinates.** Gemini produces far more
-accurate transcriptions of historical print than conventional OCR engines, especially
-for proper nouns, abbreviations, and damaged text. Surya provides line-level bounding
-boxes that align more cleanly with Gemini's line-oriented output than Tesseract's
-word-level hOCR. Tesseract remains supported as a legacy fallback for collections
-where Surya has already been run or word-level granularity is needed.
+- **Gemini for accuracy, Surya for coordinates.** Gemini transcribes historical print far more accurately than conventional OCR; Surya provides line-level bounding boxes that anchor coordinates.
+- **Anchored Needleman-Wunsch alignment.** City/state headings that appear verbatim in both sources are committed as fixed anchors before the NW pass, preventing misalignment drift on long pages.
+- **Schema-agnostic NER.** `extract_entries.py` hard-codes nothing. The NER prompt defines all field names; CSV columns are inferred dynamically — no code changes for a new collection type.
+- **IIIF-native output.** Every aligned line and entry carries a `canvas_fragment` (`#xywh=`) URI in natural image pixel coordinates, directly consumable by IIIF viewers and annotation tools.
 
-**Anchored Needleman-Wunsch alignment.** The aligner runs a single global
-word-level NW pass (gap penalty −40, similarity 0–100 based on character edit
-distance). Before the NW pass, city/state headings and category lines that appear
-verbatim in both Gemini and Surya are committed as fixed *anchors*. The
-sequence is then split into independent segments at each anchor and each segment
-is aligned separately. This prevents misalignment drift on long pages where a
-mismatched heading would otherwise pull all subsequent entries to wrong coordinates.
-
-**Tesseract dictionary correction disabled.** By default Tesseract silently
-"corrects" street names, proper nouns, and abbreviations toward dictionary words
-(e.g. `Mound` → `Wound`, `Innesfallen` → `Innisfallen`). This is disabled via
-`load_system_dawg=0 load_freq_dawg=0` to preserve names as-written for alignment.
-
-**Column reading-order correction.** OCR engines on multi-column pages may read
-across columns (left-to-right by y position) while Gemini reads column-by-column.
-Lines are re-sorted before alignment using two strategies:
-- *Row-major:* the default; lines are grouped into 50 px y-bands and sorted
-  left-column-first within each band. Correct for pages where a centered heading
-  precedes two-column body text.
-- *Column-major:* used when lines cluster cleanly into two columns each with
-  ≥ 20% of all lines. Emits the entire left column top-to-bottom, then the entire
-  right column, matching Gemini's reading order for pages with independent
-  side-by-side city sections.
-
-Column breaks are detected in two stages: an x1-gap threshold of 8% of page width
-(stage 1), with a bimodal histogram fallback (stage 2) for pages where a
-page-number outlier in the margin creates a degenerate one-line pseudo-column.
-
-**Schema-agnostic entry extraction.** `extract_entries.py` does not hard-code
-any field names. The NER prompt (volume-specific or global fallback) defines both
-the `page_context` fields (heading values carried between pages) and the per-entry
-schema. `extract_entries.py` forwards whatever context keys the model returns to
-the next page's prompt, and infers CSV column names from the union of all keys
-returned across all pages. Adding support for a new collection type requires only
-a new `ner_prompt.md` in the output slug directory — generated automatically by
-`--generate-prompts` or written by hand. Geographic downstream stages
-(`--geocode`, `--map`, `build_ranges.py`, `export_entry_boxes.py`) expect Green
-Book-style fields (`city`, `state`, `category`, `canvas_fragment`) and degrade
-gracefully when those fields are absent.
-
-**Fallback model for dense pages.** `extract_entries.py` defaults to
-`gemini-2.5-flash-lite` (fast and cheap) but escalates to `gemini-3.1-flash-lite` for pages
-that hit the output token limit, then falls back to partial JSON recovery (salvaging
-complete entries before the truncation point) before writing an error sidecar.
-
-**Two-tier geocoding.** `geocode_entries.py` uses Google Maps (building-level
-accuracy) for entries with a street address and Nominatim city/state centroids as
-a fallback. Both are cached in `geocache.json` so repeated runs over the same data
-are instant. City-level points are jittered on the map to prevent stacking.
-
-**IIIF v2/v3 support.** `utils/iiif_utils.py` provides a single version-agnostic
-interface for walking IIIF Presentation manifests. IIIF Image API URLs work
-identically for both API versions. The downloader caps requested width at the
-service's advertised `maxWidth` to prevent upscaling artifacts on tile-pyramid
-servers.
-
-**IIIF canvas coordinate space.** IIIF manifest canvas dimensions do not
-necessarily match the actual image pixel dimensions. NYPL manifests, for example,
-declare all canvases as 2560×2560 (square) even for portrait images that are
-3316×4513. Mirador 3 maps annotation `xywh` coordinates directly to image pixel
-space regardless of the canvas dimensions in the manifest. As a result, all
-bounding boxes and `canvas_fragment` values in this pipeline are stored in
-**natural image pixel coordinates**, fetched at align time from the IIIF Image API
-`info.json`. The `canvas_width`/`canvas_height` fields in `*_aligned.json` reflect
-these natural dimensions and serve as the authoritative coordinate space for all
-downstream scripts. `export_entry_boxes.py` converts coordinates to natural pixel
-space during export, and `map_entries.py` reads canvas dimensions from
-`*_aligned.json` (not the manifest) so that IIIF `pct:` thumbnail calculations
-remain correct even after a manifest has been updated with natural canvas dims.
-
-**IIIF-native output.** The aligned JSON includes `canvas_uri` and
-`canvas_fragment` (IIIF `#xywh=` fragment) for every word and line, making the
-output directly consumable by IIIF annotation tools and viewers.
+See [docs/key-design-decisions.md](docs/key-design-decisions.md) for full technical notes.
 
 ---
 
 ## Prior work and inspirations
 
-**Greif, Griesshaber & Greif (2025) — "Multimodal LLMs for OCR, OCR Post-Correction, and Named Entity Recognition in Historical Documents"** ([arXiv:2504.00414](https://arxiv.org/abs/2504.00414)) / [pipeline](https://github.com/niclasgriesshaber/gemini_historical_dataset_pipeline) / [benchmarking code](https://github.com/niclasgriesshaber/llm_historical_dataset_benchmarking)
+- **Greif et al. (2025)** — foundational benchmark showing multimodal LLMs beat Tesseract + Transkribus on historical city directories (0.84% CER with Gemini 2.0 Flash). Directly motivates the two-stage OCR + NER architecture. ([arXiv:2504.00414](https://arxiv.org/abs/2504.00414))
+- **Bell et al. — *directoreadr* (2020)** — closest prior work; end-to-end pipeline for Polk city directories using classical CV + Tesseract. Documents the brittle year-specific heuristics this pipeline replaces. ([PLOS ONE](https://doi.org/10.1371/journal.pone.0220219))
+- **Fleischhacker et al. (2025)** — layout detection as preprocessing improves OCR accuracy by 15+ pp on multi-column historical docs. Motivates column reading-order correction in `align_ocr.py`. ([Int. J. Digital Libraries](https://doi.org/10.1007/s00799-025-00413-z))
+- **Cook et al. (2020)** — canonical prior Green Books digitization (entirely manual; OCR rejected). Source of the six-category establishment taxonomy used here. ([NBER WP 26819](https://www.nber.org/papers/w26819))
+- **Smith & Cordell (2018)** — practitioner research agenda naming layout analysis as the top barrier to historical OCR and validating NW-style sequence alignment for ground truth creation. ([NEH report](https://repository.library.northeastern.edu/files/neu:m043p093w))
+- **Carlson et al. — *EffOCR* (2023)** — OCR benchmarks on historical newspapers (Tesseract ~10.6% CER, fine-tuned TrOCR 1.3%). Establishes the noisy-input baseline for the alignment stage. ([arXiv:2304.02737](https://arxiv.org/abs/2304.02737))
+- **Wolf et al. (2020)** — machine-readable NYC directory entries 1850–1890 from NYPL digitizations. Direct precedent for applying this pipeline to city directories. ([NYU Faculty Digital Archive](https://archive.nyu.edu/handle/2451/61521))
 
-The foundational paper for this pipeline's architecture. Benchmarks multimodal LLMs against Tesseract and Transkribus on 18th–19th century German city directories, finding that feeding both the source image *and* noisy conventional OCR into a multimodal LLM produces far lower error rates than either alone (0.84% CER with Gemini 2.0 Flash). The paper directly motivates the two-stage design (Tesseract for coordinates → Gemini for accuracy), temperature 0.0, and the separation of OCR, post-correction, and NER into distinct pipeline stages.
-
-**Bell, Marlow, Wombacher et al. (2020) — *directoreadr*** ([PLOS ONE 15(8): e0220219](https://doi.org/10.1371/journal.pone.0220219)) / [code](https://github.com/brown-ccv/directoreadr)
-
-The closest prior work: an end-to-end pipeline for extracting geocoded business data from scanned Polk city directory yellow pages (Providence, RI, 1936–1990) using classical computer vision, Tesseract, fuzzy street matching, and ArcGIS geocoding. Achieves 94.4% automated page processing. Documents the brittle year-specific heuristics required for header detection and the historical street change problem that dominates geocoding failures — both of which motivate the mLLM-based approach here.
-
-**Fleischhacker, Kern & Göderle (2025) — "Enhancing OCR in historical documents with complex layouts through machine learning"** ([Int. J. Digital Libraries 26:3](https://doi.org/10.1007/s00799-025-00413-z))
-
-Demonstrates that layout detection as a preprocessing step improves OCR accuracy by over 15 percentage points on multi-column historical documents (Habsburg civil service directories). The key mechanism: without layout detection, Tesseract reads across columns rather than down them, scrambling the text. This directly motivates the column reading-order correction in `align_ocr.py` and the `detect_columns.py` / `surya_detect.py` stages.
-
-**Cook, Jones, Rosé & Logan (2020) — "The Green Books and the Geography of Segregation in Public Accommodations"** ([NBER Working Paper 26819](https://www.nber.org/papers/w26819))
-
-The canonical prior digitization of the Green Books. Establishes that the pre-mLLM state of the art was entirely manual data entry (OCR was explicitly rejected due to irregular formatting and ad placement), uses the US Census Geocoder as a national baseline (~50% exact match), and produces the canonical six-category establishment taxonomy used in the NER schema here. Also documents the cross-year identity matching problem and calls for city directory cross-referencing as a research next step.
-
-**Smith & Cordell (2018) — "A Research Agenda for Historical and Multilingual Optical Character Recognition"** ([Northeastern University / NEH](https://repository.library.northeastern.edu/files/neu:m043p093w))
-
-A practitioner-consensus research agenda identifying layout analysis as the top barrier to historical OCR progress and OCR post-correction as high-leverage and underinvested. Validates line-level sequence alignment for ground truth creation (the same approach as Needleman-Wunsch alignment used here) and argues that "how dirty is too dirty" is a task-specific empirical question — informing the pipeline's decision to expose confidence metrics rather than hard-filter at a fixed threshold.
-
-**Berenbaum, Deighan, Marlow et al. (2016) — *georeg*** ([arXiv:1612.00992](https://arxiv.org/abs/1612.00992)) / [code](https://bitbucket.org/brown-data-science/georeg)
-
-Predecessor to *directoreadr*, applying a morphological contour merging + k-means column clustering approach to Rhode Island manufacturing registries. Documents the cross-page context inheritance pattern (nearest heading above, including the last heading from the prior page) and the sobering finding that geocoding success compounds OCR errors, parse failures, and historical street changes — even with 99% record identification, geocoding reached only 61%.
-
-**Carlson, Bryan & Dell (2023) — *EffOCR*: "Efficient OCR for Building a Diverse Digital History"** ([arXiv:2304.02737](https://arxiv.org/abs/2304.02737)) / [code](https://github.com/dell-research-harvard/effocr)
-
-Provides the key OCR benchmarks on historical US newspapers: off-the-shelf Tesseract at ~10.6% CER, fine-tuned TrOCR at 1.3% CER. These establish both the baseline noisy-input quality for the alignment stage and the comparison target for evaluating whether mLLM post-correction is competitive with conventional fine-tuned OCR. Also documents Google Cloud Vision's failure on full-page historical newspaper scans — reinforcing the decision to use Tesseract as the noisy-input stage rather than a cloud OCR API.
-
-**HuggingFace (2025) — "Supercharge your OCR Pipelines with Open Models"** ([huggingface.co/blog/ocr-open-models](https://huggingface.co/blog/ocr-open-models))
-
-A practitioner survey of the current open-weight VLM-based OCR landscape (Nanonets-OCR2, PaddleOCR-VL, dots.ocr, OlmOCR-2, Granite-Docling, DeepSeek-OCR, Chandra, Qwen3-VL) that introduces "locality awareness" — the ability to produce corrected text paired with bounding boxes — as a first-class capability distinction. Models with grounding support (Chandra, OlmOCR-2, dots.ocr, Granite-Docling) could in principle replace the Tesseract → Needleman-Wunsch alignment pipeline with a single-pass architecture. None has been tested on degraded historical scans; Granite-Docling (258M parameters, CPU-runnable, DocTags structured output) is the most tractable starting point for empirical evaluation on Green Books pages.
-
-**Wolf, Chioh, Balogh & Spaan (2020) — "New York City Directories Extracted Persons Entries, 1850–1890"** ([NYU Faculty Digital Archive, hdl.handle.net/2451/61521](https://archive.nyu.edu/handle/2451/61521))
-
-A dataset of machine-readable entries extracted from NYPL-digitized New York City directories (Doggett's 1850–51; Trow/Wilson 1852–1890), covering names, occupations, and work and home addresses across forty annual editions. Released as 40 NDJSON files under CC-BY-SA-NC 4.0. A direct precedent for applying this pipeline to city directories: the same NYPL collections, the same structured entry types (name, occupation, address), and a concrete existence proof that machine-readable extraction at scale is achievable for this document type.
+See [docs/prior-work.md](docs/prior-work.md) for full annotated citations.

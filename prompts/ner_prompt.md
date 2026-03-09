@@ -37,6 +37,7 @@ Each entry in the `"entries"` array should contain the fields most meaningful fo
 1. Extract **every** distinct record or listing on the page.
 2. Page numbers, running headers/footers, and decorative elements are **not** entries.
 3. Headings are **not** entries — they provide context for the entries beneath them.
-4. Do **not** add or infer information not present in the source text.
-5. If a record spans a page boundary, extract what is present on the current page.
-6. Return **only** valid JSON. No markdown code fences. No explanatory text.
+4. **Heading transitions mid-page:** When a new heading appears mid-page (e.g., a new state or category name), every entry after that heading belongs to the *new* heading's context — not the prior-page context value. `prior_context` only covers entries that appear *before* the first heading change on the current page. Do not carry the old context past a visible heading boundary.
+5. Do **not** add or infer information not present in the source text.
+6. If a record spans a page boundary, extract what is present on the current page.
+7. Return **only** valid JSON. No markdown code fences. No explanatory text.

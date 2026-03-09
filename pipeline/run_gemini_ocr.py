@@ -44,6 +44,22 @@ _DITTO_INSTRUCTION = (
 _print_lock = threading.Lock()
 
 
+def _load_scope(output_root: Path) -> "set[str] | None":
+    """Return the set of filenames to process, or None (= process all).
+
+    Reads included_pages.txt from output_root or output_root.parent.
+    Returns None when no file is found (backward-compatible: process everything).
+    """
+    for d in (output_root.resolve(), output_root.resolve().parent):
+        p = d / "included_pages.txt"
+        if p.exists():
+            lines = [l.strip() for l in p.read_text(encoding="utf-8").splitlines()
+                     if l.strip() and not l.startswith("#")]
+            if lines:
+                return set(lines)
+    return None
+
+
 def _find_prompt(output_root: Path, fallback: Path) -> Path:
     """Return a volume-specific ocr_prompt.md if one exists alongside the images,
     otherwise return the global fallback.
@@ -203,6 +219,18 @@ def main() -> None:
     if not images:
         print(f"No .jpg files found under {output_root}", file=sys.stderr)
         sys.exit(0)
+
+    # Apply scope filter (included_pages.txt) if present
+    scope = _load_scope(output_root)
+    if scope is not None:
+        before = len(images)
+        images = [p for p in images if p.name in scope]
+        if not args.quiet:
+            print(
+                f"Scope filter: {len(images)} of {before} pages included"
+                f" (from included_pages.txt)",
+                file=sys.stderr,
+            )
 
     total = len(images)
     if not args.quiet:

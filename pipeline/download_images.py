@@ -103,13 +103,20 @@ def get_with_retry(
     return resp  # type: ignore[return-value]
 
 
-def _build_loc_manifest(session: requests.Session, manifest_url: str) -> "dict | None":
+def _build_loc_manifest(
+    session: requests.Session,
+    manifest_url: str,
+    item_json_path: "Path | None" = None,
+) -> "dict | None":
     """
     Build a synthetic IIIF Presentation v3 manifest from the LoC item JSON API.
 
     www.loc.gov/item/{id}/manifest.json is blocked by Cloudflare for non-browser
     clients.  The item JSON API (?fo=json) is not blocked and exposes the same
     IIIF Image API service URLs hosted on tile.loc.gov, which are also accessible.
+
+    If item_json_path is given, the raw item JSON is saved there so downstream
+    tools (e.g. the explorer) can read proper title/date/subject metadata.
 
     Returns None if the URL doesn't look like a LoC item manifest or if no
     IIIF service URLs are found in the item data.
@@ -124,6 +131,12 @@ def _build_loc_manifest(session: requests.Session, manifest_url: str) -> "dict |
         label="loc-item",
     )
     data = resp.json()
+
+    # Save raw item JSON for downstream metadata use
+    if item_json_path:
+        item_json_path.parent.mkdir(parents=True, exist_ok=True)
+        item_json_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
     items = []
     for resource in data.get("resources", []):
         for page_files in resource.get("files", []):
@@ -158,11 +171,16 @@ def _build_loc_manifest(session: requests.Session, manifest_url: str) -> "dict |
                     break  # one IIIF service per page
     if not items:
         return None
+
+    # Use the real item title in the manifest label rather than the bare item ID
+    item_info = data.get("item", {})
+    label = item_info.get("title") or item_id
+
     return {
         "@context": "http://iiif.io/api/presentation/3/context.json",
         "id": manifest_url,
         "type": "Manifest",
-        "label": {"en": [item_id]},
+        "label": {"en": [label]},
         "items": items,
     }
 
@@ -182,7 +200,8 @@ def fetch_manifest(
         if exc.response.status_code == 403:
             # LoC manifest endpoints are blocked by Cloudflare; fall back to
             # building a synthetic manifest from the item JSON API.
-            data = _build_loc_manifest(session, manifest_url)
+            item_json_path = cache_path.parent / "item.json" if cache_path else None
+            data = _build_loc_manifest(session, manifest_url, item_json_path)
             if data is None:
                 raise
         else:

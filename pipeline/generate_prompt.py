@@ -143,7 +143,10 @@ Write a prompt that specifies:
 
 4. **Extraction rules** — 4–6 rules specific to this volume: what counts as an entry, \
    what to skip (page numbers, headings, decorative elements), how continuation \
-   markers work, whether entries can span pages, etc.
+   markers work, whether entries can span pages, etc. Always include a rule about \
+   mid-page heading transitions: when a new heading appears mid-page, entries after \
+   it inherit the *new* context — not the prior-page context. The prior-page context \
+   only applies to entries before the first heading change on the current page.
 
 5. **Output format** — instruct the model to return only valid JSON with no markdown \
    code fences and no explanatory text.
@@ -257,7 +260,7 @@ def main() -> None:
     sel_group.add_argument(
         "--selection", "-s",
         metavar="FILE",
-        help="Path to selection.txt produced by select_sample_pages.py (one filename per line)",
+        help="Path to selection.txt produced by select_pages.py (one filename per line)",
     )
     sel_group.add_argument(
         "--pages", "-p",

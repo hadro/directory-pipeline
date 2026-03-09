@@ -31,7 +31,7 @@ command line:
   --geocode         pipeline/geo/geocode_entries.py    (geocode entries to lat/lon)
   --map             pipeline/geo/map_entries.py        (generate interactive HTML map)
 
-  --select-pages        pipeline/select_sample_pages.py  (interactive browser UI for picking sample pages; opens HTML in browser)
+  --select-pages        pipeline/select_pages.py  (interactive browser UI for picking sample pages and scoping entry pages; opens HTML in browser)
   --generate-prompts    pipeline/generate_prompt.py  (Gemini generates volume-specific OCR + NER prompts from sample pages)
 
   --full-run            shorthand for --download --surya-ocr --gemini-ocr --align-ocr
@@ -103,7 +103,7 @@ PIPELINE: list[tuple[str, str, str]] = [
     ("download",        "pipeline/download_images.py",         "--download"),
     ("detect_spreads",  "pipeline/detect_spreads.py",          "--detect-spreads"),
     ("split_spreads",   "pipeline/split_spreads.py",           "--split-spreads"),
-    ("select_pages",    "pipeline/select_sample_pages.py",     "--select-pages"),
+    ("select_pages",    "pipeline/select_pages.py",     "--select-pages"),
     ("generate_prompts","pipeline/generate_prompt.py",     "--generate-prompts"),
     ("surya_detect",    "pipeline/surya_detect.py",            "--surya-detect"),
     ("detect_columns",  "pipeline/detect_columns.py",          "--detect-columns"),
@@ -117,6 +117,7 @@ PIPELINE: list[tuple[str, str, str]] = [
     ("extract_entries", "pipeline/extract_entries.py",         "--extract-entries"),
     ("geocode",         "pipeline/geo/geocode_entries.py",     "--geocode"),
     ("map",             "pipeline/geo/map_entries.py",         "--map"),
+    ("explore",         "pipeline/explore_entries.py",         "--explore"),
 ]
 
 
@@ -654,6 +655,8 @@ def build_stage_args(
             a = [str(output_dir)]
             if ocr_m:
                 a += ["--aligned-model", ocr_m]
+            if getattr(parsed, "ner_prompt", None):
+                a += ["--prompt", parsed.ner_prompt]
             if getattr(parsed, "force", False):
                 a += ["--force"]
             runs.append(a)
@@ -672,6 +675,18 @@ def build_stage_args(
         return runs
 
     if stage == "map":
+        if not _require_images():
+            return None
+        model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
+        runs = []
+        for m in model_list:
+            a = [str(output_dir)]
+            if m:
+                a += ["--model", m]
+            runs.append(a)
+        return runs
+
+    if stage == "explore":
         if not _require_images():
             return None
         model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
@@ -858,6 +873,16 @@ def main() -> None:
         help="Generate interactive HTML map from geocoded entries (see --ocr-model / --models)",
     )
     stages.add_argument(
+        "--explore",
+        dest="explore",
+        action="store_true",
+        help=(
+            "Generate a self-contained interactive HTML explorer from extracted entries. "
+            "Auto-introspects the CSV schema — works for any document type. "
+            "Produces entries_{model}_explorer.html alongside the CSV."
+        ),
+    )
+    stages.add_argument(
         "--to-csv",
         dest="to_csv",
         action="store_true",
@@ -914,6 +939,18 @@ def main() -> None:
         default=argparse.SUPPRESS,
         metavar="MODEL",
         help=argparse.SUPPRESS,  # hidden alias for --ocr-model
+    )
+    opts.add_argument(
+        "--ner-prompt",
+        dest="ner_prompt",
+        default=None,
+        metavar="FILE",
+        help=(
+            "NER system prompt file for --extract-entries. "
+            "If omitted, looks for ner_prompt.md in the volume output directory, "
+            "then falls back to prompts/ner_prompt.md (generic default). "
+            "Use this to reuse the prompt from another volume in the same series."
+        ),
     )
     opts.add_argument(
         "--prompt-model",
@@ -1088,7 +1125,7 @@ def main() -> None:
 
     # Expand --to-csv into its constituent stage flags (minimal automated path)
     if args.to_csv:
-        for flag in ("download", "gemini_ocr", "extract_entries"):
+        for flag in ("download", "gemini_ocr", "extract_entries", "explore"):
             setattr(args, flag, True)
 
     # Expand --full-run into its constituent stage flags and defaults

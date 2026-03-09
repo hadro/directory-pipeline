@@ -54,10 +54,10 @@ from google import genai
 load_dotenv()
 from google.genai.types import GenerateContentConfig, Part
 
-DEFAULT_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
 # Fallback used when the primary model appears to have hit its output token limit.
 # Lite models cap output at ~8 k tokens; the fallback handles dense pages with 100+ entries.
-FALLBACK_MODEL = "gemini-3.1-flash-lite-preview"
+FALLBACK_MODEL = "gemini-2.5-flash"
 NER_PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ner_prompt.md"
 
 
@@ -81,6 +81,46 @@ def _discover_ocr_slug(output_root: Path) -> str | None:
     return None
 
 
+def _load_scope(output_root: Path) -> "set[str] | None":
+    """Return the set of image stems to process, or None (= process all).
+
+    Reads included_pages.txt from output_root or output_root.parent.
+    Returns None when no file is found (backward-compatible: process everything).
+    Stems are stored without extension so they can be matched against both
+    aligned JSON and raw .txt filenames.
+    """
+    for d in (output_root.resolve(), output_root.resolve().parent):
+        p = d / "included_pages.txt"
+        if p.exists():
+            lines = [l.strip() for l in p.read_text(encoding="utf-8").splitlines()
+                     if l.strip() and not l.startswith("#")]
+            if lines:
+                return {Path(l).stem for l in lines}
+    return None
+
+
+def _find_sibling_ner_prompts(output_root: Path) -> list[Path]:
+    """Scan directories adjacent to output_root for ner_prompt.md files.
+
+    Checks immediate siblings at output_root.parent and output_root.parent.parent
+    (to handle both slug-level and item-level layouts). Excludes output_root itself.
+    Returns up to 5 paths sorted by modification time (newest first).
+    """
+    found: list[Path] = []
+    root = output_root.resolve()
+    for search_parent in (root.parent, root.parent.parent):
+        if not search_parent.is_dir():
+            continue
+        for d in search_parent.iterdir():
+            if not d.is_dir() or d == root or d == root.parent:
+                continue
+            p = d / "ner_prompt.md"
+            if p.exists():
+                found.append(p)
+    found.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return found[:5]
+
+
 def _find_ner_prompt(output_root: Path) -> Path:
     """Return a volume-specific ner_prompt.md if one exists alongside the images,
     otherwise return the global NER_PROMPT_FILE fallback.
@@ -93,6 +133,27 @@ def _find_ner_prompt(output_root: Path) -> Path:
         if p.exists():
             return p
     return NER_PROMPT_FILE
+
+def _detect_aligned_slug(item_dir: Path) -> str | None:
+    """Scan item_dir for aligned JSON or OCR txt files and return the model slug found.
+
+    Searches for *_aligned.json first, then *.txt, extracting the model slug
+    (e.g. 'gemini-2.0-flash') from the filename suffix. Returns None if nothing
+    that looks like pipeline output is found.
+    """
+    import re
+    slug_pat = re.compile(r"_(gemini[-\w.]+)_aligned\.json$")
+    for p in sorted(item_dir.glob("*_aligned.json")):
+        m = slug_pat.search(p.name)
+        if m:
+            return m.group(1)
+    txt_pat = re.compile(r"_(gemini[-\w.]+)\.txt$")
+    for p in sorted(item_dir.glob("*.txt")):
+        m = txt_pat.search(p.name)
+        if m:
+            return m.group(1)
+    return None
+
 
 def _load_canvas_uris(item_dir: Path) -> list[str]:
     """Return canvas URIs in page order from manifest.json in item_dir.
@@ -472,6 +533,12 @@ def process_page(
     entries = result.get("entries", [])
     new_context = result.get("page_context") or prior_context
 
+    # Propagate context fields into entries that are missing them.
+    for entry in entries:
+        for key, val in prior_context.items():
+            if key not in entry and val:
+                entry[key] = val
+
     # Link canvas fragments from the aligned JSON.
     # Try known text fields first, then fall back to the first non-trivial string value.
     aligned_lines = aligned.get("lines", [])
@@ -652,13 +719,31 @@ def process_item(
     """
     slug = model_slug(model)
     aligned_slug = model_slug(aligned_model) if aligned_model else slug
+
+    scope = _load_scope(item_dir)
+
     aligned_files = sorted(item_dir.glob(f"*_{aligned_slug}_aligned.json"))
+    if scope is not None:
+        aligned_suffix = f"_{aligned_slug}_aligned.json"
+        aligned_files = [f for f in aligned_files
+                         if Path(f.name[: -len(aligned_suffix)]).stem in scope
+                         or f.name[: -len(aligned_suffix)] in scope]
     if not aligned_files:
         # Fallback: read raw Gemini text files (no bounding boxes)
+        txt_suffix = f"_{aligned_slug}"
         txt_files = sorted(item_dir.glob(f"*_{aligned_slug}.txt"))
+        canvas_uris = _load_canvas_uris(item_dir)
+        # Map page stem → manifest canvas URI by position in the full unfiltered list
+        # so scope filtering doesn't shift indices and assign wrong canvases.
+        _stem_to_canvas = {
+            f.stem[: -len(txt_suffix)]: (canvas_uris[j] if j < len(canvas_uris) else "")
+            for j, f in enumerate(txt_files)
+        }
+        if scope is not None:
+            txt_files = [f for f in txt_files
+                         if f.stem[: -len(txt_suffix)] in scope]
         if not txt_files:
             return []
-        canvas_uris = _load_canvas_uris(item_dir)
         all_entries: list[dict] = []
         context: dict = {}
         context_file = item_dir / f"extraction_context_{slug}.json"
@@ -670,7 +755,7 @@ def process_item(
         if not quiet:
             _log(f"  {item_dir.name}: {len(txt_files)} page(s) [text-only fallback], model={model}")
         for i, txt_path in enumerate(txt_files):
-            canvas_uri = canvas_uris[i] if i < len(canvas_uris) else ""
+            canvas_uri = _stem_to_canvas.get(txt_path.stem[: -len(txt_suffix)], "")
             result = process_page_txt(
                 client, txt_path, canvas_uri, model, system_prompt,
                 context, mode, force, dry_run, aligned_model,
@@ -840,19 +925,9 @@ def main() -> None:
         sys.exit(1)
 
     aligned_model = args.aligned_model
-    output_root = Path(args.output_dir)
-
-    # If --aligned-model was not given, auto-detect the OCR model slug from
-    # existing files so the user doesn't need to remember which model was used.
-    if aligned_model is None and args.model == DEFAULT_MODEL:
-        discovered = _discover_ocr_slug(output_root)
-        if discovered and discovered != model_slug(args.model):
-            aligned_model = discovered
-            if not args.quiet:
-                print(f"  Auto-detected OCR model for file lookup: {aligned_model}", file=sys.stderr)
-
     slug = model_slug(args.model)
     aligned_slug = model_slug(aligned_model) if aligned_model else slug
+    output_root = Path(args.output_dir)
 
     # NER prompt — explicit flag > volume-specific > global default
     if args.prompt:
@@ -863,8 +938,22 @@ def main() -> None:
         print(f"Error: NER prompt file not found: {prompt_path}", file=sys.stderr)
         sys.exit(1)
     system_prompt = prompt_path.read_text(encoding="utf-8")
-    if not args.quiet and prompt_path != NER_PROMPT_FILE:
-        print(f"Using volume NER prompt: {prompt_path}", file=sys.stderr)
+    if not args.quiet:
+        if prompt_path == NER_PROMPT_FILE:
+            siblings = _find_sibling_ner_prompts(output_root)
+            lines = [
+                f"WARNING: no volume-specific NER prompt found — using generic fallback: {prompt_path}",
+            ]
+            if siblings:
+                lines.append("         Found NER prompt(s) in nearby directories that may be reusable:")
+                for s in siblings:
+                    lines.append(f"           {s}")
+                lines.append(f"         Re-run with: --prompt {siblings[0]}")
+            else:
+                lines.append("         Run generate_prompt.py first for better extraction quality.")
+            print("\n".join(lines), file=sys.stderr)
+        else:
+            print(f"NER prompt: {prompt_path}", file=sys.stderr)
     if not output_root.exists():
         print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
@@ -873,16 +962,40 @@ def main() -> None:
 
     # Discover item directories: either the given dir itself (if it has aligned
     # JSONs or raw txt files directly) or its immediate subdirectories.
-    aligned_pattern = f"*_{aligned_slug}_aligned.json"
-    txt_pattern = f"*_{aligned_slug}.txt"
-    direct = list(output_root.glob(aligned_pattern)) or list(output_root.glob(txt_pattern))
-    if direct:
-        item_dirs = [output_root]
-    else:
-        item_dirs = [
+    def _find_item_dirs(slug: str) -> tuple[list[Path], str]:
+        pat_aligned = f"*_{slug}_aligned.json"
+        pat_txt = f"*_{slug}.txt"
+        direct = list(output_root.glob(pat_aligned)) or list(output_root.glob(pat_txt))
+        if direct:
+            return [output_root], slug
+        dirs = [
             d for d in sorted(output_root.iterdir())
-            if d.is_dir() and (list(d.glob(aligned_pattern)) or list(d.glob(txt_pattern)))
+            if d.is_dir() and (list(d.glob(pat_aligned)) or list(d.glob(pat_txt)))
         ]
+        return dirs, slug
+
+    item_dirs, aligned_slug = _find_item_dirs(aligned_slug)
+
+    if not item_dirs:
+        # Auto-detect: no files found for the expected slug — scan for any pipeline
+        # output files and infer the OCR model slug from their filenames.
+        detected = _detect_aligned_slug(output_root)
+        if not detected:
+            for d in sorted(output_root.iterdir()):
+                if d.is_dir():
+                    detected = _detect_aligned_slug(d)
+                    if detected:
+                        break
+        if detected and detected != aligned_slug:
+            print(
+                f"NOTE: no OCR files found for model '{aligned_slug}'.\n"
+                f"      Auto-detected OCR model '{detected}' in {output_root.name} — using that.\n"
+                f"      Pass --aligned-model {detected} to suppress this message.",
+                file=sys.stderr,
+            )
+            aligned_model = detected
+            aligned_slug = detected
+            item_dirs, aligned_slug = _find_item_dirs(aligned_slug)
 
     if not item_dirs:
         print(
