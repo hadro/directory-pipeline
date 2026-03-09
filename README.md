@@ -64,8 +64,6 @@ Two interactive calibration steps run **once per collection type/similar volumes
 > re-calibration needed. If you forget, `extract_entries.py` warns you and lists
 > any nearby candidate prompts it finds.
 
-![Page selector UI — Sample tab (left) and Scope tab (right) for trimming frontmatter](screenshots/select-pages.png)
-
 **What each automated step produces:**
 
 | Step | Output |
@@ -80,8 +78,6 @@ useful to connect back to the original source images via any number of IIIF
 viewers.  With the precision upgrade (`--surya-ocr --align-ocr`), the fragment
 gains a `#xywh=` bounding box pointing to the exact line on the page.
 
-![Interactive field-value explorer — density chart, bar charts, filterable results table, and IIIF source link](screenshots/explorer.png)
-
 ---
 
 ## Going further
@@ -95,17 +91,11 @@ python main.py URL --surya-ocr --align-ocr        # adds #xywh= coordinates to e
 python main.py URL --review-alignment              # interactive correction of unmatched lines
 ```
 
-![NW alignment visualization — green boxes are word-confidence matches; red lines are unmatched Gemini text](screenshots/alignment-viz.jpg)
-
-![Interactive alignment review UI — draw bounding boxes over unmatched entries, run Surya, accept proposed matches](screenshots/review-alignment.png)
-
 **Geocoding and mapping** — resolves and addresses present to lat/lon, builds an interactive map:
 
 ```bash
 python main.py URL --geocode --map
 ```
-
-![Interactive Leaflet map — clustered markers color-coded by category, sidebar filters, IIIF page thumbnails in popups](screenshots/map.png)
 
 **IIIF annotation export** — W3C/IIIF Annotation Pages for all entries:
 
@@ -123,6 +113,48 @@ python pipeline/iiif/export_annotations.py output/{slug}/{item_id}/
 `--full-run` is the maximal shorthand: `--download --surya-ocr --gemini-ocr
 --align-ocr --review-alignment --extract-entries --geocode --map`, with
 `--batch-size` and `--workers` defaulted to 8.
+
+---
+
+## Screenshots
+
+### Page selection (`--select-pages`)
+
+![Page selector browser UI showing the Sample and Scope tabs](screenshots/select-pages.png)
+
+*Two-tab browser UI. The **Sample** tab picks 4–10 representative pages for prompt calibration. The **Scope** tab (all pages selected by default) lets you deselect frontmatter, ads, and almanac sections so they're skipped entirely during OCR and extraction.*
+
+---
+
+### Field-value explorer (`--to-csv --explore`)
+
+![Interactive field-value explorer with density chart, bar charts, and results table](screenshots/explorer.png)
+
+*Auto-generated self-contained HTML explorer. The entries-per-page density strip at the top shows document structure at a glance. Categorical bar charts (state, city, category, etc.) are click-to-filter and update the results table live. Clicking a row shows all fields plus a IIIF thumbnail of the source page.*
+
+---
+
+### Alignment visualization (`--align-ocr --visualize`)
+
+![NW alignment output drawn on a source page scan — green bounding boxes on matched lines](screenshots/alignment-viz.jpg)
+
+*Needleman-Wunsch alignment result drawn on the source image. Green boxes are word-confidence matches between Surya OCR and Gemini text. Unmatched Gemini lines (no bounding box found) are listed in the margin in red.*
+
+---
+
+### Interactive alignment review (`--review-alignment`)
+
+![Flask alignment review UI with page sidebar, canvas, and proposed match panel](screenshots/review-alignment.png)
+
+*Flask-based review UI for fixing pages where automatic alignment left unmatched entries. Draw bounding boxes on the canvas, re-run Surya on the crop, then accept proposed Surya → Gemini pairs. Accepted matches are written back to the aligned JSON with `"confidence": "manual"`.*
+
+---
+
+### Geocoded map (`--geocode --map`)
+
+![Leaflet map with clustered markers, category sidebar, and a popup with IIIF page thumbnail](screenshots/map.png)
+
+*Self-contained Leaflet HTML map. Markers are clustered and color-coded by establishment category. The sidebar has live search, state filter, and category checkboxes. Popups include a IIIF page thumbnail fetched directly from the source institution's image server.*
 
 ---
 
