@@ -24,6 +24,7 @@ Usage:
 import argparse
 import csv
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -308,29 +309,31 @@ _HTML_TEMPLATE = """\
 *, *::before, *::after {{ box-sizing: border-box; }}
 html, body {{ margin: 0; padding: 0; height: 100%; font-family: system-ui, sans-serif; font-size: 14px; background: #f8f8f6; color: #222; }}
 a {{ color: #1a6ebd; }}
-#app {{ display: flex; height: 100vh; overflow: hidden; }}
+#app {{ display: flex; height: 100dvh; overflow: hidden; }}
 
 /* ── Sidebar ── */
 #sidebar {{ width: 240px; min-width: 200px; max-width: 300px; background: #fff; border-right: 1px solid #ddd; display: flex; flex-direction: column; overflow: hidden; }}
 #sidebar-header {{ padding: 14px 16px 10px; border-bottom: 1px solid #eee; }}
 #sidebar-header h1 {{ margin: 0 0 2px; font-size: 15px; font-weight: 700; line-height: 1.3; word-break: break-word; }}
-#sidebar-header .sub {{ font-size: 12px; color: #777; }}
+#sidebar-header .sub {{ font-size: 12px; color: #595959; }}
+#volume-wrap {{ margin-top: 10px; display: none; background: #eef3fb; border: 1px solid #5a86b8; border-radius: 5px; padding: 8px 10px; }}
+#volume-select {{ width: 100%; font-size: 12px; padding: 4px 6px; border: 1px solid #767676; border-radius: 4px; background: #fff; color: #333; cursor: pointer; }}
 #sidebar-scroll {{ overflow-y: auto; flex: 1; padding: 10px 14px 20px; }}
 
 .facet-group {{ margin-bottom: 14px; }}
 .facet-label {{ font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #555; margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center; }}
-.facet-clear {{ font-size: 11px; font-weight: 400; text-transform: none; color: #1a6ebd; cursor: pointer; letter-spacing: 0; }}
+.facet-clear {{ font-size: 11px; font-weight: 400; text-transform: none; color: #1a6ebd; cursor: pointer; letter-spacing: 0; background: none; border: none; padding: 0; }}
 .facet-item {{ display: flex; align-items: center; gap: 6px; margin-bottom: 3px; cursor: pointer; user-select: none; }}
 .facet-item input[type=checkbox] {{ accent-color: #1a6ebd; cursor: pointer; flex-shrink: 0; }}
 .facet-item .val {{ flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }}
-.facet-item .cnt {{ font-size: 11px; color: #999; flex-shrink: 0; }}
-.facet-more {{ font-size: 11px; color: #999; margin-top: 3px; cursor: pointer; }}
+.facet-item .cnt {{ font-size: 11px; color: #595959; flex-shrink: 0; }}
+.facet-more {{ font-size: 11px; color: #595959; margin-top: 3px; cursor: pointer; background: none; border: none; padding: 0; text-align: left; }}
 .facet-more:hover {{ color: #1a6ebd; }}
 
 /* ── Main panel ── */
 #main {{ flex: 1; display: flex; flex-direction: column; overflow: hidden; }}
 #toolbar {{ padding: 10px 16px; border-bottom: 1px solid #ddd; background: #fff; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
-#search {{ flex: 1; min-width: 180px; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }}
+#search {{ flex: 1; min-width: 180px; padding: 6px 10px; border: 1px solid #767676; border-radius: 4px; font-size: 13px; }}
 #count-label {{ font-size: 12px; color: #666; white-space: nowrap; }}
 #export-btn {{ padding: 5px 12px; background: #1a6ebd; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; }}
 #export-btn:hover {{ background: #155a9e; }}
@@ -340,12 +343,15 @@ a {{ color: #1a6ebd; }}
 .meta-link:hover {{ background: #e0e8ff; border-color: #1a6ebd; }}
 
 #charts-row {{ padding: 10px 16px 0; display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; border-bottom: 1px solid #eee; background: #fff; }}
+#charts-row.collapsed {{ display: none; }}
+#charts-toggle {{ padding: 4px 10px; background: none; border: 1px solid #767676; border-radius: 4px; cursor: pointer; font-size: 12px; color: #595959; white-space: nowrap; }}
+#charts-toggle:hover {{ border-color: #222; color: #222; }}
 .chart-block {{ display: flex; flex-direction: column; }}
 .chart-block h3 {{ margin: 0 0 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #555; }}
 
-#density-row {{ padding: 8px 16px 6px; border-bottom: 1px solid #eee; background: #fff; box-sizing: border-box; width: 100%; overflow-x: auto; }}
-#density-row h3 {{ margin: 0 0 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #555; }}
-#hide-empty-label {{ display: flex; align-items: center; gap: 4px; font-size: 12px; color: #555; white-space: nowrap; cursor: pointer; user-select: none; }}
+thead tr.filter-row th {{ position: sticky; top: 33px; background: #f8f8f6; padding: 3px 6px; border-bottom: 1px solid #ddd; }}
+.col-filter-input {{ width: 100%; font-size: 11px; padding: 2px 5px; border: 1px solid #767676; border-radius: 3px; box-sizing: border-box; }}
+.col-filter-input:focus {{ outline: 2px solid #1a6ebd; outline-offset: 0; border-color: #1a6ebd; }}
 
 #content {{ flex: 1; display: flex; overflow: hidden; }}
 
@@ -361,9 +367,9 @@ tbody tr:hover {{ background: #f5f8ff; }}
 tbody tr.selected {{ background: #ddeeff; }}
 td {{ padding: 6px 10px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 td.source-cell {{ text-align: center; }}
-.src-btn {{ background: #f0f0f0; border: 1px solid #ccc; border-radius: 3px; padding: 2px 7px; cursor: pointer; font-size: 11px; color: #333; white-space: nowrap; }}
-.src-btn:hover {{ background: #e0e8ff; color: #1a6ebd; border-color: #1a6ebd; }}
-#no-results {{ padding: 40px; text-align: center; color: #888; font-size: 14px; display: none; }}
+.src-btn {{ background: #f0f0f0; border: 1px solid #767676; border-radius: 3px; padding: 2px 7px; cursor: pointer; font-size: 11px; color: #333; white-space: nowrap; }}
+.src-btn:hover {{ background: #fff; color: #1a6ebd; border-color: #1a6ebd; }}
+#no-results {{ padding: 40px; text-align: center; color: #595959; font-size: 14px; display: none; }}
 
 /* ── Detail panel ── */
 #detail {{ width: 300px; min-width: 260px; max-width: 360px; background: #fff; border-left: 1px solid #ddd; overflow-y: auto; display: none; }}
@@ -376,8 +382,58 @@ td.source-cell {{ text-align: center; }}
 .df-val {{ word-break: break-word; }}
 .detail-source {{ margin-top: 12px; }}
 .detail-source a {{ font-size: 12px; }}
-#detail-close {{ float: right; background: none; border: none; font-size: 18px; cursor: pointer; color: #888; line-height: 1; margin: -4px -4px 0 0; }}
+#detail-close {{ float: right; background: none; border: none; font-size: 18px; cursor: pointer; color: #595959; line-height: 1; margin: -4px -4px 0 0; }}
 #detail-close:hover {{ color: #333; }}
+#mobile-header {{ display: none; }}
+
+/* ── Mobile (≤640 px) ───────────────────────────────────────────────────── */
+@media (max-width: 640px) {{
+  #sidebar {{
+    position: fixed; top: 0; left: 0;
+    width: 85vw; max-width: 300px; height: 100dvh;
+    z-index: 200; min-width: 0;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: 2px 0 12px rgba(0,0,0,0.18);
+  }}
+  #app.sidebar-open #sidebar {{ transform: translateX(0); }}
+  #sidebar-backdrop {{
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.35); z-index: 199;
+  }}
+  #app.sidebar-open #sidebar-backdrop {{ display: block; }}
+  #filter-btn {{
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 10px; background: none;
+    border: 1px solid #767676; border-radius: 4px;
+    cursor: pointer; font-size: 13px; color: #595959;
+    white-space: nowrap; flex-shrink: 0;
+  }}
+  #table-wrap {{ overflow-x: auto; }}
+  #detail {{
+    position: fixed; inset: 0;
+    width: 100%; max-width: 100%; min-width: 0;
+    height: 100dvh; z-index: 300;
+    overflow-y: auto; border-left: none;
+  }}
+  #detail-close {{ font-size: 24px; padding: 4px 8px; }}
+  #meta-strip {{ margin-left: 0; order: 3; width: 100%; }}
+  #mobile-header {{
+    display: block; padding: 8px 12px 6px;
+    background: #fff; border-bottom: 1px solid #eee;
+  }}
+  #mobile-title {{
+    font-size: 13px; font-weight: 700; line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }}
+  #mobile-sub {{ font-size: 11px; color: #595959; margin-bottom: 4px; }}
+  #mobile-volume-select {{
+    display: none; width: 100%; font-size: 12px;
+    padding: 4px 6px; border: 1px solid #767676; border-radius: 4px;
+    background: #fff; color: #333; margin-top: 4px;
+  }}
+  #mobile-volume-select.visible {{ display: block; }}
+}}
 </style>
 </head>
 <body>
@@ -388,6 +444,10 @@ td.source-cell {{ text-align: center; }}
   <div id="sidebar-header">
     <h1 id="doc-title"></h1>
     <div class="sub" id="doc-sub"></div>
+    <div id="volume-wrap">
+      <label for="volume-select" style="display:block;font-size:11px;color:#595959;margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">Select volume</label>
+      <select id="volume-select"></select>
+    </div>
   </div>
   <div id="sidebar-scroll">
     <div id="fill-rate-section">
@@ -398,19 +458,22 @@ td.source-cell {{ text-align: center; }}
     <div id="facet-controls"></div>
   </div>
 </div>
+<div id="sidebar-backdrop" aria-hidden="true"></div>
 
 <!-- Main -->
 <div id="main">
-  <div id="toolbar">
-    <input id="search" type="search" placeholder="Search all fields…" autocomplete="off">
-    <span id="count-label"></span>
-    <div id="meta-strip"></div>
-    <label id="hide-empty-label"><input type="checkbox" id="hide-empty"> Hide (empty)</label>
-    <button id="export-btn">Export CSV</button>
+  <div id="mobile-header">
+    <div id="mobile-title"></div>
+    <div id="mobile-sub"></div>
+    <select id="mobile-volume-select" aria-label="Select volume"></select>
   </div>
-  <div id="density-row">
-    <h3>Entries per page</h3>
-    <div id="density-chart"></div>
+  <div id="toolbar">
+    <button id="filter-btn" style="display:none" aria-label="Open filters" aria-expanded="false" aria-controls="sidebar">&#9776; Filters</button>
+    <input id="search" type="search" placeholder="Search all fields…" autocomplete="off" aria-label="Search all fields">
+    <span id="count-label" aria-live="polite" aria-atomic="true"></span>
+    <div id="meta-strip"></div>
+    <button id="charts-toggle" aria-expanded="true" aria-controls="charts-row">Hide charts ▲</button>
+    <button id="export-btn">Export CSV</button>
   </div>
   <div id="charts-row"></div>
   <div id="content">
@@ -423,9 +486,9 @@ td.source-cell {{ text-align: center; }}
     </div>
     <div id="detail">
       <div id="detail-inner">
-        <button id="detail-close">×</button>
+        <button id="detail-close" aria-label="Close detail panel">×</button>
         <h2 id="detail-title"></h2>
-        <img id="detail-thumb" style="display:none">
+        <img id="detail-thumb" alt="" style="display:none">
         <div class="detail-fields" id="detail-fields"></div>
         <div class="detail-source" id="detail-source"></div>
       </div>
@@ -435,43 +498,108 @@ td.source-cell {{ text-align: center; }}
 </div>
 
 <script>
-const ALL_ENTRIES = {entries_json};
+const ALL_INITIAL_ENTRIES = {entries_json};
+const VOLUMES     = {volumes_json};
 const FIELD_META  = {field_meta_json};
 const CANVAS_MAP  = {canvas_map_json};
 const DOC_TITLE   = {title_json};
 const DOC_META    = {doc_meta_json};
+let ALL_ENTRIES = ALL_INITIAL_ENTRIES;
 
 // ── State ──────────────────────────────────────────────────────────────────
 const facetState = {{}};   // {{fieldName: Set<value>}}
 let searchQuery = "";
 let sortCol = null;
 let sortDir = 1;  // 1 = asc, -1 = desc
-let pageFilter = null;   // canvas_id string when page density bar is clicked
 let selectedIdx = null;
-let hideEmpty = false;
+let colFilters = {{}};  // fieldName → filter string
+const showAllFacets = new Set();  // field names with expanded value list
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 document.getElementById("doc-title").textContent = DOC_META.title || DOC_TITLE;
 document.getElementById("doc-sub").textContent =
     ALL_ENTRIES.length.toLocaleString() + " entries";
+document.getElementById("mobile-title").textContent = DOC_META.title || DOC_TITLE;
+document.getElementById("mobile-sub").textContent =
+    ALL_ENTRIES.length.toLocaleString() + " entries";
 
 // Metadata strip in top-right toolbar
-(function () {{
+function renderMetaStrip(meta) {{
   const parts = [];
-  if (DOC_META.date)        parts.push(`<span class="meta-chip">${{DOC_META.date}}</span>`);
-  if (DOC_META.institution) parts.push(`<span class="meta-chip">${{DOC_META.institution}}</span>`);
-  if (DOC_META.genre)       parts.push(`<span class="meta-chip">${{DOC_META.genre}}</span>`);
-  if (DOC_META.homepage_url)
-    parts.push(`<a class="meta-chip meta-link" href="${{DOC_META.homepage_url}}" target="_blank">Item page ↗</a>`);
+  if (meta.date)         parts.push(`<span class="meta-chip">${{meta.date}}</span>`);
+  if (meta.institution)  parts.push(`<span class="meta-chip">${{meta.institution}}</span>`);
+  if (meta.genre)        parts.push(`<span class="meta-chip">${{meta.genre}}</span>`);
+  if (meta.homepage_url)
+    parts.push(`<a class="meta-chip meta-link" href="${{meta.homepage_url}}" target="_blank">Item page ↗</a>`);
   const strip = document.getElementById("meta-strip");
   if (strip) strip.innerHTML = parts.join("");
-}})();
+}}
+renderMetaStrip(DOC_META);
 
-const facetFields = FIELD_META.filter(f => f.type === "facet");
-const displayFields = FIELD_META.filter(f => f.type !== "id");
+let facetFields = FIELD_META.filter(f => f.type === "facet");
+let displayFields = FIELD_META.filter(f => f.type !== "id");
 
 // Init facet state
 facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
+
+// ── Volume selector ─────────────────────────────────────────────────────────
+(function () {{
+  const volLabels = Object.keys(VOLUMES);
+  if (volLabels.length === 0) return;
+  const wrap = document.getElementById("volume-wrap");
+  const sel  = document.getElementById("volume-select");
+  wrap.style.display = "block";
+  volLabels.forEach(label => {{
+    const opt = document.createElement("option");
+    opt.value = label;
+    opt.textContent = label + "  (" + VOLUMES[label].rows.length.toLocaleString() + ")";
+    sel.appendChild(opt);
+  }});
+  // Set h1, mobile title, and meta strip to first volume on load
+  document.getElementById("doc-title").textContent = volLabels[0];
+  document.getElementById("mobile-title").textContent = volLabels[0];
+  renderMetaStrip(VOLUMES[volLabels[0]].doc_meta || {{}});
+
+  // Build mobile volume select
+  const msel = document.getElementById("mobile-volume-select");
+  volLabels.forEach(label => {{
+    const opt = document.createElement("option");
+    opt.value = label; opt.textContent = label;
+    msel.appendChild(opt);
+  }});
+  msel.classList.add("visible");
+  msel.addEventListener("change", () => {{
+    sel.value = msel.value;
+    sel.dispatchEvent(new Event("change"));
+  }});
+
+  sel.addEventListener("change", () => {{
+    const vol = VOLUMES[sel.value];
+    ALL_ENTRIES = vol.rows;
+    facetFields = vol.field_meta.filter(f => f.type === "facet");
+    displayFields = vol.field_meta.filter(f => f.type !== "id");
+    Object.keys(facetState).forEach(k => delete facetState[k]);
+    facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
+    searchQuery = "";
+    sortCol = null;
+    sortDir = 1;
+    selectedIdx = null;
+    colFilters = {{}};
+    showAllFacets.clear();
+    document.getElementById("search").value = "";
+    document.getElementById("detail").classList.remove("open");
+    document.getElementById("doc-title").textContent = sel.value;
+    document.getElementById("doc-sub").textContent =
+      ALL_ENTRIES.length.toLocaleString() + " entries";
+    document.getElementById("mobile-title").textContent = sel.value;
+    document.getElementById("mobile-sub").textContent =
+      ALL_ENTRIES.length.toLocaleString() + " entries";
+    msel.value = sel.value;
+    renderMetaStrip(vol.doc_meta || {{}});
+    renderFillRate();
+    renderAll();
+  }});
+}})();
 
 // ── Filtering ──────────────────────────────────────────────────────────────
 function getFiltered() {{
@@ -488,11 +616,10 @@ function getFiltered() {{
       if (sel.size === 0) continue;
       if (!sel.has(row[f.name] || "")) return false;
     }}
-    // Page density filter
-    if (pageFilter !== null) {{
-      const cf = row.canvas_fragment || "";
-      const cid = cf.includes("#") ? cf.split("#")[0] : cf;
-      if (cid !== pageFilter) return false;
+    // Column header filters
+    for (const [col, val] of Object.entries(colFilters)) {{
+      if (!val) continue;
+      if (!(row[col] || "").toLowerCase().includes(val.toLowerCase())) return false;
     }}
     return true;
   }});
@@ -514,69 +641,22 @@ function canvasId(row) {{
   return cf.includes("#") ? cf.split("#")[0] : cf;
 }}
 
-// ── Page density data ──────────────────────────────────────────────────────
-function buildDensityData() {{
-  // Use CANVAS_MAP key order (= manifest / document order) for page positions.
-  // Canvases not in CANVAS_MAP fall back to encounter order past the end.
-  const canvasPagePos = {{}};
-  Object.keys(CANVAS_MAP).forEach((cid, i) => {{ canvasPagePos[cid] = i; }});
-  const cmapSize = Object.keys(CANVAS_MAP).length;
-
-  const seen = new Map();
-  ALL_ENTRIES.forEach(row => {{
-    const cid = canvasId(row);
-    if (!cid) return;
-    if (!seen.has(cid)) {{
-      const page_idx = Object.prototype.hasOwnProperty.call(canvasPagePos, cid)
-        ? canvasPagePos[cid]
-        : cmapSize + seen.size;
-      seen.set(cid, {{ cid, page_idx, total: 0, filtered: 0 }});
-    }}
-    seen.get(cid).total++;
-  }});
-  const filtered = getFiltered();
-  filtered.forEach(row => {{
-    const cid = canvasId(row);
-    if (seen.has(cid)) seen.get(cid).filtered++;
-  }});
-  return [...seen.values()].sort((a, b) => a.page_idx - b.page_idx);
-}}
-
-// ── Render: table ──────────────────────────────────────────────────────────
-function renderTable() {{
+// ── Render: table body only (preserves thead / focus) ──────────────────────
+function renderTableBody() {{
   const filtered = getFiltered();
   const sorted   = getSorted(filtered);
 
   document.getElementById("count-label").textContent =
     `${{sorted.length.toLocaleString()}} of ${{ALL_ENTRIES.length.toLocaleString()}} entries`;
 
-  // Head
-  const head = document.getElementById("table-head");
-  head.innerHTML = "";
-  const tr = document.createElement("tr");
-  displayFields.forEach(f => {{
-    const th = document.createElement("th");
-    th.textContent = f.name.replace(/_/g, " ");
-    th.dataset.col = f.name;
-    if (sortCol === f.name) th.className = sortDir > 0 ? "sorted-asc" : "sorted-desc";
-    th.addEventListener("click", () => {{
-      if (sortCol === f.name) sortDir = -sortDir;
-      else {{ sortCol = f.name; sortDir = 1; }}
-      renderTable();
-    }});
-    tr.appendChild(th);
-  }});
-  const thSrc = document.createElement("th");
-  thSrc.textContent = "Source";
-  tr.appendChild(thSrc);
-  head.appendChild(tr);
-
-  // Body
   const tbody = document.getElementById("table-body");
   tbody.innerHTML = "";
-  sorted.slice(0, 2000).forEach((row, i) => {{
+  sorted.slice(0, 2000).forEach(row => {{
     const tr = document.createElement("tr");
-    if (ALL_ENTRIES.indexOf(row) === selectedIdx) tr.classList.add("selected");
+    const isSelected = ALL_ENTRIES.indexOf(row) === selectedIdx;
+    if (isSelected) tr.classList.add("selected");
+    tr.setAttribute("tabindex", "0");
+    tr.setAttribute("aria-selected", isSelected ? "true" : "false");
     displayFields.forEach(f => {{
       const td = document.createElement("td");
       td.textContent = row[f.name] || "";
@@ -597,16 +677,95 @@ function renderTable() {{
       tdSrc.appendChild(btn);
     }}
     tr.appendChild(tdSrc);
-    tr.addEventListener("click", () => {{
+    const rowHandler = () => {{
       selectedIdx = ALL_ENTRIES.indexOf(row);
       showDetail(row);
-      renderTable();
+      renderTableBody();
+    }};
+    tr.addEventListener("click", rowHandler);
+    tr.addEventListener("keydown", e => {{
+      if (e.key === "Enter" || e.key === " ") {{ e.preventDefault(); rowHandler(); }}
     }});
     tbody.appendChild(tr);
   }});
 
   const noResults = document.getElementById("no-results");
   noResults.style.display = sorted.length === 0 ? "block" : "none";
+}}
+
+// ── Render: table head (sort row + filter row) ──────────────────────────────
+function renderTableHead() {{
+  const head = document.getElementById("table-head");
+  head.innerHTML = "";
+
+  // Sort row
+  const tr = document.createElement("tr");
+  displayFields.forEach(f => {{
+    const th = document.createElement("th");
+    th.textContent = f.name.replace(/_/g, " ");
+    th.dataset.col = f.name;
+    th.setAttribute("tabindex", "0");
+    if (sortCol === f.name) {{
+      th.className = sortDir > 0 ? "sorted-asc" : "sorted-desc";
+      th.setAttribute("aria-sort", sortDir > 0 ? "ascending" : "descending");
+    }} else {{
+      th.setAttribute("aria-sort", "none");
+    }}
+    const sortHandler = () => {{
+      if (sortCol === f.name) sortDir = -sortDir;
+      else {{ sortCol = f.name; sortDir = 1; }}
+      renderTableHead();
+      renderTableBody();
+    }};
+    th.addEventListener("click", sortHandler);
+    th.addEventListener("keydown", e => {{
+      if (e.key === "Enter" || e.key === " ") {{ e.preventDefault(); sortHandler(); }}
+    }});
+    tr.appendChild(th);
+  }});
+  const thSrc = document.createElement("th");
+  thSrc.textContent = "Source";
+  tr.appendChild(thSrc);
+  head.appendChild(tr);
+
+  // Filter row — inputs call renderTableBody only, preserving focus
+  const filterRow = document.createElement("tr");
+  filterRow.className = "filter-row";
+  displayFields.forEach(f => {{
+    const fth = document.createElement("th");
+    if (f.type === "facet" && f.top_values.length > 0) {{
+      const sel = document.createElement("select");
+      sel.className = "col-filter-input";
+      sel.setAttribute("aria-label", `Filter by ${{f.name.replace(/_/g, " ")}}`);
+      const opt0 = document.createElement("option");
+      opt0.value = ""; opt0.textContent = "(all)";
+      sel.appendChild(opt0);
+      f.top_values.forEach(([val]) => {{
+        const opt = document.createElement("option");
+        opt.value = val; opt.textContent = val || "(empty)";
+        if (colFilters[f.name] === val) opt.selected = true;
+        sel.appendChild(opt);
+      }});
+      sel.addEventListener("change", () => {{ colFilters[f.name] = sel.value; renderTableBody(); }});
+      fth.appendChild(sel);
+    }} else {{
+      const inp = document.createElement("input");
+      inp.type = "text"; inp.className = "col-filter-input"; inp.placeholder = "filter\u2026";
+      inp.setAttribute("aria-label", `Filter by ${{f.name.replace(/_/g, " ")}}`);
+      inp.value = colFilters[f.name] || "";
+      inp.addEventListener("input", () => {{ colFilters[f.name] = inp.value; renderTableBody(); }});
+      fth.appendChild(inp);
+    }}
+    filterRow.appendChild(fth);
+  }});
+  filterRow.appendChild(document.createElement("th"));  // Source column
+  head.appendChild(filterRow);
+}}
+
+// ── Render: table (head + body) ─────────────────────────────────────────────
+function renderTable() {{
+  renderTableHead();
+  renderTableBody();
 }}
 
 // ── Resolve canvas_fragment → human-browseable viewer URL ──────────────────
@@ -726,9 +885,10 @@ function renderFacetSidebar() {{
     labelText.textContent = f.name.replace(/_/g, " ");
     lbl.appendChild(labelText);
     if (facetState[f.name].size > 0) {{
-      const clr = document.createElement("span");
+      const clr = document.createElement("button");
       clr.className = "facet-clear";
       clr.textContent = "clear";
+      clr.setAttribute("aria-label", `Clear ${{f.name.replace(/_/g, " ")}} filter`);
       clr.addEventListener("click", () => {{
         facetState[f.name].clear();
         renderAll();
@@ -737,10 +897,9 @@ function renderFacetSidebar() {{
     }}
     grp.appendChild(lbl);
 
-    const showAll = grp.dataset.showAll === "true";
+    const showAll = showAllFacets.has(f.name);
     const topN = showAll ? f.top_values.length : Math.min(10, f.top_values.length);
     f.top_values.slice(0, topN).forEach(([val, cnt]) => {{
-      if (hideEmpty && !val) return;
       const item = document.createElement("label");
       item.className = "facet-item";
       const cb = document.createElement("input");
@@ -765,11 +924,12 @@ function renderFacetSidebar() {{
     }});
 
     if (!showAll && f.top_values.length > 10) {{
-      const more = document.createElement("div");
+      const more = document.createElement("button");
       more.className = "facet-more";
       more.textContent = `+ ${{f.top_values.length - 10}} more…`;
+      more.setAttribute("aria-label", `Show ${{f.top_values.length - 10}} more ${{f.name.replace(/_/g, " ")}} values`);
       more.addEventListener("click", () => {{
-        grp.dataset.showAll = "true";
+        showAllFacets.add(f.name);
         renderFacetSidebar();
       }});
       grp.appendChild(more);
@@ -797,6 +957,12 @@ function renderFillRate() {{
         fill: d => d.fill >= 0.8 ? "#59a14f" : d.fill >= 0.4 ? "#f28e2b" : "#e15759",
         sort: {{ y: "x", reverse: true }}
       }}),
+      Plot.text(data, {{
+        x: "fill", y: "name",
+        text: d => (d.fill * 100).toFixed(0) + "%",
+        dx: 4, frameAnchor: "left",
+        fontSize: 9, fill: "#444",
+      }}),
       Plot.ruleX([0]),
     ],
     style: {{ fontSize: "11px" }},
@@ -817,7 +983,6 @@ function renderCharts() {{
     const counts = {{}};
     filtered.forEach(r => {{
       const v = r[f.name] || "(empty)";
-      if (hideEmpty && v === "(empty)") return;
       counts[v] = (counts[v] || 0) + 1;
     }});
     const data = Object.entries(counts)
@@ -870,58 +1035,23 @@ function renderCharts() {{
       renderAll();
     }});
 
+    // Make bars keyboard-accessible
+    plot.querySelectorAll("rect").forEach(rect => {{
+      const titleEl = rect.querySelector("title");
+      if (!titleEl) return;
+      rect.setAttribute("tabindex", "0");
+      rect.setAttribute("role", "button");
+      rect.setAttribute("aria-label", titleEl.textContent);
+      rect.addEventListener("keydown", e => {{
+        if (e.key === "Enter" || e.key === " ") {{
+          e.preventDefault();
+          rect.dispatchEvent(new MouseEvent("click", {{ bubbles: true }}));
+        }}
+      }});
+    }});
     block.appendChild(plot);
     row.appendChild(block);
   }});
-}}
-
-// ── Render: page density strip ─────────────────────────────────────────────
-function renderDensity() {{
-  const el = document.getElementById("density-chart");
-  const data = buildDensityData();
-  if (data.length === 0) {{ el.innerHTML = ""; return; }}
-
-  const totalPages = Object.keys(CANVAS_MAP).length || data.length;
-  const containerWidth = (el.parentElement && el.parentElement.clientWidth > 0)
-    ? el.parentElement.clientWidth - 32  // subtract density-row padding
-    : 800;
-  const chartWidth = Math.max(containerWidth, totalPages * 12);
-  const ticks = Math.min(totalPages, Math.floor(chartWidth / 55));
-  const plot = Plot.plot({{
-    width: chartWidth,
-    height: 60,
-    marginLeft: 0, marginRight: 0, marginTop: 2, marginBottom: 32,
-    x: {{ label: null, tickSize: 0, ticks, tickRotate: -45,
-          tickFormat: d => Number.isInteger(d) ? String(Math.round(d) + 1) : "" }},
-    y: {{ label: null, axis: null }},
-    marks: [
-      Plot.barY(data, {{
-        x: "page_idx",
-        y: "filtered",
-        fill: d => pageFilter === d.cid ? "#1a6ebd" : "#aac4e6",
-        title: d => `Page ${{d.page_idx + 1}}: ${{d.filtered}} of ${{d.total}} entries`,
-      }}),
-      Plot.ruleY([0]),
-    ],
-    style: {{ fontSize: "11px", cursor: "pointer", overflow: "visible" }},
-  }});
-
-  plot.addEventListener("click", e => {{
-    const rect = e.target.closest("rect");
-    if (!rect) return;
-    const titleEl = rect.querySelector("title");
-    const title = titleEl ? titleEl.textContent : "";
-    const pageIdx = parseInt((title.match(/Page (\\d+)/) || [])[1]) - 1;
-    if (isNaN(pageIdx)) return;
-    const item = data.find(d => d.page_idx === pageIdx);
-    if (!item) return;
-    if (pageFilter === item.cid) pageFilter = null;
-    else pageFilter = item.cid;
-    renderAll();
-  }});
-
-  el.innerHTML = "";
-  el.appendChild(plot);
 }}
 
 // ── Export CSV ─────────────────────────────────────────────────────────────
@@ -939,11 +1069,28 @@ document.getElementById("export-btn").addEventListener("click", () => {{
   a.click();
 }});
 
-// ── Hide-empty toggle ──────────────────────────────────────────────────────
-document.getElementById("hide-empty").addEventListener("change", e => {{
-  hideEmpty = e.target.checked;
-  renderAll();
+// ── Charts toggle ──────────────────────────────────────────────────────────
+document.getElementById("charts-toggle").addEventListener("click", () => {{
+  const row = document.getElementById("charts-row");
+  const btn = document.getElementById("charts-toggle");
+  const collapsed = row.classList.toggle("collapsed");
+  btn.textContent = collapsed ? "Show charts ▼" : "Hide charts ▲";
+  btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
 }});
+
+// ── Mobile sidebar toggle ──────────────────────────────────────────────────
+(function () {{
+  const filterBtn = document.getElementById("filter-btn");
+  const backdrop  = document.getElementById("sidebar-backdrop");
+  const app       = document.getElementById("app");
+  function openSidebar()  {{ app.classList.add("sidebar-open");    filterBtn.setAttribute("aria-expanded", "true");  }}
+  function closeSidebar() {{ app.classList.remove("sidebar-open"); filterBtn.setAttribute("aria-expanded", "false"); }}
+  filterBtn.addEventListener("click", () => app.classList.contains("sidebar-open") ? closeSidebar() : openSidebar());
+  backdrop.addEventListener("click", closeSidebar);
+  document.getElementById("facet-controls").addEventListener("change", () => {{
+    if (window.innerWidth <= 640) closeSidebar();
+  }});
+}})();
 
 // ── Search input ───────────────────────────────────────────────────────────
 let searchTimer;
@@ -959,11 +1106,16 @@ document.getElementById("search").addEventListener("input", e => {{
 function renderAll() {{
   renderFacetSidebar();
   renderCharts();
-  renderDensity();
   renderTable();
 }}
 
 renderFillRate();
+if (window.innerWidth <= 640) {{
+  document.getElementById("charts-row").classList.add("collapsed");
+  const _ctBtn = document.getElementById("charts-toggle");
+  _ctBtn.textContent = "Show charts \u25BC";
+  _ctBtn.setAttribute("aria-expanded", "false");
+}}
 renderAll();
 </script>
 </body>
@@ -1058,18 +1210,19 @@ def build_html(
     canvas_map: dict,
     title: str,
     doc_meta: dict | None = None,
+    volumes: dict[str, list[dict]] | None = None,
 ) -> str:
-    # Slim down rows: drop id-type fields from the embedded JSON to save size
-    id_fields = {f["name"] for f in field_meta if f["type"] == "id"}
-    slim_rows = [{k: v for k, v in r.items()} for r in rows]  # keep all for JS lookup
-
     return _HTML_TEMPLATE.format(
-        entries_json     = _safe_json(slim_rows),
+        entries_json     = _safe_json(list(rows)),
         field_meta_json  = _safe_json(field_meta),
         canvas_map_json  = _safe_json(canvas_map),
         title_json       = _safe_json(title),
         title_json_safe  = title.replace('"', '&quot;'),
         doc_meta_json    = _safe_json(doc_meta or {}),
+        volumes_json     = _safe_json(
+            {k: {"rows": list(v["rows"]), "field_meta": v["field_meta"], "doc_meta": v.get("doc_meta", {})}
+             for k, v in (volumes or {}).items()}
+        ),
     )
 
 
@@ -1130,30 +1283,83 @@ def main() -> None:
                 break
 
     slug = args.model.replace("/", "_") if args.model else None
-    csv_path = _find_csv(Path(args.source), slug)
-    out_path = Path(args.out) if args.out else csv_path.with_name(
-        csv_path.stem + "_explorer.html"
-    )
 
-    with csv_path.open(encoding="utf-8", newline="") as fh:
-        rows = list(csv.DictReader(fh))
+    # Find all matching CSVs — a collection run produces one per item subdirectory.
+    src = Path(args.source)
+    if src.is_file():
+        all_csvs = [src]
+    elif slug:
+        all_csvs = sorted(src.rglob(f"entries_{slug}.csv"))
+    else:
+        all_csvs = [h for h in sorted(src.rglob("entries_*.csv"))
+                    if "_geocoded" not in h.name and "_explorer" not in h.name]
+    if not all_csvs:
+        print(
+            f"No entries_*.csv found under {src}. Run --extract-entries first.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    csv_path = all_csvs[0]  # used for title/meta fallback
+    collection_mode = len(all_csvs) > 1
+
+    # For a collection, write the explorer one level up (the slug directory),
+    # not inside an individual item subdirectory.
+    if args.out:
+        out_path = Path(args.out)
+    elif collection_mode:
+        common_dir = Path(os.path.commonpath([str(c.parent) for c in all_csvs]))
+        out_path = common_dir / f"entries_{slug or 'all'}_explorer.html"
+    else:
+        out_path = csv_path.with_name(csv_path.stem + "_explorer.html")
+
+    # Build per-volume data; each entry carries its own rows + field_meta so the
+    # explorer can show correct facets and column sets when switching volumes.
+    volumes: dict[str, dict] = {}
+    for p in all_csvs:
+        with p.open(encoding="utf-8", newline="") as fh:
+            vol_rows = list(csv.DictReader(fh))
+        if collection_mode:
+            item_dir = p.parent
+            meta = _find_item_meta(item_dir)
+            label: str = meta.get("title") or item_dir.name
+            if label in volumes:
+                label = f"{label} ({item_dir.name})"
+            volumes[label] = {"rows": vol_rows, "field_meta": _classify_fields(vol_rows), "doc_meta": meta}
+        else:
+            volumes[p.stem] = {"rows": vol_rows, "field_meta": _classify_fields(vol_rows)}
+
+    if collection_mode:
+        volumes = dict(sorted(volumes.items(), key=lambda x: x[0].lower()))
+
+    first_vol = next(iter(volumes.values()))
+    rows = first_vol["rows"]
+    field_meta = first_vol["field_meta"]
+    all_rows = [r for vol in volumes.values() for r in vol["rows"]]
 
     if not args.quiet:
-        print(f"Loaded {len(rows)} entries from {csv_path.name}", file=sys.stderr)
+        if collection_mode:
+            print(
+                f"Loaded {len(all_rows)} entries across {len(all_csvs)} volumes",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Loaded {len(rows)} entries from {csv_path.name}", file=sys.stderr)
 
-    field_meta = _classify_fields(rows)
-
-    # Derive title from path
+    # Derive title from path — for a collection use the slug directory name
     title = args.title
     if not title:
-        for part in reversed(csv_path.parts):
+        title_root = out_path.parent if collection_mode else csv_path
+        for part in reversed(title_root.parts):
             if part not in ("output", ".") and not part.endswith(".csv"):
                 title = part.replace("_", " ").strip()
                 break
         title = title or csv_path.stem
 
-    # Build IIIF canvas map for thumbnails
-    output_root = Path(args.output_dir) if args.output_dir else csv_path.parent
+    # Build IIIF canvas map for thumbnails — search from the slug dir for collections
+    output_root = Path(args.output_dir) if args.output_dir else (
+        out_path.parent if collection_mode else csv_path.parent
+    )
     canvas_map: dict = {}
     doc_meta: dict = {}
     if output_root.is_dir():
@@ -1175,7 +1381,8 @@ def main() -> None:
     if doc_meta.get("title") and _looks_like_id(title):
         title = doc_meta["title"]
 
-    html = build_html(rows, field_meta, canvas_map, title, doc_meta)
+    html = build_html(rows, field_meta, canvas_map, title, doc_meta,
+                      volumes=volumes if collection_mode else None)
     out_path.write_text(html, encoding="utf-8")
     if not args.quiet:
         print(f"Explorer written to {out_path}", file=sys.stderr)

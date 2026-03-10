@@ -135,7 +135,8 @@ Write a prompt that specifies:
    represents. Define the `page_context` fields: the heading values that must be \
    tracked and carried between pages. Use field names that match the actual content \
    (e.g. `state`/`city`/`category` for a place directory; `insect_type`/`chapter` \
-   for a natural history volume; whatever fits this document).
+   for a natural history volume; whatever fits this document). If headings continue \
+   across pages (e.g., "OHIO-continued") try to normalize these to their regular form.\
 
 3. **Entry schema** — the specific fields each entry should contain, named to match \
    the actual content. Choose field names that are clear and meaningful for this \
