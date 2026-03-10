@@ -56,13 +56,13 @@ Two interactive calibration steps run **once per collection type/similar volumes
 | `--select-pages` | Browser UI — pick 4–10 representative pages | `selection.txt` |
 | `--generate-prompts` | Gemini analyzes sample pages and writes tailored prompts | `ocr_prompt.md`, `ner_prompt.md` |
 
-> **Calibrate once, run many.** `--select-pages` and `--generate-prompts` prompt
-> the model with the vocabulary of a specific document: field names, abbreviations,
-> column structure, city/state heading conventions. Run them once for a new series.
-> Generated prompts are saved to `output/{slug}/`. For additional volumes in the same
-> series, pass `--ner-prompt output/{first-slug}/ner_prompt.md` to reuse it — no
-> re-calibration needed. If you forget, `extract_entries.py` warns you and lists
-> any nearby candidate prompts it finds.
+**Calibrate once, run many.** `--select-pages` and `--generate-prompts` prompt
+the model with the vocabulary of a specific document: field names, abbreviations,
+column structure, city/state heading conventions. Run them once for a new series.
+Generated prompts are saved to `output/{slug}/`. For additional volumes in the same
+series, pass `--ner-prompt output/{first-slug}/ner_prompt.md` to reuse it — no
+re-calibration needed. If you forget, `extract_entries.py` warns you and lists
+any nearby candidate prompts it finds.
 
 **What each automated step produces:**
 
@@ -243,9 +243,7 @@ directory-pipeline/
 │   ├── compare_ocr.py                # Side-by-side OCR model comparison
 │   ├── visualize_alignment.py        # Draw alignment boxes on images → *_viz.jpg
 │   ├── compare_extraction.py         # Compare entry extraction across models
-│   ├── visualize_entries.py          # Draw entry bounding boxes on images
-│   ├── chandra_eval.py               # Evaluate Chandra OCR model on collection pages
-│   └── surya_eval.py                 # Evaluate Surya OCR model accuracy
+│   └── visualize_entries.py          # Draw entry bounding boxes on images
 │
 ├── old/                              # Legacy and superseded scripts
 │   └── run_ocr.py                    # Tesseract OCR — word-level hOCR (use --surya-ocr instead)
@@ -256,8 +254,6 @@ directory-pipeline/
 ├── prompts/                          # Gemini system prompts
 │   ├── ocr_prompt.md                 # Generic OCR transcription prompt (global fallback)
 │   ├── ner_prompt.md                 # Generic NER extraction prompt (global fallback)
-│   ├── ocr_prompt_greenbook.md       # Green Book–specific OCR prompt (reference artifact)
-│   └── ner_prompt_greenbook.md       # Green Book–specific NER prompt (reference artifact)
 │
 ├── docs/                             # Reference documentation
 │   ├── pipeline-stages.md            # Detailed per-stage documentation
@@ -265,9 +261,6 @@ directory-pipeline/
 │   ├── key-design-decisions.md       # Technical architecture notes
 │   └── prior-work.md                 # Annotated citations of related work
 │
-├── scripts/
-│   ├── make-git-repo.sh              # Assemble pipeline output into a GitHub Pages folder
-│   └── colab.sh                      # Example commands for Google Colab runs
 ├── pyproject.toml                    # Python project config and dependencies
 └── output/
     └── {slug}/                       # e.g. the_negro_motorist_green_book_1947_4bea2040/
@@ -343,30 +336,32 @@ Two cost categories: **API charges** (variable; applies on any platform) and
 `--gemini-ocr` and `--extract-entries` both call the Gemini API. Pricing as of
 early 2026 (verify current rates at [ai.google.dev/pricing](https://ai.google.dev/pricing)):
 
-| Model | Input | Output |
-|---|---|---|
-| `gemini-2.0-flash` (default) | $0.10 / 1M tokens | $0.40 / 1M tokens |
-| `gemini-2.5-flash` (dense-page fallback) | $0.30 / 1M tokens | $2.50 / 1M tokens |
+| Stage | Model (default) | Input | Output |
+|---|---|---|---|
+| `--gemini-ocr` | `gemini-2.0-flash` | $0.10 / 1M tokens | $0.40 / 1M tokens |
+| `--extract-entries` | `gemini-3.1-flash-lite-preview` | $0.25 / 1M tokens | $1.50 / 1M tokens |
+| fallback (dense pages) | `gemini-2.5-flash` | $0.30 / 1M tokens | $2.50 / 1M tokens |
 
 A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens
-for OCR, and another ~10,000 input / 2,000 output tokens for NER entry
-extraction — about **$0.002–$0.003 per page** combined using `gemini-2.0-flash`.
+for OCR (`gemini-2.0-flash`, ~$0.0006/page), and another ~10,000 input / 2,000
+output tokens for NER entry extraction (`gemini-3.1-flash-lite-preview`,
+~$0.0055/page) — about **$0.006 per page** combined.
 Dense pages that exceed the output token limit automatically retry with
 `gemini-2.5-flash`, but this affects fewer than 5% of pages in practice.
 
 `--generate-prompts` (`generate_prompt.py`) makes 2 Gemini calls (one for the
 OCR prompt, one for the NER prompt) with 4–8 sample images each. This is a one-time
 per-volume cost of roughly **$0.01–$0.05 total**, negligible compared to the full
-run. `gemini-2.5-flash-preview` is used by default for prompt generation because
+run. `gemini-3-flash-preview` is used by default for prompt generation because
 it produces higher-quality meta-prompts; you can override with `--model`.
 
 **Rough collection estimates:**
 
-| Collection | Pages | Gemini cost (OCR + NER) | Prompt generation |
-|---|---|---|---|
-| One Green Book volume | ~100 pages | ~$0.20–$0.30 | ~$0.02 (one-time) |
-| Full Green Books corpus (14 volumes) | ~1,400 pages | ~$3–$5 | ~$0.28 (one-time per volume) |
-| Large city directory (500+ pages) | 500 pages | ~$1–$1.50 | ~$0.02 (one-time) |
+| Collection | Pages | OCR (`gemini-2.0-flash`) | NER (`gemini-3.1-flash-lite-preview`) | Total | Prompt generation |
+|---|---|---|---|---|---|
+| One Green Book volume | ~100 pages | ~$0.06 | ~$0.55 | ~$0.61 total | ~$0.02 (one-time) |
+| Full Green Books corpus (14 volumes) | ~1,400 pages | ~$0.84 | ~$7.70 | ~$8.54 total | ~$0.02 (one-time per volume) |
+| Large city directory (500+ pages) | 500 pages | ~$0.30 | ~$2.75 | ~$3.05 total | ~$0.02 (one-time) |
 
 **Free tier:** The Gemini API free tier (no billing required) covers both
 models at no charge, subject to rate limits of 15 requests/minute and

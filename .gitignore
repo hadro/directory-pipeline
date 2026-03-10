@@ -6,6 +6,7 @@ colab.sh
 spacetime/*
 collection_csv/*
 scripts/*
+docs/item_ideas.md
 
 # tmp files
 .tmp*
