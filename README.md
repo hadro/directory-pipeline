@@ -1,6 +1,6 @@
 # directory-pipeline
 
-Give it a URL or IIIF manifest from the [Library of Congress](https://www.loc.gov/collections/), the [Internet Archive](https://archive.org/), or [NYPL Digital Collections](https://digitalcollections.nypl.org/), — it returns a structured CSV of every
+Give it a URL or IIIF manifest from the [Library of Congress](https://www.loc.gov/collections/), the [Internet Archive](https://archive.org/), or [NYPL Digital Collections](https://digitalcollections.nypl.org/) — it returns a structured CSV of every
 entry in that digitized historical directory. It extracts things like name, address, city, state, category, and also always includes a column linking each row back to the exact page in the source scan. If IIIF enrichment is done, it links directly to the specific entry!
 
 No manual transcription or ground truth required to get started. No custom code per collection needed.

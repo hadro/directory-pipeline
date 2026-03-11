@@ -1262,7 +1262,8 @@ def main() -> None:
     )
     parser.add_argument(
         "source",
-        help="Path to an entries CSV, or a directory containing one.",
+        nargs="+",
+        help="One or more paths to entries CSVs or directories containing them.",
     )
     parser.add_argument(
         "--model", "-m",
@@ -1295,31 +1296,46 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Auto-detect model slug
+    sources = [Path(s) for s in args.source]
+
+    # Auto-detect model slug from the first source that has a matching CSV.
     if args.model is None:
-        src = Path(args.source)
-        candidates = [h for h in sorted((src.rglob("entries_*.csv") if src.is_dir() else [src]))
-                      if "_geocoded" not in h.name and "_explorer" not in h.name]
-        for c in candidates:
-            m = re.match(r"entries_(.+)\.csv", c.name)
-            if m:
-                args.model = m.group(1)
+        for src in sources:
+            candidates = [h for h in sorted((src.rglob("entries_*.csv") if src.is_dir() else [src]))
+                          if "_geocoded" not in h.name and "_explorer" not in h.name]
+            for c in candidates:
+                m = re.match(r"entries_(.+)\.csv", c.name)
+                if m:
+                    args.model = m.group(1)
+                    break
+            if args.model:
                 break
 
     slug = args.model.replace("/", "_") if args.model else None
 
-    # Find all matching CSVs — a collection run produces one per item subdirectory.
-    src = Path(args.source)
-    if src.is_file():
-        all_csvs = [src]
-    elif slug:
-        all_csvs = sorted(src.rglob(f"entries_{slug}.csv"))
-    else:
-        all_csvs = [h for h in sorted(src.rglob("entries_*.csv"))
+    # Find all matching CSVs across all sources.
+    def _find_csvs(src: Path) -> list[Path]:
+        if src.is_file():
+            return [src]
+        elif slug:
+            return sorted(src.rglob(f"entries_{slug}.csv"))
+        else:
+            return [h for h in sorted(src.rglob("entries_*.csv"))
                     if "_geocoded" not in h.name and "_explorer" not in h.name]
+
+    all_csvs = []
+    seen = set()
+    for src in sources:
+        for p in _find_csvs(src):
+            if p.resolve() not in seen:
+                seen.add(p.resolve())
+                all_csvs.append(p)
+    all_csvs.sort(key=lambda p: str(p))
+
     if not all_csvs:
         print(
-            f"No entries_*.csv found under {src}. Run --extract-entries first.",
+            f"No entries_*.csv found in: {', '.join(str(s) for s in sources)}. "
+            "Run --extract-entries first.",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -1380,26 +1396,37 @@ def main() -> None:
                 break
         title = title or csv_path.stem
 
-    # Build IIIF canvas map for thumbnails — search from the slug dir for collections
-    output_root = Path(args.output_dir) if args.output_dir else (
-        out_path.parent if collection_mode else csv_path.parent
-    )
+    # Build IIIF canvas map for thumbnails — for multi-source collections, scan
+    # each CSV's parent directory so manifests from all sources are found.
     canvas_map: dict = {}
     doc_meta: dict = {}
-    if output_root.is_dir():
-        canvas_map = _build_canvas_thumb_map(output_root)
-        doc_meta = _find_item_meta(output_root)
-        if canvas_map and not args.quiet:
-            print(
-                f"IIIF: loaded {len(canvas_map)} canvas→service mappings",
-                file=sys.stderr,
-            )
-        elif not canvas_map and not args.quiet:
-            print(
-                "IIIF: no manifests found — thumbnails disabled. "
-                "Pass --output-dir to specify the images directory.",
-                file=sys.stderr,
-            )
+    if args.output_dir:
+        output_root = Path(args.output_dir)
+        if output_root.is_dir():
+            canvas_map = _build_canvas_thumb_map(output_root)
+            doc_meta = _find_item_meta(output_root)
+    elif len(sources) > 1:
+        # Multi-source: scan each CSV's parent dir individually and merge.
+        for p in all_csvs:
+            canvas_map.update(_build_canvas_thumb_map(p.parent))
+        if not doc_meta:
+            doc_meta = _find_item_meta(all_csvs[0].parent)
+    else:
+        output_root = out_path.parent if collection_mode else csv_path.parent
+        if output_root.is_dir():
+            canvas_map = _build_canvas_thumb_map(output_root)
+            doc_meta = _find_item_meta(output_root)
+    if canvas_map and not args.quiet:
+        print(
+            f"IIIF: loaded {len(canvas_map)} canvas→service mappings",
+            file=sys.stderr,
+        )
+    elif not canvas_map and not args.quiet:
+        print(
+            "IIIF: no manifests found — thumbnails disabled. "
+            "Pass --output-dir to specify the images directory.",
+            file=sys.stderr,
+        )
 
     # Use manifest title when the path-derived title looks like a bare identifier
     if doc_meta.get("title") and _looks_like_id(title):

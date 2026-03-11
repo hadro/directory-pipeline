@@ -434,6 +434,19 @@ def main() -> None:
                 per_page=args.per_page,
                 verbose=not args.quiet,
             )
+            if total == 0:
+                # The UUID may be an item UUID, not a collection — try item mode.
+                if not args.quiet:
+                    print(
+                        "  Collection returned 0 items; retrying as single item…",
+                        file=sys.stderr,
+                    )
+                total = process_single_item(
+                    client,
+                    target_uuid,
+                    writer,
+                    verbose=not args.quiet,
+                )
         if not args.quiet:
             dest = out_path if args.output != "-" else "stdout"
             print(f"\nWrote {total} row(s) to {dest}.", file=sys.stderr)
