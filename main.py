@@ -161,6 +161,37 @@ def is_ia_url(text: str) -> bool:
     return "archive.org" in text
 
 
+def _resource_url_to_item_url(resource_url: str) -> str:
+    """Convert a LoC /resource/ URL to its canonical /item/ URL via the JSON API.
+
+    https://www.loc.gov/resource/rbc0001.2026batch96169559/?sp=74
+        → https://www.loc.gov/item/rbc0001.2026batch96169559/
+
+    The resource JSON response includes a 'related_items' or 'item' field that
+    points back to the catalog item.  Falls back to substituting /resource/ with
+    /item/ in the URL path, which works for many LoC identifiers.
+    """
+    if "/resource/" not in resource_url:
+        return resource_url
+    # Strip ?sp= page parameter before querying the API
+    base = re.sub(r"\?.*", "", resource_url).rstrip("/")
+    try:
+        resp = requests.get(f"{base}?fo=json", timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        # The JSON 'item' key usually contains a dict with an 'id' or 'link' field
+        item = data.get("item") or {}
+        link = item.get("id") or item.get("link") or ""
+        if link and "/item/" in link:
+            # Normalise to https and strip trailing query/fragment
+            link = re.sub(r"^http:", "https:", link.split("?")[0].split("#")[0])
+            return link.rstrip("/") + "/"
+    except Exception:  # noqa: BLE001
+        pass
+    # Fallback: swap /resource/ → /item/ in the path
+    return re.sub(r"/resource/", "/item/", resource_url.split("?")[0]).rstrip("/") + "/"
+
+
 def _fetch_loc_title(item_id: str) -> str:
     """Best-effort fetch of a LoC item title from the public JSON API."""
     try:
@@ -206,7 +237,7 @@ def loc_slug(url: str) -> str:
     m = re.search(r"/collections/([^/?#]+)", url)
     if m:
         return m.group(1).rstrip("/")
-    m = re.search(r"/item/([^/?#]+)", url)
+    m = re.search(r"/(?:item|resource)/([^/?#]+)", url)
     if m:
         item_id = m.group(1).rstrip("/")
         title = _fetch_loc_title(item_id)
@@ -1221,10 +1252,16 @@ def main() -> None:
 
         # Library of Congress URL: slug derived from URL path
         elif is_loc_url(target):
+            if "/resource/" in target:
+                print(
+                    f"  Resolving /resource/ URL to /item/ URL via LoC API…",
+                    file=sys.stderr,
+                )
+                target = _resource_url_to_item_url(target)
             slug = args.slug or loc_slug(target)
             uuid = None
             label = slug
-            kind = "loc-item" if "/item/" in target else "loc-collection"
+            kind = "loc-item" if ("/item/" in target or "/resource/" in target) else "loc-collection"
 
         # Internet Archive URL: identifier extracted from /details/{id}
         elif is_ia_url(target):
@@ -1294,7 +1331,7 @@ def main() -> None:
                 if kind in ("loc-item", "loc-collection"):
                     target_enabled.add("loc_csv")
                     print("  Auto-adding --loc-csv (collection CSV not found)", file=sys.stderr)
-                elif kind in ("ia-item", "ia-collection"):
+                elif kind in ("ia-item", "ia-collection", "ia"):
                     target_enabled.add("ia_csv")
                     print("  Auto-adding --ia-csv (collection CSV not found)", file=sys.stderr)
                 elif kind in ("item", "collection"):

@@ -195,6 +195,11 @@ def _extract_loc_item_json_meta(item_json_path: Path) -> dict:
     date = str(item.get("date", ""))
     fmt = item.get("format") or item.get("type", [])
     genre = fmt[0] if isinstance(fmt, list) and fmt else str(fmt) if fmt else ""
+    # Extract viewer resource URL (e.g. https://www.loc.gov/resource/rbc0001.2026batch96169559/)
+    resource_url = ""
+    resources = item.get("resources") or data.get("resources") or []
+    if resources and isinstance(resources[0], dict):
+        resource_url = resources[0].get("url", "")
     return {
         "title": item.get("title", ""),
         "date": date,
@@ -202,6 +207,7 @@ def _extract_loc_item_json_meta(item_json_path: Path) -> dict:
         "homepage_url": homepage_url,
         "collection": "",
         "genre": genre,
+        "resource_url": resource_url,
     }
 
 
@@ -215,14 +221,23 @@ def _find_item_meta(search_root: Path) -> dict:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             meta = _extract_item_meta(manifest)
 
-            # For LC the synthetic manifest label is just the item ID;
-            # check for item.json saved by the download step.
-            if not meta.get("title") or _looks_like_id(meta.get("title", "")):
-                item_json_path = manifest_path.parent / "item.json"
-                if item_json_path.exists():
-                    lc_meta = _extract_loc_item_json_meta(item_json_path)
+            # For LC items, check for item.json saved by the download step.
+            # Always read it (even when manifest already has a title) so we
+            # can pick up fields like resource_url that the manifest lacks.
+            item_json_path = manifest_path.parent / "item.json"
+            if "loc.gov" in manifest.get("id", "") and item_json_path.exists():
+                lc_meta = _extract_loc_item_json_meta(item_json_path)
+                # Only override title/date/genre when manifest has none / looks like an ID
+                if not meta.get("title") or _looks_like_id(meta.get("title", "")):
                     if lc_meta.get("title"):
                         meta.update({k: v for k, v in lc_meta.items() if v})
+                else:
+                    # Always pull resource_url (and other enrichment fields not in manifest)
+                    for key in ("resource_url", "date", "collection", "genre"):
+                        if lc_meta.get(key) and not meta.get(key):
+                            meta[key] = lc_meta[key]
+                    if lc_meta.get("resource_url"):
+                        meta["resource_url"] = lc_meta["resource_url"]
 
             if meta.get("title") or meta.get("homepage_url"):
                 return meta
@@ -509,6 +524,7 @@ const DOC_META    = {doc_meta_json};
 let ALL_ENTRIES = ALL_INITIAL_ENTRIES;
 
 // ── State ──────────────────────────────────────────────────────────────────
+let currentDocMeta = DOC_META;
 const facetState = {{}};   // {{fieldName: Set<value>}}
 let searchQuery = "";
 let sortCol = null;
@@ -560,7 +576,8 @@ facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
   // Set h1, mobile title, and meta strip to first volume on load
   document.getElementById("doc-title").textContent = volLabels[0];
   document.getElementById("mobile-title").textContent = volLabels[0];
-  renderMetaStrip(VOLUMES[volLabels[0]].doc_meta || {{}});
+  currentDocMeta = VOLUMES[volLabels[0]].doc_meta || {{}};
+  renderMetaStrip(currentDocMeta);
 
   // Build mobile volume select
   const msel = document.getElementById("mobile-volume-select");
@@ -597,7 +614,8 @@ facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
     document.getElementById("mobile-sub").textContent =
       ALL_ENTRIES.length.toLocaleString() + " entries";
     msel.value = sel.value;
-    renderMetaStrip(vol.doc_meta || {{}});
+    currentDocMeta = vol.doc_meta || {{}};
+    renderMetaStrip(currentDocMeta);
     renderFillRate();
     renderAll();
   }});
@@ -788,7 +806,11 @@ function viewerUrl(canvas_fragment) {{
   // Library of Congress: https://www.loc.gov/item/{{id}}/canvas/{{num}}
   const locMatch = cid.match(/https:\\/\\/www\\.loc\\.gov\\/item\\/([^/]+)\\/canvas\\/(\\d+)/);
   if (locMatch) {{
-    return `https://www.loc.gov/item/${{locMatch[1]}}/?sp=${{parseInt(locMatch[2]) + 1}}`;
+    const sp = parseInt(locMatch[2]);  // LoC canvas IDs are already 1-indexed
+    const base = (currentDocMeta && currentDocMeta.resource_url)
+      ? currentDocMeta.resource_url.replace(/\\/?$/, "/")
+      : `https://www.loc.gov/resource/${{locMatch[1]}}/`;
+    return `${{base}}?sp=${{sp}}`;
   }}
 
   // Fall back to the raw canvas URI
