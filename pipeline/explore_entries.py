@@ -302,7 +302,7 @@ _HTML_TEMPLATE = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title_json_safe} — Explorer</title>
+<title>Pipeline Data Explorer — {title_json_safe}</title>
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6/dist/plot.umd.min.js"></script>
 <style>
@@ -314,7 +314,8 @@ a {{ color: #1a6ebd; }}
 /* ── Sidebar ── */
 #sidebar {{ width: 240px; min-width: 200px; max-width: 300px; background: #fff; border-right: 1px solid #ddd; display: flex; flex-direction: column; overflow: hidden; }}
 #sidebar-header {{ padding: 14px 16px 10px; border-bottom: 1px solid #eee; }}
-#sidebar-header h1 {{ margin: 0 0 2px; font-size: 15px; font-weight: 700; line-height: 1.3; word-break: break-word; }}
+#sidebar-header h1 {{ margin: 0 0 5px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #1a6ebd; }}
+#sidebar-header h2 {{ margin: 0 0 2px; font-size: 14px; font-weight: 700; line-height: 1.3; word-break: break-word; }}
 #sidebar-header .sub {{ font-size: 12px; color: #595959; }}
 #volume-wrap {{ margin-top: 10px; display: none; background: #eef3fb; border: 1px solid #5a86b8; border-radius: 5px; padding: 8px 10px; }}
 #volume-select {{ width: 100%; font-size: 12px; padding: 4px 6px; border: 1px solid #767676; border-radius: 4px; background: #fff; color: #333; cursor: pointer; }}
@@ -442,7 +443,8 @@ td.source-cell {{ text-align: center; }}
 <!-- Sidebar -->
 <div id="sidebar">
   <div id="sidebar-header">
-    <h1 id="doc-title"></h1>
+    <h1><a href="https://github.com/hadro/directory-pipeline" target="_blank" style="color:inherit;text-decoration:none;">Pipeline Data Explorer</a></h1>
+    <h2 id="doc-title"></h2>
     <div class="sub" id="doc-sub"></div>
     <div id="volume-wrap">
       <label for="volume-select" style="display:block;font-size:11px;color:#595959;margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">Select volume</label>
