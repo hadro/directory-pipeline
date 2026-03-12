@@ -411,6 +411,18 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--normalize",
+        action="store_true",
+        help=(
+            "After updating manifest.json, normalize it for strict IIIF viewers "
+            "(Clover, etc.): fix canvas IDs, add motivation:painting, fetch real "
+            "image dimensions, fix structures, remove dead services. "
+            "The hosted manifest URL is derived as <base-url>/manifest.json. "
+            "Also updates annotation file targets to match the new canvas IDs. "
+            "Implies --update-manifest."
+        ),
+    )
+    parser.add_argument(
         "--force", "-f",
         action="store_true",
         help="Re-export even if output files already exist",
@@ -423,7 +435,10 @@ def main() -> None:
     args = parser.parse_args()
     args.base_url = args.base_url.rstrip("/")
 
-    if args.update_manifest and not args.base_url:
+    if args.normalize:
+        args.update_manifest = True
+
+    if (args.update_manifest or args.normalize) and not args.base_url:
         print(
             "Error: --update-manifest requires --base-url so the manifest "
             "can reference annotation pages by absolute URI.",
@@ -483,6 +498,39 @@ def main() -> None:
             print("  Warning: no manifest.json found — skipping manifest update.", file=sys.stderr)
         for mp in manifest_paths:
             update_manifest(mp, canvas_to_ann_url, canvas_to_dims, args.quiet)
+
+            if args.normalize:
+                hosted_manifest_url = f"{args.base_url}/manifest.json"
+                if not args.quiet:
+                    print(
+                        f"  Normalizing manifest for viewer: {hosted_manifest_url}",
+                        file=sys.stderr,
+                    )
+                manifest = json.loads(mp.read_text(encoding="utf-8"))
+                manifest, canvas_map = iiif_utils.normalize_for_viewer(
+                    manifest, hosted_manifest_url
+                )
+                mp.write_text(
+                    json.dumps(manifest, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                # Update annotation file targets to use the new canvas IDs
+                ann_files = list(mp.parent.glob("*_box_annotations.json"))
+                for ann_path in ann_files:
+                    try:
+                        ann_data = json.loads(ann_path.read_text(encoding="utf-8"))
+                        iiif_utils.update_annotation_targets(ann_data, canvas_map)
+                        ann_path.write_text(
+                            json.dumps(ann_data, indent=2, ensure_ascii=False),
+                            encoding="utf-8",
+                        )
+                    except Exception as exc:
+                        print(f"  Warning: could not update {ann_path.name}: {exc}", file=sys.stderr)
+                if not args.quiet:
+                    print(
+                        f"  Updated targets in {len(ann_files)} annotation file(s).",
+                        file=sys.stderr,
+                    )
 
 
 if __name__ == "__main__":
