@@ -30,7 +30,7 @@ The `page_context` fields should match whatever heading levels are active in thi
 
 ## Entry schema
 
-Each entry in the `"entries"` array should contain the fields most meaningful for this document type — name, address, date, category, or whatever structured data is present. Inherit any context fields (e.g., city, state, category, chapter) from the nearest heading above.
+Each entry in the `"entries"` array should contain the fields most meaningful for this document type — name, address, date, category, or whatever structured data is present. Inherit any context fields (e.g., city, state, category, chapter) from the nearest heading above. Always include the context fields within entry schema.
 
 ## Rules
 

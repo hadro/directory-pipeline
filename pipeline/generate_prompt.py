@@ -140,7 +140,9 @@ Write a prompt that specifies:
 
 3. **Entry schema** — the specific fields each entry should contain, named to match \
    the actual content. Choose field names that are clear and meaningful for this \
-   document type. Do not force a schema from a different document type onto this one.
+   document type. Do not force a schema from a different document type onto this one. \
+   Always include the heading hierarchy and context elements within the entries \
+   themselves.
 
 4. **Extraction rules** — 4–6 rules specific to this volume: what counts as an entry, \
    what to skip (page numbers, headings, decorative elements), how continuation \

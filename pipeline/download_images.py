@@ -123,10 +123,23 @@ def _build_loc_manifest(
     """
     if "loc.gov/item/" not in manifest_url:
         return None
-    item_id = iiif_utils.manifest_item_id(manifest_url)
+    # Derive the ?fo=json URL by stripping the /manifest.json suffix directly.
+    # This handles both simple items (.../item/12345/manifest.json) and
+    # newspaper issues (.../item/sn83030313/1847-04-30/ed-1/manifest.json).
+    base_url = manifest_url
+    for suffix in ("/manifest.json", "/manifest"):
+        if base_url.lower().endswith(suffix):
+            base_url = base_url[: -len(suffix)]
+            break
+    # Extract the path component after the domain for use in canvas IDs.
+    # For simple items:   .../item/sn83030313      → item_id = "sn83030313"
+    # For issue URLs:     .../item/sn83030313/1847-04-30/ed-1  → use full path
+    from urllib.parse import urlparse
+    _path = urlparse(base_url).path.rstrip("/")  # e.g. /item/sn83030313/1847-04-30/ed-1
+    item_id = _path.split("/item/", 1)[-1] if "/item/" in _path else _path.rsplit("/", 1)[-1]
     resp = get_with_retry(
         session,
-        f"https://www.loc.gov/item/{item_id}/?fo=json",
+        f"{base_url}/?fo=json",
         timeout=30,
         label="loc-item",
     )
@@ -410,6 +423,11 @@ def main() -> None:
 
     session = requests.Session()
     session.headers["Accept"] = "application/json"
+    session.headers["User-Agent"] = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
 
     # ── Manifest mode ──────────────────────────────────────────────────────
     if args.manifest:

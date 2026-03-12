@@ -735,10 +735,18 @@ def process_item(
         canvas_uris = _load_canvas_uris(item_dir)
         # Map page stem → manifest canvas URI by position in the full unfiltered list
         # so scope filtering doesn't shift indices and assign wrong canvases.
-        _stem_to_canvas = {
-            f.stem[: -len(txt_suffix)]: (canvas_uris[j] if j < len(canvas_uris) else "")
-            for j, f in enumerate(txt_files)
-        }
+        # Group files by their 4-digit sequence prefix so that split-spread halves
+        # (e.g. _0011_left and _0011_right, both prefix "0012") map to the same
+        # original canvas rather than advancing the index twice.
+        _stem_to_canvas: dict[str, str] = {}
+        _prefix_to_canvas_idx: dict[str, int] = {}
+        for f in txt_files:
+            stem = f.stem[: -len(txt_suffix)]
+            prefix = stem[:4]
+            if prefix not in _prefix_to_canvas_idx:
+                _prefix_to_canvas_idx[prefix] = len(_prefix_to_canvas_idx)
+            idx = _prefix_to_canvas_idx[prefix]
+            _stem_to_canvas[stem] = canvas_uris[idx] if idx < len(canvas_uris) else ""
         if scope is not None:
             txt_files = [f for f in txt_files
                          if f.stem[: -len(txt_suffix)] in scope]

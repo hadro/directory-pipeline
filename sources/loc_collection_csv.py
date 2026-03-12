@@ -261,7 +261,18 @@ def process_single_item(
         print(f"  Warning: could not extract item ID from: {item_url}", file=sys.stderr)
         return 0
 
-    api_url = f"https://www.loc.gov/item/{item_id}/?fo=json"
+    # Newspaper issue manifest URLs have the form:
+    #   …/item/sn83030313/1847-04-30/ed-1/manifest.json
+    # Preserve the full path for both the API call and the manifest URL so
+    # the downloader can fetch the right pages (not just the serial title).
+    if item_url.lower().endswith("/manifest.json"):
+        base_url = item_url[: -len("/manifest.json")]
+        api_url = f"{base_url}/?fo=json"
+        manifest_url = item_url
+    else:
+        api_url = f"https://www.loc.gov/item/{item_id}/?fo=json"
+        manifest_url = _manifest_url(item_id)
+
     if verbose:
         print(f"  Fetching item {item_id}…", file=sys.stderr)
 
@@ -278,7 +289,12 @@ def process_single_item(
 
     title = _str_val(item.get("title", ""))
     microform = _is_microform(str(data))
-    writer.writerow(_make_row(item_id, title, microform))
+    writer.writerow({
+        "item_id": item_id,
+        "item_title": title,
+        "iiif_manifest_url": manifest_url,
+        "microform": microform,
+    })
     if verbose:
         label = title[:60] if title else item_id
         print(f"    {item_id}: {label}", file=sys.stderr)
