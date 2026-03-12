@@ -178,17 +178,18 @@ def _content_state_url(
         return ""
     if "#xywh=" not in canvas_fragment:
         return ""
-    canvas_id, _xywh = canvas_fragment.split("#xywh=", 1)
-    # Use bare canvas_id (no #xywh= fragment) for target.id.
-    # Mirador 3.3.0 does an exact string match for canvas lookup; including
-    # the fragment causes the lookup to fail and the main view never renders.
+    # Include the full canvas_fragment (with #xywh=) as target.id so that
+    # viewers that support IIIF Content State spatial selectors (e.g. Clover)
+    # can zoom to the entry region.  Mirador 3.3.0 does an exact string match
+    # for canvas lookup and cannot handle the fragment; index.html strips it
+    # before passing canvasId to Mirador.
     # motivation must be a string per the IIIF Content State 1.0 spec.
     state = {
         "@context": "http://iiif.io/api/presentation/3/context.json",
         "type": "Annotation",
         "motivation": "contentState",
         "target": {
-            "id": canvas_id,
+            "id": canvas_fragment,
             "type": "Canvas",
             "partOf": [{"id": manifest_url, "type": "Manifest"}],
         },
