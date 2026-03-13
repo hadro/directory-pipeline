@@ -834,7 +834,7 @@ function contentStateUrl(canvas_fragment) {{
     "type": "Annotation",
     "motivation": "contentState",
     "target": {{
-      "id": cid,
+      "id": canvas_fragment,
       "type": "Canvas",
       "partOf": [{{"id": MANIFEST_URL, "type": "Manifest"}}]
     }}

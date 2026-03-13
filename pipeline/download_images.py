@@ -159,12 +159,18 @@ def _build_loc_manifest(
                     svc_id = info_url[: -len("/info.json")]
                     n = len(items) + 1
                     canvas_id = f"https://www.loc.gov/item/{item_id}/canvas/{n}"
-                    native_w = f.get("width", 0)
+                    native_w = int(f.get("width", 0))
+                    native_h = int(f.get("height", 0))
                     items.append({
                         "id": canvas_id,
                         "type": "Canvas",
                         "width": native_w,
-                        "height": f.get("height", 0),
+                        "height": native_h,
+                        "thumbnail": [{
+                            "id": f"{svc_id}/full/!200,200/0/default.jpg",
+                            "type": "Image",
+                            "service": [{"id": svc_id, "type": "ImageService3"}],
+                        }],
                         "items": [{
                             "id": f"{canvas_id}/page",
                             "type": "AnnotationPage",
