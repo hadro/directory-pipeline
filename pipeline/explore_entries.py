@@ -505,7 +505,7 @@ td.source-cell {{ text-align: center; }}
       <div id="detail-inner">
         <button id="detail-close" aria-label="Close detail panel">×</button>
         <h2 id="detail-title"></h2>
-        <img id="detail-thumb" alt="" style="display:none">
+        <a id="detail-thumb-link" target="_blank"><img id="detail-thumb" alt="" style="display:none;cursor:pointer"></a>
         <div class="detail-fields" id="detail-fields"></div>
         <div class="detail-source" id="detail-source"></div>
       </div>
@@ -521,6 +521,8 @@ const FIELD_META  = {field_meta_json};
 const CANVAS_MAP  = {canvas_map_json};
 const DOC_TITLE   = {title_json};
 const DOC_META    = {doc_meta_json};
+const VIEWER_URL  = {viewer_url_json};
+const MANIFEST_URL = {manifest_url_json};
 let ALL_ENTRIES = ALL_INITIAL_ENTRIES;
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -822,6 +824,27 @@ function openSource(canvas_fragment) {{
   if (url) window.open(url, "_blank");
 }}
 
+// ── IIIF Content State deep-link ────────────────────────────────────────────
+function contentStateUrl(canvas_fragment) {{
+  if (!VIEWER_URL || !MANIFEST_URL || !canvas_fragment) return "";
+  const cid = canvas_fragment.includes("#") ? canvas_fragment.split("#")[0] : canvas_fragment;
+  if (!cid) return "";
+  const state = {{
+    "@context": "http://iiif.io/api/presentation/3/context.json",
+    "type": "Annotation",
+    "motivation": "contentState",
+    "target": {{
+      "id": cid,
+      "type": "Canvas",
+      "partOf": [{{"id": MANIFEST_URL, "type": "Manifest"}}]
+    }}
+  }};
+  // base64url (RFC 4648 §5): standard base64 with + → -, / → _, padding stripped
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
+  const encoded = b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return VIEWER_URL.replace(/\/$/, "") + "?iiif-content=" + encoded;
+}}
+
 // ── Detail panel ───────────────────────────────────────────────────────────
 function thumbUrl(row) {{
   const cf = row.canvas_fragment || "";
@@ -834,11 +857,11 @@ function thumbUrl(row) {{
     if (xywh.length !== 4 || xywh[2] <= 0 || xywh[3] <= 0) return "";
     const [cw, ch] = [svc[1], svc[2]];
     if (!cw || !ch) return "";
-    const pad = 40, tw = 400;
-    const rx = Math.max(0, xywh[0] - pad);
-    const ry = Math.max(0, xywh[1] - pad);
-    const rw = (xywh[0] + xywh[2] + pad) - rx;
-    const rh = (xywh[1] + xywh[3] + pad) - ry;
+    const padH = 40, padV = Math.max(xywh[3], 60), tw = 400;
+    const rx = Math.max(0, xywh[0] - padH);
+    const ry = Math.max(0, xywh[1] - padV);
+    const rw = (xywh[0] + xywh[2] + padH) - rx;
+    const rh = (xywh[1] + xywh[3] + padV) - ry;
     const xp = (rx / cw * 100).toFixed(4);
     const yp = (ry / ch * 100).toFixed(4);
     const wp = (rw / cw * 100).toFixed(4);
@@ -857,13 +880,17 @@ function showDetail(row) {{
     (nameField && row[nameField.name]) || "(entry)";
 
   const img = document.getElementById("detail-thumb");
+  const thumbLink = document.getElementById("detail-thumb-link");
   const url = thumbUrl(row);
+  const csUrl = contentStateUrl(row.canvas_fragment);
   if (url) {{
     img.src = url;
     img.style.display = "block";
     img.onerror = () => {{ img.style.display = "none"; }};
+    thumbLink.href = csUrl || viewerUrl(row.canvas_fragment) || "#";
   }} else {{
     img.style.display = "none";
+    thumbLink.removeAttribute("href");
   }}
 
   const fields = document.getElementById("detail-fields");
@@ -883,7 +910,12 @@ function showDetail(row) {{
 
   const src = document.getElementById("detail-source");
   if (row.canvas_fragment) {{
-    src.innerHTML = `<a href="${{viewerUrl(row.canvas_fragment)}}" target="_blank">Open source page ↗</a>`;
+    const links = [];
+    const srcUrl = viewerUrl(row.canvas_fragment);
+    if (srcUrl) links.push(`<a href="${{srcUrl}}" target="_blank">Open source page ↗</a>`);
+    const csUrl = contentStateUrl(row.canvas_fragment);
+    if (csUrl) links.push(`<a href="${{csUrl}}" target="_blank">View in Mirador ↗</a>`);
+    src.innerHTML = links.join(" · ");
   }} else {{
     src.innerHTML = "";
   }}
@@ -1199,6 +1231,89 @@ def _build_canvas_thumb_map(
 
 
 # ---------------------------------------------------------------------------
+# Build annotation index (for canvas_fragment enrichment)
+# ---------------------------------------------------------------------------
+
+def _load_annotation_index(item_dir: Path) -> dict[str, list[tuple[str, str]]]:
+    """Return {canvas_base_uri: [(body_text, target_with_xywh), ...]} from all
+    *_annotations.json files in item_dir (reading order preserved).
+    *_entry_annotations.json files are excluded (those are entry-level, not line-level).
+    """
+    index: dict[str, list[tuple[str, str]]] = {}
+    for p in sorted(item_dir.rglob("*_annotations.json")):
+        if p.name.endswith("_entry_annotations.json"):
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for ann in data.get("items", []):
+            target = ann.get("target", "")
+            if "#xywh=" not in target:
+                continue
+            body = ann.get("body", {})
+            text = body.get("value", "") if isinstance(body, dict) else ""
+            base = target.split("#")[0]
+            index.setdefault(base, []).append((text.lower(), target))
+    return index
+
+
+def _enrich_rows_with_annotations(
+    rows: list[dict], ann_index: dict[str, list[tuple[str, str]]]
+) -> list[dict]:
+    """For each row whose canvas_fragment lacks #xywh=, find the best-matching
+    line annotation on the same canvas via token overlap and replace canvas_fragment
+    with the annotation target (which includes the bounding box).
+
+    Each annotation may be claimed by at most one row (greedy best-first within
+    each canvas).  Single-character tokens are excluded from matching to avoid
+    false positives from initials appearing in unrelated lines.
+    """
+    def _tokens(s: str) -> set[str]:
+        return {t for t in re.findall(r"[a-z0-9]+", (s or "").lower()) if len(t) >= 2}
+
+    # Track which annotation indices have already been claimed, per canvas
+    canvas_used: dict[str, set[int]] = {}
+
+    enriched = []
+    for row in rows:
+        cf = row.get("canvas_fragment", "")
+        if "#xywh=" in cf or not cf:
+            enriched.append(row)
+            continue
+
+        base = cf.split("#")[0]
+        candidates = ann_index.get(base)
+        if not candidates:
+            enriched.append(row)
+            continue
+
+        query = _tokens(
+            " ".join(v for k, v in row.items() if k not in _ID_FIELDS and v)
+        )
+        if not query:
+            enriched.append(row)
+            continue
+
+        used = canvas_used.setdefault(base, set())
+        best_score, best_idx, best_target = 0, -1, ""
+        for i, (ann_text, ann_target) in enumerate(candidates):
+            if i in used:
+                continue
+            score = len(query & _tokens(ann_text))
+            if score > best_score:
+                best_score, best_idx, best_target = score, i, ann_target
+
+        if best_score >= 2:
+            row = dict(row)
+            row["canvas_fragment"] = best_target
+            used.add(best_idx)
+
+        enriched.append(row)
+    return enriched
+
+
+# ---------------------------------------------------------------------------
 # Find CSV
 # ---------------------------------------------------------------------------
 
@@ -1235,6 +1350,8 @@ def build_html(
     title: str,
     doc_meta: dict | None = None,
     volumes: dict[str, list[dict]] | None = None,
+    viewer_url: str = "",
+    manifest_url: str = "",
 ) -> str:
     return _HTML_TEMPLATE.format(
         entries_json     = _safe_json(list(rows)),
@@ -1247,6 +1364,8 @@ def build_html(
             {k: {"rows": list(v["rows"]), "field_meta": v["field_meta"], "doc_meta": v.get("doc_meta", {})}
              for k, v in (volumes or {}).items()}
         ),
+        viewer_url_json  = _safe_json(viewer_url),
+        manifest_url_json = _safe_json(manifest_url),
     )
 
 
@@ -1288,6 +1407,22 @@ def main() -> None:
         default=None,
         metavar="TEXT",
         help="Document title shown in the explorer header (auto-derived from path if omitted)",
+    )
+    parser.add_argument(
+        "--viewer-url",
+        default="",
+        metavar="URL",
+        help="Base URL of a self-hosted IIIF viewer (e.g. https://hadro.github.io/my-repo/). "
+             "When set, the detail panel shows a 'View in Mirador ↗' link that opens the "
+             "viewer at the exact canvas via IIIF Content State. "
+             "A manifest.json is assumed at <viewer-url>/manifest.json unless --manifest-url overrides it.",
+    )
+    parser.add_argument(
+        "--manifest-url",
+        default="",
+        metavar="URL",
+        help="Explicit URL of the IIIF manifest served with the viewer. "
+             "Defaults to <viewer-url>/manifest.json.",
     )
     parser.add_argument(
         "--quiet", "-q",
@@ -1359,6 +1494,12 @@ def main() -> None:
     for p in all_csvs:
         with p.open(encoding="utf-8", newline="") as fh:
             vol_rows = list(csv.DictReader(fh))
+        ann_index = _load_annotation_index(p.parent)
+        if ann_index:
+            vol_rows = _enrich_rows_with_annotations(vol_rows, ann_index)
+            if not args.quiet:
+                enriched_n = sum(1 for r in vol_rows if "#xywh=" in (r.get("canvas_fragment") or ""))
+                print(f"  Annotation enrichment: {enriched_n}/{len(vol_rows)} entries have bounding boxes", file=sys.stderr)
         if collection_mode:
             item_dir = p.parent
             meta = _find_item_meta(item_dir)
@@ -1432,8 +1573,16 @@ def main() -> None:
     if doc_meta.get("title") and _looks_like_id(title):
         title = doc_meta["title"]
 
+    viewer_url = args.viewer_url.rstrip("/")
+    manifest_url = (
+        args.manifest_url
+        or (f"{viewer_url}/manifest.json" if viewer_url else "")
+    )
+
     html = build_html(rows, field_meta, canvas_map, title, doc_meta,
-                      volumes=volumes if collection_mode else None)
+                      volumes=volumes if collection_mode else None,
+                      viewer_url=viewer_url,
+                      manifest_url=manifest_url)
     out_path.write_text(html, encoding="utf-8")
     if not args.quiet:
         print(f"Explorer written to {out_path}", file=sys.stderr)

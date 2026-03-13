@@ -195,7 +195,7 @@ def main() -> None:
                 lines = [
                     {
                         "bbox": [int(v) for v in ln.bbox],
-                        "text": ln.text,
+                        "text": ln.text.replace("<br>", "\n"),
                         "confidence": round(float(getattr(ln, "confidence", 1.0)), 4),
                     }
                     for ln in result.text_lines

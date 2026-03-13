@@ -289,15 +289,48 @@ def save():
     canvas_uri = data.get("canvas_uri", "")
     cw = data.get("canvas_width", 0)
     ch = data.get("canvas_height", 0)
-    img = Image.open(_img_path(json_path))
+    img_path = _img_path(json_path)
+    img = Image.open(img_path)
     iw, ih = img.size
+
+    # For split images (_left / _right), read the sidecar to get the x_offset
+    # that maps split-image coordinates back to full-spread canvas coordinates.
+    # Mirrors the same logic in align_ocr.align_image().
+    stem = img_path.stem
+    split_x_offset = 0
+    split_y_offset = 0
+    full_img_w = iw
+    full_img_h = ih
+    for _suffix in ("_left", "_right"):
+        if stem.endswith(_suffix):
+            _split_json = img_path.with_name(f"{stem[:-len(_suffix)]}_split.json")
+            if _split_json.exists():
+                try:
+                    _sidecar = json.loads(_split_json.read_text(encoding="utf-8"))
+                    full_img_w = _sidecar.get("original_width", iw)
+                    full_img_h = _sidecar.get("original_height", ih)
+                    _side = _suffix.lstrip("_")
+                    for _page in _sidecar.get("pages", []):
+                        if _page.get("side") == _side:
+                            split_x_offset = _page.get("x_offset", 0)
+                            split_y_offset = _page.get("y_offset", 0)
+                            break
+                except Exception:
+                    pass
+            break
 
     for pair in accepted:
         bbox = pair["surya_bbox"]
         gem = pair["gemini_text"]
+        offset_bbox = [
+            bbox[0] + split_x_offset,
+            bbox[1] + split_y_offset,
+            bbox[2] + split_x_offset,
+            bbox[3] + split_y_offset,
+        ]
         lines.append({
             "bbox": bbox,
-            "canvas_fragment": _canvas_fragment(canvas_uri, bbox, iw, ih, cw, ch),
+            "canvas_fragment": _canvas_fragment(canvas_uri, offset_bbox, full_img_w, full_img_h, cw, ch),
             "confidence": "manual",
             "gemini_text": gem,
         })
@@ -389,6 +422,8 @@ canvas{cursor:crosshair;display:block;background:#fff}
 .pair .surya-txt{color:#1a5276;font-size:11px;flex:1;min-width:0;word-break:break-word}
 .pair .arrow{color:#888;font-size:11px;flex-shrink:0}
 .pair .gemini-txt{font-size:11px;flex:1;min-width:0;word-break:break-word}
+.pair select{font-size:11px;flex:1;min-width:0;border:1px solid #ccc;border-radius:3px;padding:1px 2px;background:#fff;max-width:100%}
+.pair select:focus{outline:1px solid #1a73e8}
 .pair .sim{font-size:10px;color:#888;flex-shrink:0}
 .pair.gap-a .surya-txt{text-decoration:line-through;opacity:.5}
 .pair.gap-b .gemini-txt{text-decoration:line-through;opacity:.5}
@@ -699,33 +734,60 @@ let _pairs = [];
 
 function showPairs(pairs) {
   _pairs = pairs;
+  const unmatched = (pageData && pageData.unmatched_gemini) || [];
+
+  // Build option HTML once — reused for every row's select
+  const skipOpt = '<option value="">— skip —</option>';
+  const allOpts = unmatched.map(t =>
+    `<option value="${escAttr(t)}">${escHtml(t)}</option>`
+  ).join('');
+
   const el = document.getElementById('pairs-list');
   el.innerHTML = pairs.map((p, i) => {
     const s = p.surya, g = p.gemini;
-    const cls = s && g ? (p.sim >= 40 ? 'pair good' : 'pair') : (s ? 'pair gap-b' : 'pair gap-a');
-    const checked = s && g && p.sim >= 40 ? 'checked' : '';
+    const hasBoth = s && g;
+    const cls = hasBoth ? (p.sim >= 40 ? 'pair good' : 'pair') : (s ? 'pair gap-b' : 'pair gap-a');
+    const checked = hasBoth && p.sim >= 40 ? 'checked' : '';
     const surTxt = s ? escHtml(s.text) : '<em style="color:#aaa">—</em>';
-    const gemTxt = g ? escHtml(g) : '<em style="color:#aaa">—</em>';
-    const simTxt = s && g ? `${p.sim}%` : '';
+    const simTxt = hasBoth ? `${p.sim}%` : '';
+    // Rows with a surya bbox get a reassignable select; gemini-only rows stay as plain text
+    const gemCell = s
+      ? `<select id="sel-${i}" onchange="pairSelectChanged(${i})">${skipOpt}${allOpts}</select>`
+      : `<span class="gemini-txt">${g ? escHtml(g) : '<em style="color:#aaa">—</em>'}</span>`;
     return `<div class="${cls}" id="pair-${i}">
-      <input type="checkbox" ${checked} ${!s || !g ? 'disabled' : ''} id="chk-${i}">
+      <input type="checkbox" ${checked} ${s ? '' : 'disabled'} id="chk-${i}">
       <span class="surya-txt">${surTxt}</span>
       <span class="arrow">→</span>
-      <span class="gemini-txt">${gemTxt}</span>
+      ${gemCell}
       <span class="sim">${simTxt}</span>
     </div>`;
   }).join('');
+
+  // Set pre-selected values after innerHTML (select.value must be set after DOM insert)
+  pairs.forEach((p, i) => {
+    if (!p.surya) return;
+    const sel = document.getElementById(`sel-${i}`);
+    if (sel && p.gemini) sel.value = p.gemini;
+  });
+
   document.getElementById('results').style.display = 'flex';
 
   // Highlight unmatched entries that appear in the pairs
   document.querySelectorAll('.ug').forEach(el => el.classList.remove('highlight'));
   for (const p of pairs) {
-    if (p.gemini) {
+    const g = p.gemini;
+    if (g) {
       document.querySelectorAll('.ug').forEach(el => {
-        if (el.textContent === p.gemini) el.classList.add('highlight');
+        if (el.textContent === g) el.classList.add('highlight');
       });
     }
   }
+}
+
+function pairSelectChanged(i) {
+  const sel = document.getElementById(`sel-${i}`);
+  const chk = document.getElementById(`chk-${i}`);
+  if (sel && chk) chk.checked = sel.value !== '';
 }
 
 function cancelResults() {
@@ -738,9 +800,10 @@ function saveAccepted() {
   const accepted = [];
   _pairs.forEach((p, i) => {
     const chk = document.getElementById(`chk-${i}`);
-    if (chk && chk.checked && p.surya && p.gemini) {
-      accepted.push({ surya_bbox: p.surya.bbox, gemini_text: p.gemini });
-    }
+    if (!chk || !chk.checked || !p.surya) return;
+    const sel = document.getElementById(`sel-${i}`);
+    const gemText = sel ? sel.value : p.gemini;
+    if (gemText) accepted.push({ surya_bbox: p.surya.bbox, gemini_text: gemText });
   });
   if (!accepted.length) { setStatus('Nothing checked.'); return; }
 
@@ -779,6 +842,9 @@ function setStatus(msg) {
 }
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function escAttr(s) {
+  return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 function finishReview() {
