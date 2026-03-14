@@ -22,7 +22,6 @@ gpu = [
 # Geocoding and map generation.
 # Install with: pip install -e ".[geo]"
 geo = [
-    "folium>=0.17",
     "geopy>=2.4",
 ]
 # Everything.

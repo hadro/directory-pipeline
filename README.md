@@ -304,16 +304,27 @@ IA identifier. Pass `--slug` to override.
 
 ## Installation
 
-Requires Python 3.11+. Tesseract is only needed for the legacy `--tesseract` stage.
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). Tesseract is only needed for the legacy `--tesseract` stage.
 
 ```bash
 # Optional: install Tesseract for legacy OCR support
 brew install tesseract          # macOS
 apt install tesseract-ocr       # Debian/Ubuntu
 
-# Install Python dependencies
-uv sync                         # or: pip install -e .
+# Install core dependencies (Gemini OCR, entry extraction, geocoding)
+uv sync
+
+# Add Surya OCR support (requires GPU or Apple Silicon for reasonable speed)
+uv sync --extra gpu
+
+# Add geocoding + map generation
+uv sync --extra geo
+
+# Everything
+uv sync --all-extras
 ```
+
+Dependencies are declared in `pyproject.toml` and locked in `uv.lock`. To run any pipeline command without activating the virtual environment: `uv run python main.py ...`
 
 Set environment variables (or copy `.env.template` to `.env`):
 
