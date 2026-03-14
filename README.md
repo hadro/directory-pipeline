@@ -397,6 +397,10 @@ equally fast everywhere.
 | **Google Colab Pro** | ~$10/month (also pay as you go option) | ~1–2 min (T4/L4, `--batch-size 8`) | Reliable GPU access, longer sessions |
 | **Google Colab Pro+** | ~$50/month | <1 min (A100, `--batch-size 16`) | Background execution; best for large multi-volume runs |
 
+The pipeline is designed so that the compute-heavy steps — Surya OCR and the interactive alignment review — can be run on a GPU machine while everything else (downloading, Gemini OCR, entry extraction, geocoding, map generation) runs fine on a laptop. Gemini API calls are network-bound and complete in seconds regardless of the machine; Surya is a neural vision model that is 5–20× faster on a GPU than on an Apple Silicon Mac and significantly slower or impractical on CPU-only hardware.
+
+A ready-to-run Colab notebook covering the Surya OCR, alignment, and review steps is in [`colab/ocr-align-review.ipynb`](colab/ocr-align-review.ipynb). Open it directly in Colab, mount your Drive, and follow the cells in order.
+
 **Chandra evaluation** (`analysis/chandra_eval.py`) runs Qwen3-VL 7B and
 requires ~9 GB VRAM with `--quantize`. On a Colab T4 this is roughly
 50 seconds per image; on an M-series Mac with MPS it is ~25 minutes per image.

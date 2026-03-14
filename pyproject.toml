@@ -9,9 +9,24 @@ dependencies = [
     "numpy>=1.26",
     "pillow>=10.0",
     "requests>=2.32.5",
-    "folium>=0.17",
-    "geopy>=2.4",
-    "surya-ocr>=0.17.1",
     "python-dotenv>=1.0",
     "flask>=3.0",
+]
+
+[project.optional-dependencies]
+# Heavy GPU-dependent OCR models (Surya).
+# Install with: pip install -e ".[gpu]"
+gpu = [
+    "surya-ocr>=0.17.1",
+]
+# Geocoding and map generation.
+# Install with: pip install -e ".[geo]"
+geo = [
+    "folium>=0.17",
+    "geopy>=2.4",
+]
+# Everything.
+# Install with: pip install -e ".[all]"
+all = [
+    "directory-pipeline[gpu,geo]",
 ]

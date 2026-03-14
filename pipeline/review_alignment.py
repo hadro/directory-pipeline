@@ -240,7 +240,9 @@ def annotate():
     _load_surya()
 
     data = json.loads(json_path.read_text(encoding="utf-8"))
-    unmatched = data.get("unmatched_gemini", [])
+    # Client may supply an override list (e.g. during reset-alignment mode where
+    # existing matched lines have been moved back to unmatched client-side).
+    unmatched = body.get("unmatched_override") or data.get("unmatched_gemini", [])
 
     img = Image.open(_img_path(json_path)).convert("RGB")
     iw, ih = img.size
@@ -281,10 +283,18 @@ def save():
     body = request.json
     json_path = Path(body["json_path"])
     accepted = body["accepted"]  # [{surya_bbox, gemini_text}, ...]
+    clear_existing = body.get("clear_existing", False)
 
     data = json.loads(json_path.read_text(encoding="utf-8"))
-    lines = data.get("lines", [])
-    unmatched = list(data.get("unmatched_gemini", []))
+    if clear_existing:
+        # Move all previously-aligned gemini_text back to unmatched before
+        # merging the new manual pairs.
+        old_texts = [ln["gemini_text"] for ln in data.get("lines", []) if ln.get("gemini_text")]
+        lines = []
+        unmatched = old_texts + list(data.get("unmatched_gemini", []))
+    else:
+        lines = data.get("lines", [])
+        unmatched = list(data.get("unmatched_gemini", []))
 
     canvas_uri = data.get("canvas_uri", "")
     cw = data.get("canvas_width", 0)
@@ -491,6 +501,8 @@ canvas{cursor:crosshair;display:block;background:#fff}
     <button id="clear-btn" onclick="clearBoxes()" disabled>Clear box</button>
     <button id="undo-btn" onclick="undoBox()" disabled>Undo last</button>
     <button id="run-btn" class="primary" onclick="runOcr()" disabled>Run Surya on box</button>
+    <button id="reset-alignment-btn" onclick="enterClearMode()" disabled title="Move all existing matched lines back to unmatched so you can re-align from scratch">Reset alignment</button>
+    <button id="cancel-clear-btn" onclick="cancelClearMode()" style="display:none" class="done">Cancel reset</button>
     <span id="status"></span>
     <button id="done-btn" class="done" onclick="finishReview()">Done reviewing</button>
   </div>
@@ -539,6 +551,8 @@ let pageInfo = null, pageData = null;
 let img = new Image();
 let scale = 1;
 let drag = null, boxes = [];   // boxes: array of {x1,y1,x2,y2} in original image coords
+let clearMode = false;         // true while the user is doing a reset-alignment session
+let savedLines = null;         // original pageData.lines preserved during clearMode
 
 // ── canvas events ──────────────────────────────────────────────────────────
 cv.addEventListener('mousedown', e => {
@@ -580,12 +594,14 @@ function render() {
   }
   if (!pageData) return;
 
-  // Matched lines — green
-  ctx.strokeStyle = 'rgba(30,160,30,0.65)';
-  ctx.lineWidth = 1;
-  for (const ln of pageData.lines) {
-    const [x1,y1,x2,y2] = ln.bbox.map(v => v * scale);
-    ctx.strokeRect(x1, y1, x2-x1, y2-y1);
+  // Matched lines — green (hidden during reset-alignment session)
+  if (!clearMode) {
+    ctx.strokeStyle = 'rgba(30,160,30,0.65)';
+    ctx.lineWidth = 1;
+    for (const ln of pageData.lines) {
+      const [x1,y1,x2,y2] = ln.bbox.map(v => v * scale);
+      ctx.strokeRect(x1, y1, x2-x1, y2-y1);
+    }
   }
 
   // Live drag box — dashed orange
@@ -639,6 +655,10 @@ function loadPage(el) {
   };
   pageInfo = info;
   boxes = []; drag = null;
+  // Exit any active clear-mode session when switching pages
+  clearMode = false; savedLines = null;
+  document.getElementById('reset-alignment-btn').style.display = '';
+  document.getElementById('cancel-clear-btn').style.display = 'none';
   updateBoxButtons();
   document.getElementById('results').style.display = 'none';
   document.getElementById('page-name').textContent = info.stem;
@@ -653,6 +673,7 @@ function loadPage(el) {
     .then(data => {
       pageData = data;
       updateUnmatched(data.unmatched_gemini);
+      document.getElementById('reset-alignment-btn').disabled = !data.lines || data.lines.length === 0;
       // Show canvas, hide instructions
       document.getElementById('instructions').style.display = 'none';
       document.getElementById('cv').style.display = 'block';
@@ -701,6 +722,48 @@ function clearBoxes() {
   render();
 }
 
+// ── reset-alignment mode ────────────────────────────────────────────────────
+// Moves all existing matched lines back to the unmatched list in the UI only.
+// Nothing is written to disk until the user saves a new alignment.
+function enterClearMode() {
+  if (!pageData || !pageData.lines || pageData.lines.length === 0) return;
+  savedLines = pageData.lines.slice();  // snapshot original lines
+  clearMode = true;
+
+  // Build combined unmatched list: existing unmatched + texts from saved lines
+  const fromLines = savedLines.map(ln => ln.gemini_text).filter(Boolean);
+  const combined  = fromLines.concat(pageData.unmatched_gemini);
+  updateUnmatched(combined);
+
+  // Hide green boxes
+  render();
+
+  // Swap buttons
+  document.getElementById('reset-alignment-btn').style.display = 'none';
+  document.getElementById('cancel-clear-btn').style.display = '';
+  setStatus('Alignment cleared — draw boxes and re-align. Save to confirm, or Cancel to restore.');
+  // Clear any open results panel
+  document.getElementById('results').style.display = 'none';
+  boxes = []; updateBoxButtons();
+}
+
+function cancelClearMode() {
+  if (!clearMode) return;
+  clearMode = false;
+  // Restore original lines (green boxes reappear)
+  if (savedLines !== null) {
+    // pageData.lines was never mutated — it still holds the original data
+    // because we only changed what render() draws.
+    // But updateUnmatched was called with a combined list; restore original.
+    updateUnmatched(pageData.unmatched_gemini);
+  }
+  savedLines = null;
+  render();
+  document.getElementById('cancel-clear-btn').style.display = 'none';
+  document.getElementById('reset-alignment-btn').style.display = '';
+  setStatus('Reset cancelled — original alignment restored.');
+}
+
 function undoBox() {
   boxes.pop();
   updateBoxButtons();
@@ -712,19 +775,28 @@ function runOcr() {
   setStatus('Running Surya on ' + boxes.length + ' crop(s)…');
   document.getElementById('run-btn').disabled = true;
 
+  // In clear-mode the client holds the full expanded unmatched list; send it
+  // to the server so NW alignment and the pairs dropdown use the complete set.
+  const unmatchedOverride = clearMode
+    ? (pageData.unmatched_gemini.length
+        ? savedLines.map(ln => ln.gemini_text).filter(Boolean).concat(pageData.unmatched_gemini)
+        : savedLines.map(ln => ln.gemini_text).filter(Boolean))
+    : null;
+
   fetch('/annotate', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       json_path: pageInfo.json_path,
       bboxes: boxes.map(b => [b.x1, b.y1, b.x2, b.y2]),
+      unmatched_override: unmatchedOverride,
     }),
   })
   .then(r => r.json())
   .then(result => {
     if (result.error) { setStatus('Error: ' + result.error); return; }
     setStatus('Done — ' + result.surya_lines.length + ' Surya lines detected.');
-    showPairs(result.pairs);
+    showPairs(result.pairs, unmatchedOverride);
   })
   .catch(err => { setStatus('Error: ' + err); document.getElementById('run-btn').disabled = false; });
 }
@@ -732,9 +804,9 @@ function runOcr() {
 // ── pairs UI ───────────────────────────────────────────────────────────────
 let _pairs = [];
 
-function showPairs(pairs) {
+function showPairs(pairs, unmatchedOverride) {
   _pairs = pairs;
-  const unmatched = (pageData && pageData.unmatched_gemini) || [];
+  const unmatched = unmatchedOverride || (pageData && pageData.unmatched_gemini) || [];
 
   // Build option HTML once — reused for every row's select
   const skipOpt = '<option value="">— skip —</option>';
@@ -811,7 +883,7 @@ function saveAccepted() {
   fetch('/save', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ json_path: pageInfo.json_path, accepted }),
+    body: JSON.stringify({ json_path: pageInfo.json_path, accepted, clear_existing: clearMode }),
   })
   .then(r => r.json())
   .then(result => {
@@ -823,12 +895,19 @@ function saveAccepted() {
       .then(data => {
         pageData = data;
         updateUnmatched(data.unmatched_gemini);
+        document.getElementById('reset-alignment-btn').disabled = !data.lines || data.lines.length === 0;
         // Update sidebar count
         document.querySelectorAll('.pi.active .cnt').forEach(el => {
           el.textContent = data.unmatched_gemini.length + ' unmatched';
         });
         render();
       });
+    // Exit clear-mode after a successful save
+    if (clearMode) {
+      clearMode = false; savedLines = null;
+      document.getElementById('cancel-clear-btn').style.display = 'none';
+      document.getElementById('reset-alignment-btn').style.display = '';
+    }
     cancelResults();
     boxes = [];
     updateBoxButtons();

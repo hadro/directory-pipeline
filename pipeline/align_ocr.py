@@ -131,6 +131,9 @@ def _get_natural_dims(canvas_id: str) -> tuple[int, int]:
 
 # Needleman-Wunsch gap penalty (must be negative)
 _NW_GAP = -40
+# Second-pass alignment: more permissive penalty + minimum size to bother
+_NW_GAP_PASS2    = -20
+_PASS2_MIN_LINES =  5
 
 # Anchor matching: commit Gemini↔Tesseract line pairs that are near-verbatim
 # matches BEFORE running the global NW.  This prevents the aligner from
@@ -875,6 +878,7 @@ def _build_line_aligned_lines(
 
     result_lines: list[dict] = []
     matched_gi: set[int] = set()
+    matched_si: set[int] = set()
 
     for si, gi in all_pairs:
         if gi is None:
@@ -882,6 +886,7 @@ def _build_line_aligned_lines(
         if si is None:
             continue  # will be collected as unmatched below
         matched_gi.add(gi)
+        matched_si.add(si)
         bbox = list(sorted_surya_lines[si]["bbox"])
         result_lines.append({
             "bbox": bbox,
@@ -896,6 +901,43 @@ def _build_line_aligned_lines(
         for gi in range(len(gemini_lines))
         if gi not in matched_gi
     ]
+
+    # ── Second pass: align remaining unmatched lines ─────────────────────
+    # If the first pass consumed one column but not the other (a common
+    # failure when sort_by_reading_order falls back to Y-band interleaving),
+    # the leftover Surya lines form a coherent second column.  Re-sort them
+    # by Y-centre only and run a more permissive NW pass to catch them.
+    unmatched_si_list = [
+        si for si in range(len(sorted_surya_lines)) if si not in matched_si
+    ]
+    if len(unmatched_si_list) >= _PASS2_MIN_LINES and len(unmatched_gemini) >= _PASS2_MIN_LINES:
+        rem_surya = sorted(
+            (sorted_surya_lines[si] for si in unmatched_si_list),
+            key=lambda ln: (ln["bbox"][1] + ln["bbox"][3]) / 2,
+        )
+        rem_texts  = [ln["text"] for ln in rem_surya]
+        rem_gemini = list(unmatched_gemini)
+
+        rem_pairs = needleman_wunsch(rem_texts, rem_gemini, _text_sim, gap=_NW_GAP_PASS2)
+
+        rem_matched_gi: set[int] = set()
+        for si2, gi2 in rem_pairs:
+            if si2 is None or gi2 is None:
+                continue
+            rem_matched_gi.add(gi2)
+            bbox = list(rem_surya[si2]["bbox"])
+            result_lines.append({
+                "bbox": bbox,
+                "canvas_fragment": fragment_fn(bbox),
+                "confidence": "line",
+                "gemini_text": rem_gemini[gi2],
+            })
+
+        unmatched_gemini = [
+            rem_gemini[gi2]
+            for gi2 in range(len(rem_gemini))
+            if gi2 not in rem_matched_gi
+        ]
 
     return result_lines, unmatched_gemini
 
