@@ -73,7 +73,7 @@ def _extract_item_meta(manifest: dict) -> dict:
     Keys: title, date, institution, homepage_url, collection, genre
     All values are plain strings; missing values are empty strings.
     """
-    manifest_id: str = manifest.get("id") or manifest.get("@id") or ""
+    manifest_id: str = (manifest.get("id") or manifest.get("@id") or "").rstrip("?")
 
     # ── Title ────────────────────────────────────────────────────────────────
     raw_label = _iiif_label(manifest.get("label", {}))
@@ -178,6 +178,7 @@ def _extract_item_meta(manifest: dict) -> dict:
         "homepage_url": homepage_url,
         "collection": collection,
         "genre": genre,
+        "manifest_url": manifest_id,
     }
 
 
@@ -244,7 +245,7 @@ def _find_item_meta(search_root: Path) -> dict:
         except Exception:
             continue
     return {"title": "", "date": "", "institution": "", "homepage_url": "",
-            "collection": "", "genre": ""}
+            "collection": "", "genre": "", "manifest_url": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +524,7 @@ const DOC_TITLE   = {title_json};
 const DOC_META    = {doc_meta_json};
 const VIEWER_URL  = {viewer_url_json};
 const MANIFEST_URL = {manifest_url_json};
+let activeManifestUrl = MANIFEST_URL;
 let ALL_ENTRIES = ALL_INITIAL_ENTRIES;
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -579,6 +581,7 @@ facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
   document.getElementById("doc-title").textContent = volLabels[0];
   document.getElementById("mobile-title").textContent = volLabels[0];
   currentDocMeta = VOLUMES[volLabels[0]].doc_meta || {{}};
+  activeManifestUrl = currentDocMeta.manifest_url || MANIFEST_URL;
   renderMetaStrip(currentDocMeta);
 
   // Build mobile volume select
@@ -617,6 +620,7 @@ facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
       ALL_ENTRIES.length.toLocaleString() + " entries";
     msel.value = sel.value;
     currentDocMeta = vol.doc_meta || {{}};
+    activeManifestUrl = currentDocMeta.manifest_url || MANIFEST_URL;
     renderMetaStrip(currentDocMeta);
     renderFillRate();
     renderAll();
@@ -826,7 +830,8 @@ function openSource(canvas_fragment) {{
 
 // ── IIIF Content State deep-link ────────────────────────────────────────────
 function contentStateUrl(canvas_fragment) {{
-  if (!VIEWER_URL || !MANIFEST_URL || !canvas_fragment) return "";
+  const mUrl = activeManifestUrl || MANIFEST_URL;
+  if (!VIEWER_URL || !mUrl || !canvas_fragment) return "";
   const cid = canvas_fragment.includes("#") ? canvas_fragment.split("#")[0] : canvas_fragment;
   if (!cid) return "";
   const state = {{
@@ -836,13 +841,13 @@ function contentStateUrl(canvas_fragment) {{
     "target": {{
       "id": canvas_fragment,
       "type": "Canvas",
-      "partOf": [{{"id": MANIFEST_URL, "type": "Manifest"}}]
+      "partOf": [{{"id": mUrl, "type": "Manifest"}}]
     }}
   }};
   // base64url (RFC 4648 §5): standard base64 with + → -, / → _, padding stripped
   const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
-  const encoded = b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  return VIEWER_URL.replace(/\/$/, "") + "?iiif-content=" + encoded;
+  const encoded = b64.replace(/[+]/g, "-").replace(/[/]/g, "_").replace(/=+$/, "");
+  return VIEWER_URL.replace(/\\/$/, "") + "?iiif-content=" + encoded;
 }}
 
 // ── Detail panel ───────────────────────────────────────────────────────────

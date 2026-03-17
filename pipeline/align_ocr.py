@@ -372,26 +372,28 @@ def sort_by_reading_order(lines: list[dict], page_width: int) -> list[dict]:
                 return i
         return len(col_breaks)
 
-    # True two-column layout: Gemini reads column-major (entire left column,
-    # then entire right column).  Detect when exactly two columns each hold
-    # ≥ 20% of lines and together account for ≥ 80% of lines (noise lines in
-    # additional columns are ignored).  This tolerates spurious extra col_breaks
-    # caused by one or two garbage Tesseract lines with extreme x1 values.
+    # N-column layout: Gemini reads column-major (entire column 0 top-to-bottom,
+    # then column 1, etc.).  Detect when two or more columns each hold ≥ 10% of
+    # lines and together account for ≥ 80% of lines.  The 10% per-column floor
+    # (down from 20%) allows 4+ column layouts where 20% each would be impossible.
+    # This tolerates spurious extra col_breaks caused by a few noise lines with
+    # extreme x1 values by requiring ≥ 80% total coverage.
     if col_breaks:
         from collections import Counter as _Counter
         col_counts = _Counter(col_index(ln["bbox"][0]) for ln in lines)
         substantial = sorted(
-            c for c, n in col_counts.items() if n / len(lines) >= 0.20
+            c for c, n in col_counts.items() if n / len(lines) >= 0.10
         )
-        if len(substantial) == 2:
-            c0, c1 = substantial
-            left_col  = [ln for ln in lines if col_index(ln["bbox"][0]) == c0]
-            right_col = [ln for ln in lines if col_index(ln["bbox"][0]) == c1]
-            if (len(left_col) + len(right_col)) / len(lines) >= 0.80:
-                return (
-                    sorted(left_col,  key=lambda ln: ln["bbox"][1])
-                    + sorted(right_col, key=lambda ln: ln["bbox"][1])
+        if len(substantial) >= 2:
+            cols = [
+                sorted(
+                    [ln for ln in lines if col_index(ln["bbox"][0]) == c],
+                    key=lambda ln: ln["bbox"][1],
                 )
+                for c in substantial
+            ]
+            if sum(len(col) for col in cols) / len(lines) >= 0.80:
+                return [ln for col in cols for ln in col]
 
     return sorted(
         lines,
@@ -902,29 +904,40 @@ def _build_line_aligned_lines(
         if gi not in matched_gi
     ]
 
-    # ── Second pass: align remaining unmatched lines ─────────────────────
-    # If the first pass consumed one column but not the other (a common
-    # failure when sort_by_reading_order falls back to Y-band interleaving),
-    # the leftover Surya lines form a coherent second column.  Re-sort them
-    # by Y-centre only and run a more permissive NW pass to catch them.
-    unmatched_si_list = [
-        si for si in range(len(sorted_surya_lines)) if si not in matched_si
-    ]
-    if len(unmatched_si_list) >= _PASS2_MIN_LINES and len(unmatched_gemini) >= _PASS2_MIN_LINES:
-        rem_surya = sorted(
-            (sorted_surya_lines[si] for si in unmatched_si_list),
-            key=lambda ln: (ln["bbox"][1] + ln["bbox"][3]) / 2,
+    # ── Remaining-column passes ───────────────────────────────────────────
+    # When sort_by_reading_order falls back to Y-band interleaving, the first
+    # NW pass may consume only one column, leaving the others entirely
+    # unmatched.  Loop: each iteration re-sorts unmatched Surya lines by
+    # Y-centre (recovering one column's worth of order) and runs a more
+    # permissive NW pass.  Terminates when either side is below the minimum
+    # threshold, or when a pass produces no new matches (prevents infinite
+    # loops on pages where remaining lines are simply unmatchable).
+    while True:
+        unmatched_si_list = [
+            si for si in range(len(sorted_surya_lines)) if si not in matched_si
+        ]
+        if len(unmatched_si_list) < _PASS2_MIN_LINES or len(unmatched_gemini) < _PASS2_MIN_LINES:
+            break
+
+        rem_surya_indexed = sorted(
+            ((si, sorted_surya_lines[si]) for si in unmatched_si_list),
+            key=lambda pair: (pair[1]["bbox"][1] + pair[1]["bbox"][3]) / 2,
         )
-        rem_texts  = [ln["text"] for ln in rem_surya]
-        rem_gemini = list(unmatched_gemini)
+        rem_orig_si = [si for si, _ in rem_surya_indexed]
+        rem_surya   = [ln for _, ln in rem_surya_indexed]
+        rem_texts   = [ln["text"] for ln in rem_surya]
+        rem_gemini  = list(unmatched_gemini)
 
         rem_pairs = needleman_wunsch(rem_texts, rem_gemini, _text_sim, gap=_NW_GAP_PASS2)
 
         rem_matched_gi: set[int] = set()
+        any_matched = False
         for si2, gi2 in rem_pairs:
             if si2 is None or gi2 is None:
                 continue
             rem_matched_gi.add(gi2)
+            matched_si.add(rem_orig_si[si2])
+            any_matched = True
             bbox = list(rem_surya[si2]["bbox"])
             result_lines.append({
                 "bbox": bbox,
@@ -938,6 +951,9 @@ def _build_line_aligned_lines(
             for gi2 in range(len(rem_gemini))
             if gi2 not in rem_matched_gi
         ]
+
+        if not any_matched:
+            break
 
     return result_lines, unmatched_gemini
 
