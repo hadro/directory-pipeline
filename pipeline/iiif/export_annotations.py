@@ -39,6 +39,13 @@ import json
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from iiif.label_utils import (  # noqa: E402
+    parse_ner_label_fields,
+    build_entry_label,
+    handle_missing_ner_prompt,
+)
+
 
 # ---------------------------------------------------------------------------
 # Annotation builders
@@ -61,15 +68,11 @@ def _line_annotation(ann_id: str, canvas_fragment: str, text: str, lang: str) ->
     return ann
 
 
-def _entry_annotation(ann_id: str, canvas_fragment: str, entry: dict) -> dict:
+def _entry_annotation(ann_id: str, canvas_fragment: str, entry: dict,
+                      name_fields: list[str] | None = None,
+                      addr_fields: list[str] | None = None) -> dict:
     """Build a describing annotation for a structured directory entry."""
-    parts = [entry.get("establishment_name") or ""]
-    if entry.get("raw_address"):
-        parts.append(entry["raw_address"])
-    city_state = ", ".join(filter(None, [entry.get("city"), entry.get("state")]))
-    if city_state:
-        parts.append(city_state)
-    label = " — ".join(p for p in parts if p)
+    label = build_entry_label(entry, name_fields, addr_fields)
 
     ann: dict = {
         "type":       "Annotation",
@@ -108,6 +111,7 @@ def export_page(
     include_entries: bool,
     force: bool,
     quiet: bool,
+    ner_prompt_path: Path | None = None,
 ) -> tuple[int, int]:
     """Export one aligned JSON to annotation page(s). Returns (n_lines, n_entries)."""
     try:
@@ -155,6 +159,9 @@ def export_page(
                 except Exception:
                     entries = []
 
+                resolved_ner = ner_prompt_path or (aligned_path.parent / "ner_prompt.md")
+                name_fields, addr_fields = parse_ner_label_fields(resolved_ner)
+
                 page_id = f"{base_url}/{base_stem}_entry_annotations" if base_url else ""
                 items = []
                 for i, entry in enumerate(entries):
@@ -162,7 +169,8 @@ def export_page(
                     if not cf:
                         continue
                     ann_id = f"{page_id}/entry/{i}" if page_id else ""
-                    items.append(_entry_annotation(ann_id, cf, entry))
+                    items.append(_entry_annotation(ann_id, cf, entry,
+                                                   name_fields or None, addr_fields or None))
                 entry_ann_path.write_text(
                     json.dumps(_make_page(page_id, items), indent=2, ensure_ascii=False),
                     encoding="utf-8",
@@ -200,6 +208,9 @@ def main() -> None:
         help="BCP 47 language tag for line annotation bodies (default: en)")
     parser.add_argument("--no-entries", action="store_true",
         help="Skip entry-level annotation export (line-level transcription only)")
+    parser.add_argument("--ner-prompt", default=None, metavar="PATH",
+        help="Path to a ner_prompt.md for this collection type.  "
+             "If omitted, looks for ner_prompt.md in the item directory.")
     parser.add_argument("--force", "-f", action="store_true",
         help="Re-export even if output files already exist")
     parser.add_argument("--quiet", "-q", action="store_true",
@@ -226,6 +237,28 @@ def main() -> None:
         file=sys.stderr,
     )
 
+    ner_prompt_path: Path | None = None
+    if args.ner_prompt:
+        ner_prompt_path = Path(args.ner_prompt)
+        if not ner_prompt_path.is_file():
+            print(f"Error: --ner-prompt path not found: {ner_prompt_path}", file=sys.stderr)
+            sys.exit(1)
+    elif not args.no_entries:
+        candidate = item_dir / "ner_prompt.md"
+        if candidate.is_file():
+            ner_prompt_path = candidate
+
+    if ner_prompt_path and not args.no_entries:
+        name_fields, addr_fields = parse_ner_label_fields(ner_prompt_path)
+        if not args.quiet:
+            print(
+                f"NER prompt: {ner_prompt_path}\n"
+                f"  label fields  — name: {name_fields}, addr: {addr_fields}",
+                file=sys.stderr,
+            )
+    elif not args.no_entries:
+        handle_missing_ner_prompt()
+
     total_lines   = 0
     total_entries = 0
     for p in aligned_files:
@@ -236,6 +269,7 @@ def main() -> None:
             include_entries=not args.no_entries,
             force=args.force,
             quiet=args.quiet,
+            ner_prompt_path=ner_prompt_path,
         )
         total_lines   += n_lines
         total_entries += n_entries

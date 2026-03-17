@@ -49,6 +49,11 @@ from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import iiif_utils
+from iiif.label_utils import (
+    parse_ner_label_fields,
+    build_entry_label,
+    handle_missing_ner_prompt,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -135,22 +140,31 @@ def _svg_rect(
     )
 
 
-def _entry_body_text(entry: dict) -> str:
-    """One-line human-readable label for an entry."""
-    parts = [entry.get("establishment_name") or ""]
-    if entry.get("raw_address"):
-        parts.append(entry["raw_address"])
-    city_state = ", ".join(filter(None, [entry.get("city"), entry.get("state")]))
-    if city_state:
-        parts.append(city_state)
+# ---------------------------------------------------------------------------
+# Entry body text (box-specific: appends category label)
+# ---------------------------------------------------------------------------
+
+def _entry_body_text(
+    entry: dict,
+    name_fields: list[str] | None = None,
+    addr_fields: list[str] | None = None,
+) -> str:
+    """One-line human-readable label for an entry, with category appended.
+
+    Delegates core name/address/city-state formatting to :func:`build_entry_label`
+    from :mod:`label_utils`, then appends the Green Book category label if present.
+    """
+    label = build_entry_label(entry, name_fields, addr_fields)
     cat_label = _CATEGORY_LABELS.get(entry.get("category", ""), "")
     if cat_label:
-        parts.append(f"[{cat_label}]")
-    return " — ".join(p for p in parts if p)
+        return f"{label} — [{cat_label}]" if label else f"[{cat_label}]"
+    return label
 
 
 def _box_annotation(ann_id: str, canvas_id: str, x: int, y: int, w: int, h: int,
-                     canvas_w: int, canvas_h: int, entry: dict) -> dict:
+                     canvas_w: int, canvas_h: int, entry: dict,
+                     name_fields: list[str] | None = None,
+                     addr_fields: list[str] | None = None) -> dict:
     cat = entry.get("category", "other")
     fill, stroke, sw = _PALETTE.get(cat, _DEFAULT_STYLE)
     is_ad = str(entry.get("is_advertisement", "")).strip().lower() in ("true", "1", "yes")
@@ -160,7 +174,7 @@ def _box_annotation(ann_id: str, canvas_id: str, x: int, y: int, w: int, h: int,
         "motivation": "commenting",
         "body": {
             "type": "TextualBody",
-            "value": _entry_body_text(entry),
+            "value": _entry_body_text(entry, name_fields, addr_fields),
             "format": "text/plain",
         },
         # Use the simplest possible target format: plain canvas URI fragment.
@@ -193,6 +207,7 @@ def export_boxes(
     base_url: str,
     force: bool,
     quiet: bool,
+    ner_prompt_path: Path | None = None,
 ) -> tuple[int, str | None, int, int]:
     """
     Export one *_entries.json to a *_box_annotations.json Annotation Page.
@@ -253,6 +268,11 @@ def export_boxes(
             max(1, round(h * nat_h / canvas_h)),
         )
 
+    # Parse NER prompt for this collection to determine label field priorities.
+    # Prefer an explicit override path; fall back to a sibling ner_prompt.md.
+    resolved_ner = ner_prompt_path or (entries_path.parent / "ner_prompt.md")
+    name_fields, addr_fields = parse_ner_label_fields(resolved_ner)
+
     # Annotation page ID
     base_stem = entries_path.stem.removesuffix("_entries")
     page_id = f"{base_url}/{base_stem}_box_annotations.json" if base_url else ""
@@ -283,7 +303,8 @@ def export_boxes(
 
         ann_id = f"{page_id}/entry/{i}" if page_id else ""
         items.append(
-            _box_annotation(ann_id, canvas_id, x, y, w, h, nat_w, nat_h, entry)
+            _box_annotation(ann_id, canvas_id, x, y, w, h, nat_w, nat_h, entry,
+                            name_fields or None, addr_fields or None)
         )
 
     out_path.write_text(
@@ -428,6 +449,16 @@ def main() -> None:
         help="Re-export even if output files already exist",
     )
     parser.add_argument(
+        "--ner-prompt",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to a ner_prompt.md to use for all files in this run.  "
+            "If omitted the script looks for ner_prompt.md in each file's "
+            "directory, then falls back to built-in field-name defaults."
+        ),
+    )
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="Suppress per-file progress output",
@@ -461,6 +492,31 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # ── Resolve NER prompt path and log / confirm once ───────────────────────
+    ner_prompt_path: Path | None = None
+
+    if args.ner_prompt:
+        ner_prompt_path = Path(args.ner_prompt)
+        if not ner_prompt_path.is_file():
+            print(f"Error: --ner-prompt path not found: {ner_prompt_path}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Look for a sibling ner_prompt.md in the item dir itself.
+        candidate = item_dir / "ner_prompt.md"
+        if candidate.is_file():
+            ner_prompt_path = candidate
+
+    if ner_prompt_path:
+        name_fields, addr_fields = parse_ner_label_fields(ner_prompt_path)
+        if not args.quiet:
+            print(
+                f"NER prompt: {ner_prompt_path}\n"
+                f"  label fields  — name: {name_fields}, addr: {addr_fields}",
+                file=sys.stderr,
+            )
+    else:
+        handle_missing_ner_prompt()
+
     print(
         f"Exporting box annotations for {len(entries_files)} entries file(s)…",
         file=sys.stderr,
@@ -478,6 +534,7 @@ def main() -> None:
             base_url=args.base_url,
             force=args.force,
             quiet=args.quiet,
+            ner_prompt_path=ner_prompt_path,
         )
         total += n
         if canvas_id and args.base_url:
