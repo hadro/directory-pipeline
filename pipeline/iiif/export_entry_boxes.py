@@ -48,6 +48,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from utils import iiif_utils
 from iiif.label_utils import (
     parse_ner_label_fields,

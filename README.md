@@ -1,7 +1,8 @@
 # directory-pipeline
 
-Give it a URL or IIIF manifest from the [Library of Congress](https://www.loc.gov/collections/), the [Internet Archive](https://archive.org/), or [NYPL Digital Collections](https://digitalcollections.nypl.org/) — it returns a structured CSV of every
-entry in that digitized historical directory. It extracts things like name, address, city, state, category, and also always includes a column linking each row back to the exact page in the source scan. If IIIF enrichment is done, it links directly to the specific entry!
+Give it a URL or IIIF manifest from the [Library of Congress](https://www.loc.gov/collections/), the [Internet Archive](https://archive.org/), or [NYPL Digital Collections](https://digitalcollections.nypl.org/) — it returns a structured CSV of every entry in that digitized historical directory. It extracts things like name, address, city, state, and category.
+
+Every row in the output CSV carries a `canvas_fragment` column: a IIIF URI that links directly back to the source scan. With the precision upgrade (`--surya-ocr --align-ocr`), the fragment includes a `#xywh=` bounding box pinpointing the exact line on the page. The auto-generated data explorer and Clover IIIF viewer use **IIIF Content State** to turn that coordinate into a live deep link — click any row and the viewer opens at exactly that entry, highlighted in the original document.
 
 No manual transcription or ground truth required to get started. No custom code per collection needed.
 
@@ -72,11 +73,13 @@ any nearby candidate prompts it finds.
 | `--gemini-ocr` | One `.txt` file per page |
 | `--extract-entries` | `entries_{model}.csv` + per-page `*_{model}_entries.json` sidecars |
 
-The output CSV includes a `canvas_fragment` column: a IIIF URI pointing back to
-the exact canvas for each row — free provenance that makes the data immediately
-useful to connect back to the original source images via any number of IIIF
-viewers.  With the precision upgrade (`--surya-ocr --align-ocr`), the fragment
-gains a `#xywh=` bounding box pointing to the exact line on the page.
+The output CSV includes a `canvas_fragment` column: a IIIF URI pointing back to the exact canvas (and, with the precision upgrade, the exact line) for every row. This is the foundation for the full source-linking chain:
+
+```
+CSV row  →  explorer thumbnail  →  Clover viewer  →  highlighted entry in original scan
+```
+
+With `--surya-ocr --align-ocr`, the fragment gains a `#xywh=` bounding box. The explorer and the deployed Clover viewer encode that coordinate as a **IIIF Content State** parameter, so the "View in source document" link opens the viewer scrolled and zoomed directly to that entry — no manual page-hunting required.
 
 ---
 
@@ -104,11 +107,13 @@ python pipeline/iiif/export_entry_boxes.py output/{slug}/{item_id}/
 python pipeline/iiif/export_annotations.py output/{slug}/{item_id}/
 ```
 
-**GitHub Pages viewer** — self-contained IIIF viewer with annotations:
+**GitHub Pages viewer** — Clover IIIF viewer with annotations and data explorer:
 
 ```bash
 ./scripts/make-git-repo.sh output/{slug}/{item_id}/ ~/github/my-repo https://username.github.io/my-repo
 ```
+
+Copies `manifest.json`, annotation files, and `explorer.html` to the destination folder, and generates a Clover-based `index.html` viewer with full IIIF Content State support (deep-linking directly to highlighted entries). Requires `clover.umd.patched.js` in `scripts/` (included).
 
 `--full-run` is the maximal shorthand: `--download --surya-ocr --gemini-ocr
 --align-ocr --review-alignment --extract-entries --geocode --map`, with
@@ -130,7 +135,7 @@ python pipeline/iiif/export_annotations.py output/{slug}/{item_id}/
 
 ![Interactive field-value explorer with density chart, bar charts, and results table](screenshots/explorer.png)
 
-*Auto-generated self-contained HTML explorer. The entries-per-page density strip at the top shows document structure at a glance. Categorical bar charts (state, city, category, etc.) are click-to-filter and update the results table live. Clicking a row shows all fields plus a IIIF thumbnail of the source page.*
+*Auto-generated self-contained HTML explorer. Categorical bar charts show distribution; filtering is done via sidebar facet checkboxes and per-column filter inputs. Clicking a row opens a detail panel with all fields, a IIIF thumbnail of the source page, and a "View in source document" link — a IIIF Content State deep link that opens the Clover viewer scrolled directly to that entry in the original scan.*
 
 ---
 
@@ -261,6 +266,9 @@ directory-pipeline/
 │   ├── key-design-decisions.md       # Technical architecture notes
 │   └── prior-work.md                 # Annotated citations of related work
 │
+├── scripts/                          # Deployment utilities
+│   └── make-git-repo.sh              # Assemble pipeline output into a GitHub Pages folder
+│
 ├── pyproject.toml                    # Python project config and dependencies
 └── output/
     └── {slug}/                       # e.g. the_negro_motorist_green_book_1947_4bea2040/
@@ -291,6 +299,7 @@ directory-pipeline/
             ├── columns_report.csv
             ├── entries_{model}.csv                   # aggregate entries for collection
             ├── entries_{model}_geocoded.csv          # entries with lat/lon
+            ├── entries_{model}_explorer.html         # interactive data explorer
             ├── entries_{model}.html                  # interactive Leaflet map
             └── geocache.json                         # geocoding cache
 ```
