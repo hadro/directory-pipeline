@@ -381,8 +381,10 @@ input[type=text]:focus, select:focus {{ border-color: #4e79a7; }}
 
 <div id="sidebar">
   <div id="sidebar-header">
-    <h1>Negro Motorist Green Book</h1>
+    <h1>{map_title}</h1>
     <p id="subtitle">Loading…</p>
+    {homepage_link_html}
+    {explorer_link_html}
   </div>
 
   <div id="sidebar-body">
@@ -435,6 +437,33 @@ let clusterGroup = L.markerClusterGroup({{ chunkedLoading: true, maxClusterRadiu
 map.addLayer(clusterGroup);
 let visibleLatLngs = [];
 
+// ── URL state ────────────────────────────────────────────────────────────────
+const markerByIdx = new Map();  // ALL_ENTRIES index → Leaflet marker
+let _openEntryIdx = null;       // index of currently-open popup, or null
+let _suppressFitBounds = false; // true while restoring a hash-encoded view
+
+function stateToHash() {{
+  const c = map.getCenter();
+  const z = map.getZoom();
+  const base = `${{c.lat.toFixed(4)}},${{c.lng.toFixed(4)}},${{z}}`;
+  return _openEntryIdx != null ? `#${{base}},${{_openEntryIdx}}` : `#${{base}}`;
+}}
+
+function hashToState() {{
+  const h = location.hash.slice(1);
+  if (!h) return null;
+  const [latS, lonS, zS, idxS] = h.split(',');
+  const lat = parseFloat(latS), lon = parseFloat(lonS), zoom = parseInt(zS);
+  if (isNaN(lat) || isNaN(lon) || isNaN(zoom)) return null;
+  return {{ lat, lon, zoom, idx: idxS != null ? parseInt(idxS) : null }};
+}}
+
+function updateHash() {{
+  try {{ history.replaceState(null, '', stateToHash()); }} catch(e) {{}}
+}}
+
+map.on('moveend zoomend', updateHash);
+
 document.getElementById('subtitle').textContent =
   YEAR_LABEL + ' · ' + TOTAL_ENTRIES.toLocaleString() + ' entries';
 
@@ -479,8 +508,11 @@ function updateMap() {{
 
   clusterGroup.clearLayers();
   visibleLatLngs = [];
+  markerByIdx.clear();
 
+  let ei = 0;
   for (const e of ALL_ENTRIES) {{
+    const _ei = ei++;
     if (state && e.state !== state) continue;
     if (!activeCats.has(e.category)) continue;
     if (q) {{
@@ -507,6 +539,10 @@ function updateMap() {{
       {{ maxWidth: 300 }}
     );
 
+    marker.on('popupopen',  () => {{ _openEntryIdx = _ei; updateHash(); }});
+    marker.on('popupclose', () => {{ if (_openEntryIdx === _ei) {{ _openEntryIdx = null; updateHash(); }} }});
+    markerByIdx.set(_ei, marker);
+
     clusterGroup.addLayer(marker);
     visibleLatLngs.push([e.lat, e.lon]);
   }}
@@ -514,6 +550,11 @@ function updateMap() {{
   const n = visibleLatLngs.length;
   document.getElementById('result-count').textContent =
     n.toLocaleString() + ' of ' + TOTAL_ENTRIES.toLocaleString() + ' entries shown';
+
+  if (!_suppressFitBounds && n > 0) {{
+    if (n === 1) map.setView(visibleLatLngs[0], 16);
+    else map.fitBounds(L.latLngBounds(visibleLatLngs), {{ padding: [30, 30] }});
+  }}
 }}
 
 document.getElementById('fit-btn').addEventListener('click', () => {{
@@ -545,23 +586,54 @@ document.querySelectorAll('.cat-cb').forEach(cb =>
   }})
 );
 
+const _initState = hashToState();
+if (_initState) {{
+  map.setView([_initState.lat, _initState.lon], _initState.zoom);
+  _suppressFitBounds = true;
+}}
 updateMap();
+_suppressFitBounds = false;
+
+if (_initState && _initState.idx != null) {{
+  const m = markerByIdx.get(_initState.idx);
+  if (m) clusterGroup.zoomToShowLayer(m, () => m.openPopup());
+}}
 </script>
 </body>
 </html>
 """
 
 
-def build_html(entries: list[dict], title_year: str) -> str:
+def build_html(
+    entries: list[dict],
+    title_year: str,
+    homepage_url: str = "",
+    explorer_url: str = "",
+) -> str:
     def safe_json(obj: object) -> str:
         s = json.dumps(obj, ensure_ascii=False)
         return s.replace("</script>", r"<\/script>").replace("<!--", r"<\!--")
 
+    _s = 'style="color:#1a6ebd;"'
+    homepage_link_html = (
+        f'<p style="margin-top:4px;font-size:11px;"><a href="{homepage_url}" '
+        f'target="_blank" rel="noopener" {_s}>Item page ↗</a></p>'
+        if homepage_url else ""
+    )
+    explorer_link_html = (
+        f'<p style="margin-top:2px;font-size:11px;"><a href="{explorer_url}" '
+        f'target="_blank" rel="noopener" {_s}>Data Explorer ↗</a></p>'
+        if explorer_url else ""
+    )
+
     return _HTML_TEMPLATE.format(
-        entries_json    = safe_json(entries),
-        cat_colors_json = safe_json(CATEGORY_COLORS),
-        cat_labels_json = safe_json(CATEGORY_LABELS),
-        year_label_json = safe_json(title_year),
+        entries_json       = safe_json(entries),
+        cat_colors_json    = safe_json(CATEGORY_COLORS),
+        cat_labels_json    = safe_json(CATEGORY_LABELS),
+        year_label_json    = safe_json(title_year),
+        map_title          = title_year,
+        homepage_link_html = homepage_link_html,
+        explorer_link_html = explorer_link_html,
     )
 
 
@@ -622,6 +694,9 @@ def main() -> None:
     parser.add_argument("--manifest-url", default="", metavar="URL",
         help="Explicit URL of the IIIF manifest served alongside the viewer. "
              "Defaults to <viewer-url>/manifest.json.")
+    parser.add_argument("--homepage-url", default="", metavar="URL",
+        help="URL of the source institution item page (e.g. https://www.loc.gov/item/73644404/). "
+             "Shown as 'Item page ↗' in the map sidebar.")
     args = parser.parse_args()
 
     import re
@@ -697,7 +772,12 @@ def main() -> None:
         file=sys.stderr,
     )
 
-    html = build_html(entries, year_label)
+    explorer_url = f"{viewer_base_url}/explorer.html" if viewer_base_url else ""
+    html = build_html(
+        entries, year_label,
+        homepage_url=args.homepage_url,
+        explorer_url=explorer_url,
+    )
     out_path.write_text(html, encoding="utf-8")
     print(f"Saved: {out_path}", file=sys.stderr)
 
