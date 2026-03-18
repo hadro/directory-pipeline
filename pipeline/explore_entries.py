@@ -339,12 +339,12 @@ a {{ color: #1a6ebd; }}
 
 .facet-group {{ margin-bottom: 14px; }}
 .facet-label {{ font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #555; margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center; }}
-.facet-clear {{ font-size: 11px; font-weight: 400; text-transform: none; color: #1a6ebd; cursor: pointer; letter-spacing: 0; background: none; border: none; padding: 0; }}
+.facet-clear {{ font-size: 11px; font-weight: 400; text-transform: none; color: #1a6ebd; cursor: pointer; letter-spacing: 0; background: none; border: none; padding: 4px 6px; margin: -4px -6px -4px 0; }}
 .facet-item {{ display: flex; align-items: center; gap: 6px; margin-bottom: 3px; cursor: pointer; user-select: none; }}
 .facet-item input[type=checkbox] {{ accent-color: #1a6ebd; cursor: pointer; flex-shrink: 0; }}
 .facet-item .val {{ flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }}
 .facet-item .cnt {{ font-size: 11px; color: #595959; flex-shrink: 0; }}
-.facet-more {{ font-size: 11px; color: #595959; margin-top: 3px; cursor: pointer; background: none; border: none; padding: 0; text-align: left; }}
+.facet-more {{ font-size: 11px; color: #595959; margin-top: 3px; cursor: pointer; background: none; border: none; padding: 6px 4px; margin-left: -4px; text-align: left; }}
 .facet-more:hover {{ color: #1a6ebd; }}
 
 /* ── Main panel ── */
@@ -352,6 +352,9 @@ a {{ color: #1a6ebd; }}
 #toolbar {{ padding: 10px 16px; border-bottom: 1px solid #ddd; background: #fff; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
 #search {{ flex: 1; min-width: 180px; padding: 6px 10px; border: 1px solid #767676; border-radius: 4px; font-size: 13px; }}
 #count-label {{ font-size: 12px; color: #666; white-space: nowrap; }}
+#clear-filters-btn {{ display: none; padding: 4px 10px; background: #fff; border: 1px solid #c66; border-radius: 4px; cursor: pointer; font-size: 12px; color: #b33; white-space: nowrap; }}
+#clear-filters-btn:hover {{ background: #fff0f0; border-color: #a44; }}
+#clear-filters-btn:focus-visible {{ outline: 2px solid #1a6ebd; outline-offset: 2px; }}
 #export-btn {{ padding: 5px 12px; background: #1a6ebd; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; }}
 #export-btn:hover {{ background: #155a9e; }}
 #meta-strip {{ margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; flex-shrink: 0; }}
@@ -366,7 +369,7 @@ a {{ color: #1a6ebd; }}
 .chart-block {{ display: flex; flex-direction: column; }}
 .chart-block h3 {{ margin: 0 0 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #555; }}
 
-thead tr.filter-row th {{ position: sticky; top: 33px; background: #f8f8f6; padding: 3px 6px; border-bottom: 1px solid #ddd; }}
+thead tr.filter-row th {{ position: sticky; top: 33px; background: #eef2f6; padding: 3px 6px; border-top: 2px solid #c4d4e8; border-bottom: 1px solid #ddd; }}
 .col-filter-input {{ width: 100%; font-size: 11px; padding: 2px 5px; border: 1px solid #767676; border-radius: 3px; box-sizing: border-box; }}
 .col-filter-input:focus {{ outline: 2px solid #1a6ebd; outline-offset: 0; border-color: #1a6ebd; }}
 
@@ -377,6 +380,7 @@ thead tr.filter-row th {{ position: sticky; top: 33px; background: #f8f8f6; padd
 table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
 thead th {{ position: sticky; top: 0; background: #f0f0ee; border-bottom: 2px solid #ddd; padding: 7px 10px; text-align: left; font-weight: 600; white-space: nowrap; cursor: pointer; user-select: none; }}
 thead th:hover {{ background: #e4e4e2; }}
+thead th[aria-sort="none"]::after {{ content: " ↕"; color: #bbb; font-size: 10px; }}
 thead th.sorted-asc::after {{ content: " ↑"; color: #1a6ebd; }}
 thead th.sorted-desc::after {{ content: " ↓"; color: #1a6ebd; }}
 tbody tr {{ border-bottom: 1px solid #eee; cursor: pointer; }}
@@ -387,20 +391,26 @@ td.source-cell {{ text-align: center; }}
 .src-btn {{ background: #f0f0f0; border: 1px solid #767676; border-radius: 3px; padding: 2px 7px; cursor: pointer; font-size: 11px; color: #333; white-space: nowrap; }}
 .src-btn:hover {{ background: #fff; color: #1a6ebd; border-color: #1a6ebd; }}
 #no-results {{ padding: 40px; text-align: center; color: #595959; font-size: 14px; display: none; }}
+#no-results p {{ margin: 6px 0 0; font-size: 12px; }}
+#no-results button {{ margin-top: 14px; padding: 5px 14px; background: #1a6ebd; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }}
+#no-results button:hover {{ background: #155a9e; }}
+.table-end-sentinel td {{ text-align: center; color: #aaa; font-size: 12px; padding: 14px; border-top: 1px solid #ddd; }}
+mark {{ background: #ffe066; color: inherit; padding: 0 1px; border-radius: 2px; }}
 
 /* ── Detail panel ── */
-#detail {{ width: 300px; min-width: 260px; max-width: 360px; background: #fff; border-left: 1px solid #ddd; overflow-y: auto; display: none; }}
+#detail {{ width: 380px; min-width: 300px; max-width: 440px; background: #fff; border-left: 1px solid #ddd; overflow-y: auto; display: none; }}
 #detail.open {{ display: block; }}
 #detail-inner {{ padding: 14px; }}
 #detail-inner h2 {{ margin: 0 0 10px; font-size: 14px; font-weight: 700; line-height: 1.3; }}
-#detail-thumb {{ width: 100%; border-radius: 4px; margin-bottom: 10px; display: block; border: 1px solid #ddd; }}
+#detail-thumb {{ width: 100%; aspect-ratio: 4/3; object-fit: contain; background: #f5f5f5; border-radius: 4px; margin-bottom: 10px; display: block; border: 1px solid #ddd; }}
 .detail-fields {{ display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 12px; }}
 .df-key {{ color: #666; font-weight: 600; white-space: nowrap; }}
 .df-val {{ word-break: break-word; }}
 .detail-source {{ margin-top: 12px; }}
 .detail-source a {{ font-size: 12px; }}
-#detail-close {{ float: right; background: none; border: none; font-size: 18px; cursor: pointer; color: #595959; line-height: 1; margin: -4px -4px 0 0; }}
+#detail-close {{ float: right; background: none; border: none; font-size: 18px; cursor: pointer; color: #595959; line-height: 1; padding: 6px 8px; margin: -6px -8px 0 0; }}
 #detail-close:hover {{ color: #333; }}
+#detail-close:focus-visible {{ outline: 2px solid #1a6ebd; outline-offset: 2px; border-radius: 2px; }}
 #mobile-header {{ display: none; }}
 
 /* ── Mobile (≤640 px) ───────────────────────────────────────────────────── */
@@ -450,6 +460,10 @@ td.source-cell {{ text-align: center; }}
     background: #fff; color: #333; margin-top: 4px;
   }}
   #mobile-volume-select.visible {{ display: block; }}
+  .col-filter-input {{ padding: 8px 6px; min-height: 44px; font-size: 13px; }}
+  .facet-item {{ padding: 4px 0; }}
+  .src-btn {{ padding: 8px 10px; font-size: 13px; }}
+  #clear-filters-btn, #export-btn, #charts-toggle {{ padding: 8px 14px; font-size: 13px; }}
 }}
 </style>
 </head>
@@ -469,7 +483,8 @@ td.source-cell {{ text-align: center; }}
   </div>
   <div id="sidebar-scroll">
     <div id="fill-rate-section">
-      <div class="facet-label" style="margin-bottom:6px;">Field coverage</div>
+      <div class="facet-label" style="margin-bottom:4px;">Field coverage</div>
+      <p style="font-size:11px;color:#777;margin:0 0 6px;line-height:1.4;">Less than 100% means not every entry from the source scans had that field or value.</p>
       <div id="fill-rate-chart"></div>
     </div>
     <hr style="margin:12px 0; border:none; border-top:1px solid #eee;">
@@ -487,10 +502,11 @@ td.source-cell {{ text-align: center; }}
   </div>
   <div id="toolbar">
     <button id="filter-btn" style="display:none" aria-label="Open filters" aria-expanded="false" aria-controls="sidebar">&#9776; Filters</button>
-    <input id="search" type="search" placeholder="Search all fields…" autocomplete="off" aria-label="Search all fields">
+    <input id="search" type="search" placeholder="Search all fields (name, address, city…)" autocomplete="off" aria-label="Search all fields">
     <span id="count-label" aria-live="polite" aria-atomic="true"></span>
+    <button id="clear-filters-btn" aria-label="Clear all filters">\u00d7 Clear filters</button>
     <div id="meta-strip"></div>
-    <button id="charts-toggle" aria-expanded="true" aria-controls="charts-row">Hide charts ▲</button>
+    <button id="charts-toggle" aria-expanded="true" aria-controls="charts-row">Hide summary ▴</button>
     <button id="export-btn">Export CSV</button>
   </div>
   <div id="charts-row"></div>
@@ -500,7 +516,11 @@ td.source-cell {{ text-align: center; }}
         <thead id="table-head"></thead>
         <tbody id="table-body"></tbody>
       </table>
-      <div id="no-results">No entries match the current filters.</div>
+      <div id="no-results">
+        No entries match the current filters.
+        <p>Try removing filters or adjusting your search.</p>
+        <button id="clear-all-btn">Clear all filters</button>
+      </div>
     </div>
     <div id="detail">
       <div id="detail-inner">
@@ -527,6 +547,18 @@ const MANIFEST_URL = {manifest_url_json};
 let activeManifestUrl = MANIFEST_URL;
 let ALL_ENTRIES = ALL_INITIAL_ENTRIES;
 
+// ── Field display-name and value-label overrides ──────────────────────────
+const FIELD_LABELS = {{
+  "is_new_firm": "New listing",
+  "is new firm": "New listing",
+}};
+const VALUE_LABELS = {{
+  "True": "Yes",
+  "False": "No",
+  "true": "Yes",
+  "false": "No",
+}};
+
 // ── State ──────────────────────────────────────────────────────────────────
 let currentDocMeta = DOC_META;
 const facetState = {{}};   // {{fieldName: Set<value>}}
@@ -536,6 +568,7 @@ let sortDir = 1;  // 1 = asc, -1 = desc
 let selectedIdx = null;
 let colFilters = {{}};  // fieldName → filter string
 const showAllFacets = new Set();  // field names with expanded value list
+try {{ const _s = sessionStorage.getItem('showAllFacets'); if (_s) JSON.parse(_s).forEach(n => showAllFacets.add(n)); }} catch(e) {{}}
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 document.getElementById("doc-title").textContent = DOC_META.title || DOC_TITLE;
@@ -563,6 +596,36 @@ let displayFields = FIELD_META.filter(f => f.type !== "id");
 
 // Init facet state
 facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
+
+// ── Load a volume by label (data + UI reset, no render) ──────────────────
+function loadVolume(label) {{
+  const vol = VOLUMES[label];
+  if (!vol) return;
+  ALL_ENTRIES = vol.rows;
+  facetFields = vol.field_meta.filter(f => f.type === "facet");
+  displayFields = vol.field_meta.filter(f => f.type !== "id");
+  Object.keys(facetState).forEach(k => delete facetState[k]);
+  facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
+  searchQuery = "";
+  sortCol = null;
+  sortDir = 1;
+  selectedIdx = null;
+  colFilters = {{}};
+  showAllFacets.clear();
+  try {{ sessionStorage.removeItem('showAllFacets'); }} catch(e) {{}}
+  document.getElementById("search").value = "";
+  document.getElementById("detail").classList.remove("open");
+  document.getElementById("doc-title").textContent = label;
+  document.getElementById("doc-sub").textContent =
+    ALL_ENTRIES.length.toLocaleString() + " entries";
+  document.getElementById("mobile-title").textContent = label;
+  document.getElementById("mobile-sub").textContent =
+    ALL_ENTRIES.length.toLocaleString() + " entries";
+  currentDocMeta = vol.doc_meta || {{}};
+  activeManifestUrl = currentDocMeta.manifest_url || MANIFEST_URL;
+  renderMetaStrip(currentDocMeta);
+  renderFillRate();
+}}
 
 // ── Volume selector ─────────────────────────────────────────────────────────
 (function () {{
@@ -598,31 +661,8 @@ facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
   }});
 
   sel.addEventListener("change", () => {{
-    const vol = VOLUMES[sel.value];
-    ALL_ENTRIES = vol.rows;
-    facetFields = vol.field_meta.filter(f => f.type === "facet");
-    displayFields = vol.field_meta.filter(f => f.type !== "id");
-    Object.keys(facetState).forEach(k => delete facetState[k]);
-    facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
-    searchQuery = "";
-    sortCol = null;
-    sortDir = 1;
-    selectedIdx = null;
-    colFilters = {{}};
-    showAllFacets.clear();
-    document.getElementById("search").value = "";
-    document.getElementById("detail").classList.remove("open");
-    document.getElementById("doc-title").textContent = sel.value;
-    document.getElementById("doc-sub").textContent =
-      ALL_ENTRIES.length.toLocaleString() + " entries";
-    document.getElementById("mobile-title").textContent = sel.value;
-    document.getElementById("mobile-sub").textContent =
-      ALL_ENTRIES.length.toLocaleString() + " entries";
-    msel.value = sel.value;
-    currentDocMeta = vol.doc_meta || {{}};
-    activeManifestUrl = currentDocMeta.manifest_url || MANIFEST_URL;
-    renderMetaStrip(currentDocMeta);
-    renderFillRate();
+    loadVolume(sel.value);
+    document.getElementById("mobile-volume-select").value = sel.value;
     renderAll();
   }});
 }})();
@@ -661,6 +701,24 @@ function getSorted(rows) {{
   }});
 }}
 
+// ── Search match highlighting ─────────────────────────────────────────────
+function escapeHtml(str) {{
+  const t = document.createElement("span");
+  t.textContent = str;
+  return t.innerHTML;
+}}
+function highlightMatch(text, query) {{
+  if (!query || !text) return document.createTextNode(text || "");
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return document.createTextNode(text);
+  const span = document.createElement("span");
+  span.innerHTML =
+    escapeHtml(text.slice(0, idx)) +
+    "<mark>" + escapeHtml(text.slice(idx, idx + query.length)) + "</mark>" +
+    escapeHtml(text.slice(idx + query.length));
+  return span;
+}}
+
 // ── Canvas page extraction ─────────────────────────────────────────────────
 function canvasId(row) {{
   const cf = row.canvas_fragment || "";
@@ -683,10 +741,12 @@ function renderTableBody() {{
     if (isSelected) tr.classList.add("selected");
     tr.setAttribute("tabindex", "0");
     tr.setAttribute("aria-selected", isSelected ? "true" : "false");
+    const q = searchQuery.trim().toLowerCase();
     displayFields.forEach(f => {{
       const td = document.createElement("td");
-      td.textContent = row[f.name] || "";
-      td.title = row[f.name] || "";
+      const cellText = row[f.name] || "";
+      td.title = cellText;
+      td.appendChild(highlightMatch(cellText, q));
       tr.appendChild(td);
     }});
     const tdSrc = document.createElement("td");
@@ -694,8 +754,8 @@ function renderTableBody() {{
     if (row.canvas_fragment) {{
       const btn = document.createElement("button");
       btn.className = "src-btn";
-      btn.textContent = "▶ source";
-      btn.title = row.canvas_fragment;
+      btn.textContent = "View page ↗";
+      btn.title = "Open original digitized page image";
       btn.addEventListener("click", e => {{
         e.stopPropagation();
         openSource(row.canvas_fragment);
@@ -715,6 +775,20 @@ function renderTableBody() {{
     tbody.appendChild(tr);
   }});
 
+  // End-of-results sentinel
+  if (sorted.length > 0) {{
+    const sentinelTr = document.createElement("tr");
+    sentinelTr.className = "table-end-sentinel";
+    const sentinelTd = document.createElement("td");
+    sentinelTd.colSpan = displayFields.length + 1;
+    const cap = sorted.length > 2000
+      ? `Showing first 2,000 of ${{sorted.length.toLocaleString()}} entries`
+      : `Showing all ${{sorted.length.toLocaleString()}} entries`;
+    sentinelTd.textContent = cap;
+    sentinelTr.appendChild(sentinelTd);
+    tbody.appendChild(sentinelTr);
+  }}
+
   const noResults = document.getElementById("no-results");
   noResults.style.display = sorted.length === 0 ? "block" : "none";
 }}
@@ -728,7 +802,16 @@ function renderTableHead() {{
   const tr = document.createElement("tr");
   displayFields.forEach(f => {{
     const th = document.createElement("th");
-    th.textContent = f.name.replace(/_/g, " ");
+    th.textContent = FIELD_LABELS[f.name] || f.name.replace(/_/g, " ");
+    // Add explanation tooltip for the "codes" column
+    if (f.name === "codes") {{
+      const info = document.createElement("span");
+      info.textContent = " \u24d8";
+      info.title = "Classification codes from the directory\u2019s key \u2014 e.g. L\u00a0=\u00a0Lager brewery, P\u00a0=\u00a0Porter/Ale brewery, M\u00a0=\u00a0Maltster, B-D\u00a0=\u00a0Brewery\u00a0&\u00a0Distillery, followed by a size class (1\u20136)";
+      info.style.cssText = "cursor:help;font-size:11px;color:#888;font-weight:400;";
+      info.addEventListener("click", e => e.stopPropagation());
+      th.appendChild(info);
+    }}
     th.dataset.col = f.name;
     th.setAttribute("tabindex", "0");
     if (sortCol === f.name) {{
@@ -772,14 +855,14 @@ function renderTableHead() {{
         if (colFilters[f.name] === val) opt.selected = true;
         sel.appendChild(opt);
       }});
-      sel.addEventListener("change", () => {{ colFilters[f.name] = sel.value; renderTableBody(); }});
+      sel.addEventListener("change", () => {{ colFilters[f.name] = sel.value; renderTableBody(); renderFacetSidebar(); renderCharts(); syncFilterUI(); }});
       fth.appendChild(sel);
     }} else {{
       const inp = document.createElement("input");
       inp.type = "text"; inp.className = "col-filter-input"; inp.placeholder = "filter\u2026";
       inp.setAttribute("aria-label", `Filter by ${{f.name.replace(/_/g, " ")}}`);
       inp.value = colFilters[f.name] || "";
-      inp.addEventListener("input", () => {{ colFilters[f.name] = inp.value; renderTableBody(); }});
+      inp.addEventListener("input", () => {{ colFilters[f.name] = inp.value; renderTableBody(); renderFacetSidebar(); renderCharts(); syncFilterUI(); }});
       fth.appendChild(inp);
     }}
     filterRow.appendChild(fth);
@@ -884,18 +967,24 @@ function showDetail(row) {{
   document.getElementById("detail-title").textContent =
     (nameField && row[nameField.name]) || "(entry)";
 
+  const entryName = (nameField && row[nameField.name]) || "entry";
   const img = document.getElementById("detail-thumb");
   const thumbLink = document.getElementById("detail-thumb-link");
   const url = thumbUrl(row);
   const csUrl = contentStateUrl(row.canvas_fragment);
   if (url) {{
     img.src = url;
+    img.alt = `Scan showing ${{entryName}}`;
     img.style.display = "block";
     img.onerror = () => {{ img.style.display = "none"; }};
     thumbLink.href = csUrl || viewerUrl(row.canvas_fragment) || "#";
+    thumbLink.title = "View this entry highlighted in the original scan";
+    thumbLink.setAttribute("aria-label", `View ${{entryName}} in source document`);
   }} else {{
     img.style.display = "none";
+    img.alt = "";
     thumbLink.removeAttribute("href");
+    thumbLink.removeAttribute("aria-label");
   }}
 
   const fields = document.getElementById("detail-fields");
@@ -905,10 +994,10 @@ function showDetail(row) {{
     if (!val) return;
     const k = document.createElement("div");
     k.className = "df-key";
-    k.textContent = f.name.replace(/_/g, " ");
+    k.textContent = FIELD_LABELS[f.name] || f.name.replace(/_/g, " ");
     const v = document.createElement("div");
     v.className = "df-val";
-    v.textContent = val;
+    v.textContent = VALUE_LABELS[val] || val;
     fields.appendChild(k);
     fields.appendChild(v);
   }});
@@ -919,7 +1008,7 @@ function showDetail(row) {{
     const srcUrl = viewerUrl(row.canvas_fragment);
     if (srcUrl) links.push(`<a href="${{srcUrl}}" target="_blank">Open source page ↗</a>`);
     const csUrl = contentStateUrl(row.canvas_fragment);
-    if (csUrl) links.push(`<a href="${{csUrl}}" target="_blank">View in Mirador ↗</a>`);
+    if (csUrl) links.push(`<a href="${{csUrl}}" target="_blank">View in source document \u2197</a>`);
     src.innerHTML = links.join(" · ");
   }} else {{
     src.innerHTML = "";
@@ -936,6 +1025,19 @@ document.getElementById("detail-close").addEventListener("click", () => {{
 function renderFacetSidebar() {{
   const container = document.getElementById("facet-controls");
   container.innerHTML = "";
+
+  // Build live counts from the currently-filtered dataset so sidebar counts
+  // always reflect column filters and global search, not just static top_values.
+  const filteredForCounts = getFiltered();
+  const liveCount = {{}};
+  facetFields.forEach(f => {{
+    liveCount[f.name] = {{}};
+    filteredForCounts.forEach(r => {{
+      const v = r[f.name] || "";
+      liveCount[f.name][v] = (liveCount[f.name][v] || 0) + 1;
+    }});
+  }});
+
   facetFields.forEach(f => {{
     const grp = document.createElement("div");
     grp.className = "facet-group";
@@ -943,7 +1045,7 @@ function renderFacetSidebar() {{
     const lbl = document.createElement("div");
     lbl.className = "facet-label";
     const labelText = document.createElement("span");
-    labelText.textContent = f.name.replace(/_/g, " ");
+    labelText.textContent = FIELD_LABELS[f.name] || f.name.replace(/_/g, " ");
     lbl.appendChild(labelText);
     if (facetState[f.name].size > 0) {{
       const clr = document.createElement("button");
@@ -973,11 +1075,11 @@ function renderFacetSidebar() {{
       }});
       const valSpan = document.createElement("span");
       valSpan.className = "val";
-      valSpan.textContent = val || "(empty)";
-      valSpan.title = val;
+      valSpan.textContent = VALUE_LABELS[val] || val || "(empty)";
+      valSpan.title = VALUE_LABELS[val] || val;
       const cntSpan = document.createElement("span");
       cntSpan.className = "cnt";
-      cntSpan.textContent = cnt.toLocaleString();
+      cntSpan.textContent = (liveCount[f.name][val] || 0).toLocaleString();
       item.appendChild(cb);
       item.appendChild(valSpan);
       item.appendChild(cntSpan);
@@ -991,6 +1093,7 @@ function renderFacetSidebar() {{
       more.setAttribute("aria-label", `Show ${{f.top_values.length - 10}} more ${{f.name.replace(/_/g, " ")}} values`);
       more.addEventListener("click", () => {{
         showAllFacets.add(f.name);
+        try {{ sessionStorage.setItem('showAllFacets', JSON.stringify([...showAllFacets])); }} catch(e) {{}}
         renderFacetSidebar();
       }});
       grp.appendChild(more);
@@ -1056,7 +1159,7 @@ function renderCharts() {{
     const block = document.createElement("div");
     block.className = "chart-block";
     const h3 = document.createElement("h3");
-    h3.textContent = f.name.replace(/_/g, " ");
+    h3.textContent = FIELD_LABELS[f.name] || f.name.replace(/_/g, " ");
     block.appendChild(h3);
 
     const barHeight = 18;
@@ -1069,7 +1172,7 @@ function renderCharts() {{
       marks: [
         Plot.barX(data, {{
           x: "c", y: "v",
-          fill: d => facetState[f.name].has(d.v) ? "#1a6ebd" : "#aac4e6",
+          fill: "#aac4e6",
           sort: {{ y: "x", reverse: true }},
           title: d => `${{d.v}}: ${{d.c}}`,
           rx: 2,
@@ -1080,35 +1183,7 @@ function renderCharts() {{
           fontSize: 10, fill: "#555",
         }}),
       ],
-      style: {{ fontSize: "11px", cursor: "pointer" }},
-    }});
-
-    // Make bars clickable as filters
-    plot.addEventListener("click", e => {{
-      const rect = e.target.closest("rect");
-      if (!rect) return;
-      const titleEl = rect.querySelector("title");
-      const title = titleEl ? titleEl.textContent : "";
-      const val = title.split(":")[0].trim();
-      if (!val || val === "(empty)") return;
-      if (facetState[f.name].has(val)) facetState[f.name].delete(val);
-      else facetState[f.name].add(val);
-      renderAll();
-    }});
-
-    // Make bars keyboard-accessible
-    plot.querySelectorAll("rect").forEach(rect => {{
-      const titleEl = rect.querySelector("title");
-      if (!titleEl) return;
-      rect.setAttribute("tabindex", "0");
-      rect.setAttribute("role", "button");
-      rect.setAttribute("aria-label", titleEl.textContent);
-      rect.addEventListener("keydown", e => {{
-        if (e.key === "Enter" || e.key === " ") {{
-          e.preventDefault();
-          rect.dispatchEvent(new MouseEvent("click", {{ bubbles: true }}));
-        }}
-      }});
+      style: {{ fontSize: "11px" }},
     }});
     block.appendChild(plot);
     row.appendChild(block);
@@ -1117,6 +1192,9 @@ function renderCharts() {{
 
 // ── Export CSV ─────────────────────────────────────────────────────────────
 document.getElementById("export-btn").addEventListener("click", () => {{
+  const btn = document.getElementById("export-btn");
+  btn.disabled = true;
+  btn.textContent = "Exporting…";
   const filtered = getSorted(getFiltered());
   const cols = FIELD_META.map(f => f.name);
   const lines = [cols.map(c => JSON.stringify(c || "")).join(",")];
@@ -1128,6 +1206,20 @@ document.getElementById("export-btn").addEventListener("click", () => {{
   a.href = URL.createObjectURL(blob);
   a.download = (DOC_TITLE || "entries").replace(/\\s+/g, "_") + "_filtered.csv";
   a.click();
+  setTimeout(() => {{ btn.disabled = false; btn.textContent = "Export CSV"; }}, 600);
+}});
+
+// ── Clear all filters (empty-state button) ─────────────────────────────────
+document.getElementById("clear-all-btn").addEventListener("click", () => {{
+  Object.values(facetState).forEach(s => s.clear());
+  colFilters = {{}};
+  sortCol = null;
+  sortDir = 1;
+  showAllFacets.clear();
+  try {{ sessionStorage.removeItem('showAllFacets'); }} catch(e) {{}}
+  searchQuery = "";
+  document.getElementById("search").value = "";
+  renderAll();
 }});
 
 // ── Charts toggle ──────────────────────────────────────────────────────────
@@ -1135,7 +1227,7 @@ document.getElementById("charts-toggle").addEventListener("click", () => {{
   const row = document.getElementById("charts-row");
   const btn = document.getElementById("charts-toggle");
   const collapsed = row.classList.toggle("collapsed");
-  btn.textContent = collapsed ? "Show charts ▼" : "Hide charts ▲";
+  btn.textContent = collapsed ? "Show summary \u25be" : "Hide summary \u25b4";
   btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
 }});
 
@@ -1163,20 +1255,119 @@ document.getElementById("search").addEventListener("input", e => {{
   }}, 180);
 }});
 
+// ── Sync filter UI: URL hash + clear-filters button visibility ───────────
+function syncFilterUI() {{
+  try {{ history.replaceState(null, "", stateToHash()); }} catch(e) {{}}
+  const anyActive = !!searchQuery ||
+    Object.values(colFilters).some(v => v) ||
+    Object.values(facetState).some(s => s.size > 0);
+  document.getElementById("clear-filters-btn").style.display = anyActive ? "inline-block" : "none";
+}}
+
+document.getElementById("clear-filters-btn").addEventListener("click", () => {{
+  Object.values(facetState).forEach(s => s.clear());
+  colFilters = {{}};
+  sortCol = null;
+  sortDir = 1;
+  showAllFacets.clear();
+  try {{ sessionStorage.removeItem('showAllFacets'); }} catch(e) {{}}
+  searchQuery = "";
+  document.getElementById("search").value = "";
+  renderAll();
+}});
+
+// ── URL hash state (shareable filtered links) ─────────────────────────────
+function stateToHash() {{
+  const params = new URLSearchParams();
+  const volLabels = Object.keys(VOLUMES);
+  if (volLabels.length > 1) {{
+    const sel = document.getElementById("volume-select");
+    if (sel) {{
+      const idx = volLabels.indexOf(sel.value);
+      if (idx > 0) params.set("vol", idx);
+    }}
+  }}
+  if (searchQuery) params.set("q", searchQuery);
+  if (sortCol) params.set("sort", sortCol + ":" + (sortDir > 0 ? "asc" : "desc"));
+  for (const [col, val] of Object.entries(colFilters)) {{
+    if (val) params.set("cf_" + col, val);
+  }}
+  for (const [field, valSet] of Object.entries(facetState)) {{
+    if (valSet.size) params.set("f_" + field, [...valSet].join("|"));
+  }}
+  const str = params.toString();
+  return str ? "#" + str : location.pathname + location.search;
+}}
+
+function applyHashState() {{
+  const raw = location.hash.slice(1);
+  if (!raw) return;
+  const params = new URLSearchParams(raw);
+
+  // Volume: load data + reset filters, then apply overrides below
+  if (params.has("vol")) {{
+    const volLabels = Object.keys(VOLUMES);
+    const idx = parseInt(params.get("vol"), 10);
+    if (idx > 0 && idx < volLabels.length) {{
+      const label = volLabels[idx];
+      loadVolume(label);
+      const sel = document.getElementById("volume-select");
+      if (sel) sel.value = label;
+      const msel = document.getElementById("mobile-volume-select");
+      if (msel) msel.value = label;
+    }}
+  }}
+
+  // Search query
+  const q = params.get("q");
+  if (q) {{
+    searchQuery = q;
+    const el = document.getElementById("search");
+    if (el) el.value = q;
+  }}
+
+  // Sort
+  const sort = params.get("sort");
+  if (sort && sort.includes(":")) {{
+    const [col, dir] = sort.split(":");
+    sortCol = col;
+    sortDir = dir === "desc" ? -1 : 1;
+  }}
+
+  // Column filters
+  for (const [key, val] of params.entries()) {{
+    if (key.startsWith("cf_") && val) colFilters[key.slice(3)] = val;
+  }}
+
+  // Facet filters
+  for (const [key, val] of params.entries()) {{
+    if (key.startsWith("f_")) {{
+      const field = key.slice(2);
+      if (facetState[field]) val.split("|").forEach(v => {{ if (v) facetState[field].add(v); }});
+    }}
+  }}
+}}
+
 // ── Render all ─────────────────────────────────────────────────────────────
 function renderAll() {{
+  // Auto-close the detail panel whenever filters/search change so users
+  // never see a stale record juxtaposed against a new result set.
+  document.getElementById("detail").classList.remove("open");
+  selectedIdx = null;
   renderFacetSidebar();
   renderCharts();
   renderTable();
+  syncFilterUI();
 }}
 
 renderFillRate();
 if (window.innerWidth <= 640) {{
   document.getElementById("charts-row").classList.add("collapsed");
   const _ctBtn = document.getElementById("charts-toggle");
-  _ctBtn.textContent = "Show charts \u25BC";
+  _ctBtn.textContent = "Show summary \u25be";
   _ctBtn.setAttribute("aria-expanded", "false");
 }}
+applyHashState();
 renderAll();
 </script>
 </body>
