@@ -895,11 +895,21 @@ function viewerUrl(canvas_fragment) {{
   // Library of Congress: https://www.loc.gov/item/{{id}}/canvas/{{num}}
   const locMatch = cid.match(/https:\\/\\/www\\.loc\\.gov\\/item\\/([^/]+)\\/canvas\\/(\\d+)/);
   if (locMatch) {{
-    const sp = parseInt(locMatch[2]);  // LoC canvas IDs are already 1-indexed
-    const base = (currentDocMeta && currentDocMeta.resource_url)
-      ? currentDocMeta.resource_url.replace(/\\/?$/, "/")
-      : `https://www.loc.gov/resource/${{locMatch[1]}}/`;
-    return `${{base}}?sp=${{sp}}`;
+    if (currentDocMeta && currentDocMeta.resource_url) {{
+      return currentDocMeta.resource_url.replace(/\\/?$/, "/") + `?sp=${{parseInt(locMatch[2])}}`;
+    }}
+    // Derive resource URL + correct per-volume page number from CANVAS_MAP service ID.
+    // Service ID format: https://tile.loc.gov/image-services/iiif/service:rbc:lcrbmrp:t8073:001
+    // → resource lcrbmrp.t8073, sp=1 (not the global canvas number, which spans volumes).
+    const mapEntry = CANVAS_MAP[cid];
+    if (mapEntry && mapEntry[0]) {{
+      const svcId = mapEntry[0].split("/").pop();
+      const svcMatch = svcId.match(/^service:(?:[^:]+):([^:]+):([^:]+):(\\d+)$/);
+      if (svcMatch) {{
+        return `https://www.loc.gov/resource/${{svcMatch[1]}}.${{svcMatch[2]}}/?sp=${{parseInt(svcMatch[3])}}`;
+      }}
+    }}
+    return `https://www.loc.gov/resource/${{locMatch[1]}}/?sp=${{parseInt(locMatch[2])}}`;
   }}
 
   // Fall back to the raw canvas URI
@@ -1168,7 +1178,7 @@ function renderCharts() {{
       height: data.length * barHeight + 24,
       marginLeft: 110, marginRight: 30, marginTop: 2, marginBottom: 20,
       x: {{ label: null, grid: false }},
-      y: {{ label: null, tickSize: 0 }},
+      y: {{ label: null, tickSize: 0, type: "band" }},
       marks: [
         Plot.barX(data, {{
           x: "c", y: "v",
