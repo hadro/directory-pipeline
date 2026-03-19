@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PROMPT_FILE = Path(__file__).parent / "prompts" / "ocr_prompt.md"
+_DEFAULT_PROMPT_FILE = Path(__file__).parent / "prompts" / "ocr_prompt.md"
 TESSERACT = "tesseract"
 SURYA = "surya"
 _LOCAL_ENGINES = {TESSERACT, SURYA}  # tokens that read a local file, no API call
@@ -233,6 +233,11 @@ def main() -> None:
         help="Skip re-running Gemini API calls for empty output files; proceed directly to comparison.",
     )
     parser.add_argument(
+        "--prompt", "-p",
+        metavar="FILE",
+        help="Path to OCR system prompt file (default: auto-discover ocr_prompt.md from output dir)",
+    )
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="Suppress per-task progress output",
@@ -244,6 +249,8 @@ def main() -> None:
 
     gemini_models = [m for m in args.models if m not in _LOCAL_ENGINES]
 
+    output_root = Path(args.output_dir)
+
     # Only require API key if Gemini models are requested
     client = None
     system_prompt = ""
@@ -252,14 +259,28 @@ def main() -> None:
         if not api_key:
             print("Error: GEMINI_API_KEY environment variable is not set.", file=sys.stderr)
             sys.exit(1)
-        if not PROMPT_FILE.exists():
-            print(f"Error: prompt file not found: {PROMPT_FILE}", file=sys.stderr)
+
+        # Resolve prompt file: explicit flag → output dir → parent dir → default location
+        if args.prompt:
+            prompt_file = Path(args.prompt)
+        else:
+            candidates = [
+                output_root / "ocr_prompt.md",
+                output_root.parent / "ocr_prompt.md",
+                _DEFAULT_PROMPT_FILE,
+            ]
+            prompt_file = next((p for p in candidates if p.exists()), _DEFAULT_PROMPT_FILE)
+
+        if not prompt_file.exists():
+            print(f"Error: prompt file not found: {prompt_file}", file=sys.stderr)
+            print(
+                "Place ocr_prompt.md in the output directory, or pass --prompt <file>.",
+                file=sys.stderr,
+            )
             sys.exit(1)
-        system_prompt = PROMPT_FILE.read_text(encoding="utf-8")
+        system_prompt = prompt_file.read_text(encoding="utf-8")
         from google import genai as _genai  # noqa: PLC0415
         client = _genai.Client(api_key=api_key)
-
-    output_root = Path(args.output_dir)
     if not output_root.exists():
         print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)

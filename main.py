@@ -15,6 +15,7 @@ command line:
   --nypl-csv        sources/nypl_collection_csv.py  → output/{slug}/{slug}.csv  (NYPL only)
   --loc-csv         sources/loc_collection_csv.py   → output/{slug}/{slug}.csv  (LoC only)
   --ia-csv          sources/ia_collection_csv.py    → output/{slug}/{slug}.csv  (Internet Archive only)
+  --iiif-csv        sources/iiif_manifest_csv.py    → output/{slug}/{slug}.csv  (any IIIF manifest or collection)
   --download        pipeline/download_images.py       → output/{slug}/
   --detect-spreads  pipeline/detect_spreads.py        (double-page spread detection)
   --split-spreads   pipeline/split_spreads.py         (split spreads into left/right pages)
@@ -62,6 +63,12 @@ Usage
     python main.py https://archive.org/details/durstoldyorklibrary \\
         --ia-csv --download --gemini-ocr
 
+    # Any IIIF manifest URL (no API key needed):
+    python main.py https://dcmny.org/do/<uuid>/metadata/iiifmanifest/default.jsonld \\
+        --download --gemini-ocr
+    python main.py https://example.org/iiif/collection.json \\
+        --iiif-csv --download --gemini-ocr   # IIIF Collection: enumerates all items
+
     # Pre-built CSV (any source):
     python main.py output/my_items/my_items.csv --download --gemini-ocr
 
@@ -85,6 +92,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SCRIPT_DIR = Path(__file__).parent
+
+sys.path.insert(0, str(SCRIPT_DIR))
+from utils.iiif_utils import manifest_item_id as _iiif_manifest_item_id
 API_BASE = "https://api.repo.nypl.org/api/v2"
 
 UUID_RE = re.compile(
@@ -100,6 +110,7 @@ PIPELINE: list[tuple[str, str, str]] = [
     ("nypl_csv",        "sources/nypl_collection_csv.py",      "--nypl-csv"),
     ("loc_csv",         "sources/loc_collection_csv.py",       "--loc-csv"),
     ("ia_csv",          "sources/ia_collection_csv.py",        "--ia-csv"),
+    ("iiif_csv",        "sources/iiif_manifest_csv.py",        "--iiif-csv"),
     ("download",        "pipeline/download_images.py",         "--download"),
     ("detect_spreads",  "pipeline/detect_spreads.py",          "--detect-spreads"),
     ("split_spreads",   "pipeline/split_spreads.py",           "--split-spreads"),
@@ -110,6 +121,7 @@ PIPELINE: list[tuple[str, str, str]] = [
     ("tesseract",       "old/run_ocr.py",                      "--tesseract"),
     ("surya_ocr",       "pipeline/run_surya_ocr.py",           "--surya-ocr"),
     ("gemini_ocr",      "pipeline/run_gemini_ocr.py",          "--gemini-ocr"),
+    ("chandra_ocr",     "pipeline/run_chandra_ocr.py",         "--chandra-ocr"),
     ("compare_ocr",     "analysis/compare_ocr.py",             "--compare-ocr"),
     ("align_ocr",       "pipeline/align_ocr.py",               "--align-ocr"),
     ("visualize",       "analysis/visualize_alignment.py",     "--visualize"),
@@ -159,6 +171,19 @@ def is_loc_url(text: str) -> bool:
 
 def is_ia_url(text: str) -> bool:
     return "archive.org" in text
+
+
+def _is_generic_iiif_url(text: str) -> bool:
+    """True for any HTTP(S) URL that is not a NYPL, LoC, or IA URL.
+
+    Used to detect arbitrary IIIF manifest URLs from external institutions.
+    """
+    return (
+        text.startswith("http")
+        and not is_loc_url(text)
+        and not is_ia_url(text)
+        and "nypl.org" not in text
+    )
 
 
 def _resource_url_to_item_url(resource_url: str) -> str:
@@ -378,17 +403,42 @@ def make_slug(title: str, uuid: str) -> str:
     return uuid8
 
 
-def run_stage(script: str, stage_args: list[str], dry_run: bool = False) -> bool:
+def run_stage(
+    script: str,
+    stage_args: list[str],
+    dry_run: bool = False,
+    interactive: bool = False,
+) -> bool:
     """
     Run a pipeline stage as a subprocess, streaming output directly to the
     terminal.  Returns True if the script exited with code 0.
     In dry-run mode, prints the command that would be run without executing it.
+    When interactive=True, Ctrl+C is treated as "user finished this stage" rather
+    than aborting the whole pipeline (used for select_pages, review_alignment).
     """
     cmd = [sys.executable, str(SCRIPT_DIR / script)] + stage_args
     if dry_run:
         print(f"    [dry run] $ {' '.join(str(a) for a in cmd)}", file=sys.stderr)
         return True
     print(f"    $ {' '.join(str(a) for a in cmd)}", file=sys.stderr)
+    if interactive:
+        # Use Popen directly so that Ctrl+C (SIGINT) is forwarded to the subprocess
+        # but does NOT kill it via subprocess.run()'s internal process.kill().
+        # select_pages / review_alignment handle Ctrl+C themselves (advancing items
+        # or shutting down gracefully).  We keep waiting until the subprocess exits.
+        proc = subprocess.Popen(cmd)
+        while proc.poll() is None:
+            try:
+                proc.wait()
+            except KeyboardInterrupt:
+                # Subprocess received the same Ctrl+C and handles it; keep waiting.
+                pass
+        if proc.returncode != 0:
+            print(
+                f"  Warning: {script} exited with code {proc.returncode}",
+                file=sys.stderr,
+            )
+        return proc.returncode == 0
     result = subprocess.run(cmd)
     if result.returncode != 0:
         print(
@@ -477,12 +527,36 @@ def build_stage_args(
             return None
         return [source, "--output", str(Path("output") / slug / f"{slug}.csv")]
 
+    if stage == "iiif_csv":
+        if source.lower().endswith(".csv"):
+            print(
+                "    Skipping: --iiif-csv is not applicable when source is a CSV file.",
+                file=sys.stderr,
+            )
+            return None
+        if not _is_generic_iiif_url(source):
+            print(
+                "    Skipping: --iiif-csv requires a generic IIIF manifest URL "
+                "(not NYPL, LoC, or IA). Use --nypl-csv, --loc-csv, or --ia-csv instead.",
+                file=sys.stderr,
+            )
+            return None
+        return [source, "--output", str(Path("output") / slug / f"{slug}.csv")]
+
     if stage == "download":
         actual_csv = Path(source) if source.lower().endswith(".csv") else csv_path
+        # For generic IIIF URLs with no CSV yet, use direct --manifest mode
+        # (unless --iiif-csv is also requested in the same run, which will create the CSV first)
+        iiif_csv_in_run = getattr(parsed, "iiif_csv", False)
+        if _is_generic_iiif_url(source) and not iiif_csv_in_run and (dry_run or not actual_csv.exists()):
+            a = ["--manifest", source, "--output-dir", str(output_dir), "--resume"]
+            if parsed.width is not None:
+                a += ["--width", str(parsed.width)]
+            return a
         if not dry_run and not actual_csv.exists():
             print(
                 f"    Skipping: collection CSV not found ({actual_csv}). "
-                "Run --nypl-csv or --loc-csv first.",
+                "Run --iiif-csv, --nypl-csv, or --loc-csv first.",
                 file=sys.stderr,
             )
             return None
@@ -530,6 +604,16 @@ def build_stage_args(
                 a += ["--expand-dittos"]
             runs.append(a)
         return runs  # list[list[str]] — one run per model
+
+    if stage == "chandra_ocr":
+        if not _require_images():
+            return None
+        a = [str(output_dir)]
+        if getattr(parsed, "chandra_method", None):
+            a += ["--method", parsed.chandra_method]
+        if getattr(parsed, "batch_size", None) is not None:
+            a += ["--batch-size", str(parsed.batch_size)]
+        return a
 
     if stage == "compare_ocr":
         if not _require_images():
@@ -627,6 +711,18 @@ def build_stage_args(
     if stage == "select_pages":
         if not _require_images():
             return None
+        # When the source is a specific item subdirectory (one level deeper than
+        # output/slug), pass it directly so only that item is shown in the UI
+        # rather than all siblings starting from the first.
+        src_path = Path(source)
+        if src_path.is_dir():
+            src_resolved = src_path.resolve()
+            slug_dir = output_dir.resolve()
+            if src_resolved != slug_dir and src_resolved.parent == slug_dir:
+                a = [str(src_path)]
+                if getattr(parsed, "no_open", False):
+                    a += ["--no-open"]
+                return a
         a = [str(output_dir)]
         if getattr(parsed, "no_open", False):
             a += ["--no-open"]
@@ -636,35 +732,46 @@ def build_stage_args(
         if not _require_images():
             return None
         selection = getattr(parsed, "selection", None)
-        if not selection and not dry_run:
-            # Auto-discover selection.txt in slug dir or immediate item subdirs
-            candidates = [output_dir / "selection.txt"]
-            if output_dir.exists():
-                for sub in sorted(output_dir.iterdir()):
-                    if sub.is_dir():
-                        candidates.append(sub / "selection.txt")
-            sel_path = next((c for c in candidates if c.exists()), None)
-            if sel_path is None:
-                print(
-                    "    Skipping --generate-prompts: no selection.txt found. "
-                    "Run --select-pages first, then save selection.txt to "
-                    f"{output_dir}/selection.txt.",
-                    file=sys.stderr,
-                )
-                return None
-            selection = str(sel_path)
-        if not selection:
-            selection = str(output_dir / "selection.txt")  # dry-run placeholder
-        a = [str(output_dir), "--selection", selection]
-        if getattr(parsed, "prompt_model", None):
-            a += ["--model", parsed.prompt_model]
-        if getattr(parsed, "ocr_only", False):
-            a += ["--ocr-only"]
-        elif getattr(parsed, "ner_only", False):
-            a += ["--ner-only"]
-        if getattr(parsed, "expand_dittos", False):
-            a += ["--expand-dittos"]
-        return a
+        def _make_prompt_args(item_dir: Path, sel_path: Path) -> list[str]:
+            a = [str(item_dir), "--selection", str(sel_path),
+                 "--ocr-out", str(item_dir / "ocr_prompt.md"),
+                 "--ner-out", str(item_dir / "ner_prompt.md")]
+            if getattr(parsed, "prompt_model", None):
+                a += ["--model", parsed.prompt_model]
+            if getattr(parsed, "ocr_only", False):
+                a += ["--ocr-only"]
+            elif getattr(parsed, "ner_only", False):
+                a += ["--ner-only"]
+            if getattr(parsed, "expand_dittos", False):
+                a += ["--expand-dittos"]
+            return a
+
+        if selection:
+            # Explicit --selection: single run, prompts go next to the selection file
+            sel_path = Path(selection)
+            item_dir = sel_path.parent if sel_path.parent != output_dir else output_dir
+            return [_make_prompt_args(item_dir, sel_path)]
+
+        if dry_run:
+            return [_make_prompt_args(output_dir, output_dir / "selection.txt")]
+
+        # Auto-discover: collect every subdir (and slug dir itself) with selection.txt.
+        # If multiple subdirs have selection.txt files, generate prompts for each.
+        runs = []
+        if (output_dir / "selection.txt").exists():
+            runs.append(_make_prompt_args(output_dir, output_dir / "selection.txt"))
+        if output_dir.exists():
+            for sub in sorted(output_dir.iterdir()):
+                if sub.is_dir() and (sub / "selection.txt").exists():
+                    runs.append(_make_prompt_args(sub, sub / "selection.txt"))
+        if not runs:
+            print(
+                "    Skipping --generate-prompts: no selection.txt found. "
+                "Run --select-pages first to create selection.txt in each volume.",
+                file=sys.stderr,
+            )
+            return None
+        return runs  # list[list[str]] — one run per item with a selection
 
     if stage == "review_alignment":
         if not _require_images():
@@ -775,6 +882,17 @@ def main() -> None:
         help="Export Internet Archive item metadata to output/{slug}/{slug}.csv (archive.org URLs only)",
     )
     stages.add_argument(
+        "--iiif-csv",
+        dest="iiif_csv",
+        action="store_true",
+        help=(
+            "Export metadata from any IIIF manifest to output/{slug}/{slug}.csv. "
+            "Accepts any public IIIF Presentation v2 or v3 manifest URL. "
+            "For IIIF Collection manifests, writes one row per child manifest. "
+            "Use for institutions not supported by --nypl-csv, --loc-csv, or --ia-csv."
+        ),
+    )
+    stages.add_argument(
         "--download",
         dest="download",
         action="store_true",
@@ -816,6 +934,15 @@ def main() -> None:
         dest="gemini_ocr",
         action="store_true",
         help="Run Gemini OCR on downloaded images (see --ocr-model)",
+    )
+    stages.add_argument(
+        "--chandra-ocr",
+        dest="chandra_ocr",
+        action="store_true",
+        help=(
+            "Run Chandra OCR on downloaded images (local 5B model, no API key needed). "
+            "Requires: pip install chandra-ocr[hf]. Use --chandra-method to select backend."
+        ),
     )
     stages.add_argument(
         "--compare-ocr",
@@ -1013,7 +1140,15 @@ def main() -> None:
         default=None,
         dest="batch_size",
         metavar="N",
-        help="Images per Surya inference batch for --surya-ocr (default: 4; reduce if OOM)",
+        help="Images per Surya/Chandra inference batch (default: 4 for Surya, 1 for Chandra; reduce if OOM)",
+    )
+    opts.add_argument(
+        "--chandra-method",
+        dest="chandra_method",
+        choices=["hf", "vllm"],
+        default="hf",
+        metavar="METHOD",
+        help="Chandra inference backend for --chandra-ocr: 'hf' (HuggingFace, default) or 'vllm'",
     )
     opts.add_argument(
         "--width",
@@ -1182,8 +1317,9 @@ def main() -> None:
     if not enabled:
         parser.error(
             "No pipeline stages selected. "
-            "Use --nypl-csv, --loc-csv, --ia-csv, --download, --surya-ocr, --gemini-ocr, "
-            "--align-ocr, --review-alignment, --extract-entries, --geocode, --map, etc."
+            "Use --nypl-csv, --loc-csv, --ia-csv, --iiif-csv, --download, --surya-ocr, "
+            "--gemini-ocr, --align-ocr, --review-alignment, --extract-entries, --geocode, "
+            "--map, etc."
         )
 
     # Validate: stages that need a token (not enforced in dry-run)
@@ -1282,6 +1418,13 @@ def main() -> None:
                 label = ia_title or ia_id
             uuid = None
 
+        # Generic IIIF manifest URL (not NYPL, LoC, or IA)
+        elif _is_generic_iiif_url(target):
+            slug = args.slug or _iiif_manifest_item_id(target)
+            uuid = None
+            label = slug
+            kind = "iiif-manifest"
+
         else:
             uuid = extract_uuid(target)
             if not uuid:
@@ -1337,6 +1480,12 @@ def main() -> None:
                 elif kind in ("item", "collection"):
                     target_enabled.add("nypl_csv")
                     print("  Auto-adding --nypl-csv (collection CSV not found)", file=sys.stderr)
+                elif kind == "iiif-manifest":
+                    # CSV is optional for IIIF URLs — download falls back to
+                    # --manifest mode automatically; only add --iiif-csv if the
+                    # user has explicitly requested other post-download stages
+                    # that need the full CSV (e.g. --extract-entries).
+                    pass
 
         for stage, script, _ in PIPELINE:
             if stage not in target_enabled:
@@ -1356,8 +1505,9 @@ def main() -> None:
                 all_runs = [stage_args_raw]
 
             all_ok = True
+            is_interactive = stage in ("select_pages", "review_alignment")
             for stage_args in all_runs:
-                ok = run_stage(script, stage_args, dry_run=args.dry_run)
+                ok = run_stage(script, stage_args, dry_run=args.dry_run, interactive=is_interactive)
                 if not ok:
                     all_ok = False
             stage_outcomes[stage] = "ok" if all_ok else "failed"

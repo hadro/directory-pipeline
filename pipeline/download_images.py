@@ -43,8 +43,10 @@ Usage
 import argparse
 import csv
 import json
+import re
 import sys
 import time
+import urllib.error
 from pathlib import Path
 
 import requests
@@ -212,6 +214,7 @@ def fetch_manifest(
     if cache_path and cache_path.exists():
         with open(cache_path, encoding="utf-8") as f:
             return json.load(f)
+    data = None
     try:
         resp = get_with_retry(session, manifest_url, timeout=30, label="manifest")
         data = resp.json()
@@ -223,8 +226,27 @@ def fetch_manifest(
             data = _build_loc_manifest(session, manifest_url, item_json_path)
             if data is None:
                 raise
+        elif exc.response.status_code == 401:
+            # Some servers return 401 for requests with the python-requests UA.
+            # Fall through to the urllib fallback below.
+            data = None
         else:
             raise
+    except Exception:
+        # Connection-level failure (e.g. server drops python-requests UA):
+        # fall through to the urllib fallback below.
+        data = None
+
+    if data is None:
+        # Fallback: urllib.request with minimal headers avoids User-Agent blocks
+        import urllib.request as _urllib_request
+        req = _urllib_request.Request(
+            manifest_url,
+            headers={"Accept": "application/ld+json, application/json, */*"},
+        )
+        with _urllib_request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+
     if cache_path:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         with open(cache_path, "w", encoding="utf-8") as f:
@@ -257,12 +279,43 @@ def download_file(
     if dest.exists():
         return False
     dest.parent.mkdir(parents=True, exist_ok=True)
-    resp = get_with_retry(session, url, timeout=60, label=dest.name, stream=True)
-    with open(dest, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=65536):
-            f.write(chunk)
+    try:
+        resp = get_with_retry(session, url, timeout=60, label=dest.name, stream=True)
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=65536):
+                f.write(chunk)
+    except (requests.HTTPError, requests.ConnectionError, requests.exceptions.ChunkedEncodingError) as exc:
+        # Some servers block python-requests; fall back to urllib.request.
+        blocked = (
+            isinstance(exc, requests.HTTPError) and exc.response.status_code in (401, 403)
+        ) or isinstance(exc, (requests.ConnectionError, requests.exceptions.ChunkedEncodingError))
+        if not blocked:
+            raise
+        import urllib.request as _urllib_request
+        req = _urllib_request.Request(url, headers={"Accept": "image/*,*/*"})
+        with _urllib_request.urlopen(req, timeout=60) as uresp:
+            with open(dest, "wb") as f:
+                while True:
+                    chunk = uresp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
     time.sleep(delay)
     return True
+
+
+def _iiif_403_status(exc: Exception) -> bool:
+    """Return True if exc is an HTTP 403 from either requests or urllib."""
+    if isinstance(exc, requests.HTTPError):
+        return exc.response.status_code == 403
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == 403
+    return False
+
+
+def _reduce_iiif_width(url: str, size: str = FALLBACK_SIZE) -> str:
+    """Replace the IIIF size segment with a smaller size (e.g. !760,760)."""
+    return re.sub(r"/full/[^/]+/0/default\.jpg$", f"/full/{size}/0/default.jpg", url)
 
 
 def _download_item_images(
@@ -280,6 +333,9 @@ def _download_item_images(
 
     for i, (image_id, primary_url, max_width) in enumerate(canvas_images, start=1):
         dest = item_dir / f"{i:04d}_{image_id}.jpg"
+        # NYPL fallback server is only appropriate for content from NYPL image IDs.
+        # For other servers (e.g. dcmny.org), try a size-reduced URL instead.
+        is_nypl_image = "nypl.org" in primary_url
         fallback = (
             f"{FALLBACK_IIIF_BASE}/{image_id}/full/{FALLBACK_SIZE}/0/default.jpg"
         )
@@ -303,20 +359,45 @@ def _download_item_images(
             except requests.HTTPError as exc:
                 status = exc.response.status_code
                 if status == 403:
-                    consecutive_primary_403 += 1
-                    need_fallback = True
-                    if consecutive_primary_403 >= FALLBACK_403_THRESHOLD:
-                        print(
-                            f"    [{i:04d}] HTTP 403 "
-                            f"(×{consecutive_primary_403}) — "
-                            f"switching to fallback URL for remaining pages.",
-                            file=sys.stderr,
-                        )
-                    else:
-                        print(
-                            f"    [{i:04d}] HTTP 403 on primary — trying fallback URL.",
-                            file=sys.stderr,
-                        )
+                    if not is_nypl_image:
+                        # Non-NYPL server: retry with a smaller IIIF size before giving up.
+                        reduced_url = _reduce_iiif_width(primary_url)
+                        if reduced_url != primary_url:
+                            print(
+                                f"    [{i:04d}] HTTP 403 (size too large?) — retrying with {FALLBACK_SIZE}.",
+                                file=sys.stderr,
+                            )
+                            try:
+                                downloaded = download_file(session, reduced_url, dest, delay)
+                                consecutive_primary_403 = 0
+                                primary_ok = True
+                                if downloaded:
+                                    total_downloaded += 1
+                                    if not quiet:
+                                        print(f"    [{i:04d}] Downloaded (reduced size) → {dest}", file=sys.stderr)
+                                else:
+                                    total_skipped += 1
+                                    if not quiet:
+                                        print(f"    [{i:04d}] Skipped (already exists)", file=sys.stderr)
+                            except Exception as exc2:  # noqa: BLE001
+                                print(f"    [{i:04d}] Warning: reduced-size also failed: {exc2}", file=sys.stderr)
+                    if not primary_ok:
+                        consecutive_primary_403 += 1
+                        need_fallback = is_nypl_image  # only use NYPL fallback for NYPL images
+                        if not need_fallback:
+                            pass  # already printed above; skip this page
+                        elif consecutive_primary_403 >= FALLBACK_403_THRESHOLD:
+                            print(
+                                f"    [{i:04d}] HTTP 403 "
+                                f"(×{consecutive_primary_403}) — "
+                                f"switching to fallback URL for remaining pages.",
+                                file=sys.stderr,
+                            )
+                        else:
+                            print(
+                                f"    [{i:04d}] HTTP 403 on primary — trying fallback URL.",
+                                file=sys.stderr,
+                            )
                 elif status == 400:
                     msg = (
                         f"    [{i:04d}] Warning: HTTP 400 — server rejected "
@@ -333,7 +414,31 @@ def _download_item_images(
                         file=sys.stderr,
                     )
             except Exception as exc:  # noqa: BLE001
-                print(f"    [{i:04d}] Warning: {exc} — {primary_url}", file=sys.stderr)
+                # Catches urllib.error.HTTPError (from download_file's urllib fallback)
+                # and connection errors.
+                if _iiif_403_status(exc) and not is_nypl_image:
+                    reduced_url = _reduce_iiif_width(primary_url)
+                    if reduced_url != primary_url:
+                        print(
+                            f"    [{i:04d}] HTTP 403 (size too large?) — retrying with {FALLBACK_SIZE}.",
+                            file=sys.stderr,
+                        )
+                        try:
+                            downloaded = download_file(session, reduced_url, dest, delay)
+                            consecutive_primary_403 = 0
+                            primary_ok = True
+                            if downloaded:
+                                total_downloaded += 1
+                                if not quiet:
+                                    print(f"    [{i:04d}] Downloaded (reduced size) → {dest}", file=sys.stderr)
+                            else:
+                                total_skipped += 1
+                                if not quiet:
+                                    print(f"    [{i:04d}] Skipped (already exists)", file=sys.stderr)
+                        except Exception as exc2:  # noqa: BLE001
+                            print(f"    [{i:04d}] Warning: reduced-size also failed: {exc2}", file=sys.stderr)
+                else:
+                    print(f"    [{i:04d}] Warning: {exc} — {primary_url}", file=sys.stderr)
 
         if need_fallback and not primary_ok:
             try:

@@ -24,6 +24,7 @@ works for both IIIF Image API v2 and v3.
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from typing import Iterator
 
@@ -322,6 +323,12 @@ def update_annotation_targets(
     return ann_data
 
 
+# Path segments that are too generic to be useful as item identifiers.
+_GENERIC_MANIFEST_SEGMENTS = frozenset({
+    "manifest", "default", "index", "iiifmanifest", "iiif", "metadata",
+})
+
+
 def manifest_item_id(manifest_url: str) -> str:
     """
     Extract a usable item identifier from a manifest URL for use as a
@@ -329,10 +336,26 @@ def manifest_item_id(manifest_url: str) -> str:
 
         'https://www.loc.gov/item/01015253/manifest.json' → '01015253'
         'https://api-collections.nypl.org/manifests/abc-def-123' → 'abc-def-123'
+        'https://dcmny.org/do/dedab5e6-.../metadata/iiifmanifest/default.jsonld'
+            → 'dedab5e6-...'
     """
-    url = manifest_url.rstrip("/")
-    for suffix in ("/manifest.json", "/manifest"):
+    # Strip query string and fragment, then trailing slash
+    url = manifest_url.split("?")[0].split("#")[0].rstrip("/")
+
+    # Strip well-known manifest filename suffixes
+    for suffix in ("/manifest.json", "/manifest.jsonld", "/manifest"):
         if url.lower().endswith(suffix):
             url = url[: -len(suffix)]
             break
-    return url.rsplit("/", 1)[-1] or "manifest"
+
+    # Strip remaining file extension from the final segment (.jsonld, .json, etc.)
+    url = re.sub(r"\.[a-zA-Z0-9]+$", "", url)
+
+    # Walk backwards through path segments, returning the first non-generic one
+    segments = [s for s in url.split("/") if s]
+    for seg in reversed(segments):
+        s = seg.lower()
+        if s not in _GENERIC_MANIFEST_SEGMENTS and not s.startswith("iiifmanifest"):
+            return seg
+
+    return segments[-1] if segments else "manifest"

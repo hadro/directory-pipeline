@@ -120,6 +120,12 @@ def process_image(
                 raise
 
     text = response.text or ""
+    if not text:
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate:
+            _log(f"  finish_reason: {candidate.finish_reason}  [{image_path.name}]")
+            if candidate.safety_ratings:
+                _log(f"  safety_ratings: {candidate.safety_ratings}  [{image_path.name}]")
     txt_path.write_text(text, encoding="utf-8")
     return "ok", True
 
