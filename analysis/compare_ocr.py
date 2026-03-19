@@ -36,6 +36,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 _DEFAULT_PROMPT_FILE = Path(__file__).parent / "prompts" / "ocr_prompt.md"
+_HANDWRITING_KEYWORDS = ("handwrit", "manuscript", "cursive")
 TESSERACT = "tesseract"
 SURYA = "surya"
 _LOCAL_ENGINES = {TESSERACT, SURYA}  # tokens that read a local file, no API call
@@ -63,11 +64,17 @@ def txt_path_for(image_path: Path, model: str) -> Path:
     return image_path.parent / f"{image_path.stem}_{model_slug(model)}.txt"
 
 
+def _needs_high_res(prompt_text: str) -> bool:
+    lower = prompt_text.lower()
+    return any(kw in lower for kw in _HANDWRITING_KEYWORDS)
+
+
 def get_text(
     image_path: Path,
     model: str,
     client,           # genai.Client | None
     system_prompt: str,
+    media_resolution=None,
 ) -> tuple[str, str, str]:
     """
     Return (model, status, text) for one (image, model) pair.
@@ -92,13 +99,18 @@ def get_text(
         return model, "failed", ""
 
     try:
-        from google.genai.types import GenerateContentConfig, Part  # noqa: PLC0415
+        from google.genai.types import GenerateContentConfig, MediaResolution, Part, ThinkingConfig  # noqa: PLC0415
 
         with open(image_path, "rb") as f:
             img_bytes = f.read()
         response = client.models.generate_content(
             model=model,
-            config=GenerateContentConfig(system_instruction=system_prompt),
+            config=GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.0,
+                media_resolution=media_resolution,
+                thinking_config=ThinkingConfig(thinking_budget=0),
+            ),
             contents=[Part.from_bytes(data=img_bytes, mime_type="image/jpeg")],
         )
         text = response.text or ""
@@ -238,6 +250,15 @@ def main() -> None:
         help="Path to OCR system prompt file (default: auto-discover ocr_prompt.md from output dir)",
     )
     parser.add_argument(
+        "--high-res",
+        dest="high_res",
+        action="store_true",
+        help=(
+            "Send images at high media resolution (more detail, higher token cost). "
+            "Auto-enabled when the OCR prompt mentions handwriting or manuscripts."
+        ),
+    )
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="Suppress per-task progress output",
@@ -281,6 +302,16 @@ def main() -> None:
         system_prompt = prompt_file.read_text(encoding="utf-8")
         from google import genai as _genai  # noqa: PLC0415
         client = _genai.Client(api_key=api_key)
+
+    # Media resolution: explicit flag > auto-detect from prompt > None (API default)
+    media_resolution = None
+    if gemini_models:
+        from google.genai.types import MediaResolution as _MediaResolution  # noqa: PLC0415
+        if args.high_res:
+            media_resolution = _MediaResolution.MEDIA_RESOLUTION_HIGH
+        elif _needs_high_res(system_prompt):
+            media_resolution = _MediaResolution.MEDIA_RESOLUTION_HIGH
+            print("High media resolution: auto-enabled (handwriting detected in prompt)", file=sys.stderr)
     if not output_root.exists():
         print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
@@ -317,7 +348,7 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(get_text, img, model, client, system_prompt): (img, model)
+            executor.submit(get_text, img, model, client, system_prompt, media_resolution): (img, model)
             for img, model in tasks
         }
         for future in as_completed(futures):
@@ -370,7 +401,7 @@ def main() -> None:
             if not args.quiet:
                 _log(f"  Re-running: {img.name} / {model_slug(model)}")
             try:
-                _, status, text = get_text(img, model, client, system_prompt)
+                _, status, text = get_text(img, model, client, system_prompt, media_resolution)
                 image_results[img][model] = text
                 counts["ok" if status == "ok" else "failed"] += 1
                 counts["empty"] -= 1

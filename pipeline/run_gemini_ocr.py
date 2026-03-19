@@ -29,10 +29,18 @@ from dotenv import load_dotenv
 from google import genai
 
 load_dotenv()
-from google.genai.types import GenerateContentConfig, Part
+from google.genai.types import GenerateContentConfig, MediaResolution, Part, ThinkingConfig
 
 DEFAULT_MODEL = "gemini-2.0-flash"
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
+
+# Keywords in the OCR prompt that indicate handwriting → high resolution recommended
+_HANDWRITING_KEYWORDS = ("handwrit", "manuscript", "cursive")
+
+
+def _needs_high_res(prompt_text: str) -> bool:
+    lower = prompt_text.lower()
+    return any(kw in lower for kw in _HANDWRITING_KEYWORDS)
 
 _DITTO_INSTRUCTION = (
     "\nDitto marks: when you see small raised comma-pairs (printed as '' or 〃, "
@@ -84,6 +92,7 @@ def process_image(
     image_path: Path,
     model: str,
     system_prompt: str,
+    media_resolution: "MediaResolution | None" = None,
 ) -> tuple[str, bool | None]:
     """
     OCR one image via Gemini. Returns (status, success) where status is one of
@@ -107,7 +116,12 @@ def process_image(
         try:
             response = client.models.generate_content(
                 model=model,
-                config=GenerateContentConfig(system_instruction=system_prompt),
+                config=GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.0,
+                    media_resolution=media_resolution,
+                    thinking_config=ThinkingConfig(thinking_budget=0),
+                ),
                 contents=[Part.from_bytes(data=img_bytes, mime_type="image/jpeg")],
             )
             break
@@ -172,6 +186,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--high-res",
+        dest="high_res",
+        action="store_true",
+        help=(
+            "Send images at high media resolution (more detail, higher token cost). "
+            "Auto-enabled when the OCR prompt mentions handwriting or manuscripts."
+        ),
+    )
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="Suppress per-file progress output",
@@ -202,6 +225,16 @@ def main() -> None:
         print(f"Using volume prompt: {prompt_path}", file=sys.stderr)
     if not args.quiet and args.expand_dittos:
         print("Ditto mark expansion: enabled", file=sys.stderr)
+
+    # Media resolution: explicit flag > auto-detect from prompt > None (API default)
+    if args.high_res:
+        media_resolution = MediaResolution.MEDIA_RESOLUTION_HIGH
+    elif _needs_high_res(system_prompt):
+        media_resolution = MediaResolution.MEDIA_RESOLUTION_HIGH
+        if not args.quiet:
+            print("High media resolution: auto-enabled (handwriting detected in prompt)", file=sys.stderr)
+    else:
+        media_resolution = None
     if not output_root.exists():
         print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
@@ -251,7 +284,7 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(process_image, client, img, args.model, system_prompt): img
+            executor.submit(process_image, client, img, args.model, system_prompt, media_resolution): img
             for img in images
         }
         for future in as_completed(futures):

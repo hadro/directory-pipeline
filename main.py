@@ -602,6 +602,8 @@ def build_stage_args(
                 a += ["--workers", str(parsed.workers)]
             if getattr(parsed, "expand_dittos", False):
                 a += ["--expand-dittos"]
+            if getattr(parsed, "high_res", False):
+                a += ["--high-res"]
             runs.append(a)
         return runs  # list[list[str]] — one run per model
 
@@ -623,6 +625,8 @@ def build_stage_args(
             a += ["--workers", str(parsed.workers)]
         if getattr(parsed, "skip_empty_rerun", False):
             a += ["--skip-empty-rerun"]
+        if getattr(parsed, "high_res", False):
+            a += ["--high-res"]
         return a
 
     if stage == "align_ocr":
@@ -1260,6 +1264,16 @@ def main() -> None:
             "For --gemini-ocr: expand ditto marks ('' or 〃, often misread as 66) "
             "in place rather than transcribing them literally. Useful for tabular "
             "documents where each row repeats a unit or category from the row above."
+        ),
+    )
+    opts.add_argument(
+        "--high-res",
+        dest="high_res",
+        action="store_true",
+        help=(
+            "For --gemini-ocr / --compare-ocr: use high media resolution when sending images "
+            "to Gemini (higher token cost). Auto-enabled when the OCR prompt mentions "
+            "handwriting or manuscripts."
         ),
     )
     opts.add_argument(

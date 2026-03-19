@@ -125,13 +125,23 @@ def _find_ner_prompt(output_root: Path) -> Path:
     """Return a volume-specific ner_prompt.md if one exists alongside the images,
     otherwise return the global NER_PROMPT_FILE fallback.
 
-    Checks output_root and output_root.parent so the lookup works whether
-    output_root is the item directory or the slug-level directory above it.
+    Search order:
+      1. output_root itself (slug-level prompt)
+      2. output_root.parent (legacy location)
+      3. Any immediate subdir of output_root (per-item prompt from --generate-prompts)
     """
-    for candidate_dir in (output_root.resolve(), output_root.resolve().parent):
+    root = output_root.resolve()
+    for candidate_dir in (root, root.parent):
         p = candidate_dir / "ner_prompt.md"
         if p.exists():
             return p
+    # Per-item prompts written by --generate-prompts into each item subdir
+    if root.is_dir():
+        for sub in sorted(root.iterdir()):
+            if sub.is_dir():
+                p = sub / "ner_prompt.md"
+                if p.exists():
+                    return p
     return NER_PROMPT_FILE
 
 def _detect_aligned_slug(item_dir: Path) -> str | None:
@@ -1025,8 +1035,17 @@ def main() -> None:
     )
 
     for item_dir in item_dirs:
+        # Per-item prompt: if the item dir has its own ner_prompt.md (written by
+        # --generate-prompts per-volume), use it; otherwise use the resolved prompt.
+        item_prompt_path = item_dir / "ner_prompt.md"
+        if item_prompt_path.exists() and item_prompt_path != Path(args.prompt or ""):
+            item_prompt = item_prompt_path.read_text(encoding="utf-8")
+            if not args.quiet:
+                print(f"  NER prompt (per-item): {item_prompt_path}", file=sys.stderr)
+        else:
+            item_prompt = system_prompt
         entries = process_item(
-            client, item_dir, args.model, system_prompt,
+            client, item_dir, args.model, item_prompt,
             args.mode, args.force, args.dry_run, args.quiet, aligned_model,
             fallback_model=fallback_model,
         )
