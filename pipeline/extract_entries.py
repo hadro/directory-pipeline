@@ -550,17 +550,20 @@ def process_page(
                 entry[key] = val
 
     # Link canvas fragments from the aligned JSON.
-    # Try known text fields first, then fall back to the first non-trivial string value.
+    # Try known text fields first, then every non-trivial string field in order until
+    # one matches — this handles schemas where line_text is absent and the most
+    # distinctive text (e.g. ship_name) isn't the first field in the dict.
     aligned_lines = aligned.get("lines", [])
     canvas_uri = aligned.get("canvas_uri", "")
     for entry in entries:
-        lt = entry.get("line_text", "") or entry.get("establishment_name", "")
-        if not lt:
-            for v in entry.values():
-                if isinstance(v, str) and len(v) > 3:
-                    lt = v
+        cf = None
+        candidates = [entry.get("line_text", ""), entry.get("establishment_name", "")]
+        candidates += [v for v in entry.values() if isinstance(v, str) and len(v) > 3]
+        for lt in candidates:
+            if lt:
+                cf = _find_fragment(lt, aligned_lines)
+                if cf:
                     break
-        cf = _find_fragment(lt, aligned_lines)
         entry["canvas_fragment"] = cf or canvas_uri  # fall back to full canvas
         entry["image"] = aligned.get("image", "")
 
