@@ -642,6 +642,8 @@ def build_stage_args(
                 a += ["--workers", str(parsed.workers)]
             if getattr(parsed, "force", False):
                 a += ["--force"]
+            if getattr(parsed, "min_surya_confidence", None) is not None:
+                a += ["--min-surya-confidence", str(parsed.min_surya_confidence)]
             runs.append(a)
         return runs  # list[list[str]] — one run per model
 
@@ -1222,6 +1224,18 @@ def main() -> None:
         "--force",
         action="store_true",
         help="Force --split-spreads to delete and re-split existing output files",
+    )
+    opts.add_argument(
+        "--min-surya-confidence",
+        dest="min_surya_confidence",
+        type=float,
+        default=None,
+        metavar="THRESHOLD",
+        help=(
+            "For --align-ocr: skip Surya lines below this detection confidence "
+            "(0.0–1.0). Filters ghost detections before NW alignment. "
+            "Suggested starting point: 0.35."
+        ),
     )
     opts.add_argument(
         "--no-text",

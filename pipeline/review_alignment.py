@@ -114,6 +114,7 @@ def _find_pages() -> list[dict]:
         # runs (item_dir/file) have an empty volume string.
         rel_parts = p.relative_to(OUTPUT_ROOT).parts
         volume = rel_parts[0] if len(rel_parts) >= 3 else ""
+        median_conf = data.get("surya_median_confidence")
         pages.append({
             "json_path": str(p),
             "img_path": str(img),
@@ -122,8 +123,16 @@ def _find_pages() -> list[dict]:
             "volume": volume,
             "unmatched_count": len(ug),
             "aligned_count": len(data.get("lines", [])),
+            "needs_review": data.get("needs_review", False),
+            "surya_median_confidence": median_conf,
         })
-    pages.sort(key=lambda x: -x["unmatched_count"])
+    # Sort: pages flagged needs_review (lowest median confidence first) come
+    # before un-flagged pages; within each group, highest unmatched count first.
+    pages.sort(key=lambda x: (
+        not x["needs_review"],               # flagged pages first (False < True)
+        x["surya_median_confidence"] if x["needs_review"] and x["surya_median_confidence"] is not None else 1.0,
+        -x["unmatched_count"],
+    ))
     return pages
 
 
@@ -226,6 +235,8 @@ def page_data():
         "canvas_height": data.get("canvas_height", img_h),
         "lines": data.get("lines", []),
         "unmatched_gemini": data.get("unmatched_gemini", []),
+        "needs_review": data.get("needs_review", False),
+        "surya_median_confidence": data.get("surya_median_confidence"),
     })
 
 
@@ -388,6 +399,8 @@ body{display:flex;height:100vh;font:13px/1.4 system-ui,sans-serif;overflow:hidde
 .pi.active{background:#d2e3fc}
 .pi .cnt{font-weight:700;color:#c62828}
 .pi .nm{font-family:monospace;font-size:11px;color:#555;word-break:break-all}
+.pi .low-conf-badge{display:inline-block;font-size:10px;font-weight:700;color:#fff;background:#e65100;border-radius:3px;padding:1px 5px;margin-left:4px;vertical-align:middle}
+#low-conf-banner{display:none;padding:7px 12px;background:#fff3e0;border-bottom:2px solid #e65100;font-size:12px;color:#bf360c}
 
 /* ── main ── */
 #main{flex:1;display:flex;flex-direction:column;overflow:hidden}
@@ -483,10 +496,12 @@ canvas{cursor:crosshair;display:block;background:#fff}
        data-stem="{{ p.stem }}"
        data-item-dir="{{ p.item_dir }}"
        data-aligned-count="{{ p.aligned_count }}"
+       data-needs-review="{{ 'true' if p.needs_review else 'false' }}"
+       data-median-conf="{{ p.surya_median_confidence if p.surya_median_confidence is not none else '' }}"
        title="{{ p.item_dir }}">
-    <span class="cnt">{{ p.unmatched_count }} unmatched</span>
+    <span class="cnt">{{ p.unmatched_count }} unmatched{% if p.needs_review %}<span class="low-conf-badge" title="Low Surya detection confidence — manual review recommended">low conf</span>{% endif %}</span>
     <span class="nm">{{ p.stem }}</span>
-    <span style="font-size:11px;color:#888">{{ p.volume or p.item_dir }}</span>
+    <span style="font-size:11px;color:#888">{{ p.volume or p.item_dir }}{% if p.surya_median_confidence is not none %} · conf {{ "%.2f"|format(p.surya_median_confidence) }}{% endif %}</span>
   </div>
   {% endfor %}
   {% if not pages %}
@@ -496,6 +511,7 @@ canvas{cursor:crosshair;display:block;background:#fff}
 </div>
 
 <div id="main">
+  <div id="low-conf-banner"></div>
   <div id="toolbar">
     <span id="page-name">← select a page</span>
     <button id="clear-btn" onclick="clearBoxes()" disabled>Clear box</button>
@@ -594,12 +610,20 @@ function render() {
   }
   if (!pageData) return;
 
-  // Matched lines — green (hidden during reset-alignment session)
+  // Matched lines — green (high conf) → amber (low conf); hidden during reset
   if (!clearMode) {
-    ctx.strokeStyle = 'rgba(30,160,30,0.65)';
     ctx.lineWidth = 1;
     for (const ln of pageData.lines) {
       const [x1,y1,x2,y2] = ln.bbox.map(v => v * scale);
+      const sc = ln.surya_confidence;
+      if (sc !== undefined && sc < 0.5) {
+        // Low-confidence line: amber border + faint fill to draw attention
+        ctx.strokeStyle = 'rgba(230,130,0,0.85)';
+        ctx.fillStyle = 'rgba(255,200,0,0.10)';
+        ctx.fillRect(x1, y1, x2-x1, y2-y1);
+      } else {
+        ctx.strokeStyle = 'rgba(30,160,30,0.65)';
+      }
       ctx.strokeRect(x1, y1, x2-x1, y2-y1);
     }
   }
@@ -662,6 +686,15 @@ function loadPage(el) {
   updateBoxButtons();
   document.getElementById('results').style.display = 'none';
   document.getElementById('page-name').textContent = info.stem;
+  // Low-confidence banner
+  const banner = document.getElementById('low-conf-banner');
+  if (el.dataset.needsReview === 'true') {
+    const mc = el.dataset.medianConf ? ' (median Surya confidence: ' + parseFloat(el.dataset.medianConf).toFixed(2) + ')' : '';
+    banner.textContent = '⚠ Low detection confidence' + mc + ' — review alignment carefully and use Reset alignment + re-box if lines look wrong.';
+    banner.style.display = '';
+  } else {
+    banner.style.display = 'none';
+  }
   setStatus('Loading…');
 
   // Highlight active item

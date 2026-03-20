@@ -134,6 +134,10 @@ _NW_GAP = -40
 # Second-pass alignment: more permissive penalty + minimum size to bother
 _NW_GAP_PASS2    = -20
 _PASS2_MIN_LINES =  5
+# Pages whose median Surya detection confidence falls below this threshold are
+# flagged needs_review=True in the aligned JSON so --review-alignment can
+# surface them for manual inspection.
+_LOW_CONFIDENCE_PAGE_THRESHOLD = 0.5
 
 # Anchor matching: commit Gemini↔Tesseract line pairs that are near-verbatim
 # matches BEFORE running the global NW.  This prevents the aligner from
@@ -231,12 +235,20 @@ def parse_hocr(path: Path) -> tuple[tuple[int, int, int, int], list[dict]]:
     return parser.page_bbox, parser.lines
 
 
-def parse_surya(path: Path) -> tuple[tuple[int, int, int, int], list[dict]]:
+def parse_surya(
+    path: Path, min_confidence: float = 0.35
+) -> tuple[tuple[int, int, int, int], list[dict], "float | None"]:
     """
     Parse a Surya JSON file produced by run_surya_ocr.py.
 
-    Returns (page_bbox, lines) where each line is:
-        {'bbox': [x1, y1, x2, y2], 'text': str}
+    Returns (page_bbox, lines, median_confidence) where each line is:
+        {'bbox': [x1, y1, x2, y2], 'text': str, 'surya_confidence': float}
+
+    median_confidence is the median detection confidence across ALL lines on the
+    page (before threshold filtering), or None if no confidence values are
+    present.  Lines whose confidence is below min_confidence are excluded from
+    the returned list but still contribute to the median so the page-level
+    quality estimate reflects the raw scan quality.
 
     page_bbox is (0, 0, image_width, image_height).
     """
@@ -244,12 +256,32 @@ def parse_surya(path: Path) -> tuple[tuple[int, int, int, int], list[dict]]:
     w = data.get("image_width", 0)
     h = data.get("image_height", 0)
     page_bbox = (0, 0, w, h)
+
+    raw_lines = [ln for ln in data.get("lines", []) if ln.get("bbox")]
+    # Compute page-level median confidence from ALL detected lines (pre-filter)
+    # so the quality estimate is not inflated by the threshold.
+    all_confs = [float(ln["confidence"]) for ln in raw_lines if "confidence" in ln]
+    if all_confs:
+        sorted_confs = sorted(all_confs)
+        mid = len(sorted_confs) // 2
+        median_conf: "float | None" = (
+            sorted_confs[mid]
+            if len(sorted_confs) % 2 == 1
+            else (sorted_confs[mid - 1] + sorted_confs[mid]) / 2
+        )
+    else:
+        median_conf = None
+
     lines = [
-        {"bbox": ln["bbox"], "text": ln.get("text", "")}
-        for ln in data.get("lines", [])
-        if ln.get("bbox")
+        {
+            "bbox": ln["bbox"],
+            "text": ln.get("text", ""),
+            "surya_confidence": round(float(ln.get("confidence", 1.0)), 4),
+        }
+        for ln in raw_lines
+        if ln.get("confidence", 1.0) >= min_confidence
     ]
-    return page_bbox, lines
+    return page_bbox, lines, median_conf
 
 
 # ---------------------------------------------------------------------------
@@ -890,12 +922,16 @@ def _build_line_aligned_lines(
         matched_gi.add(gi)
         matched_si.add(si)
         bbox = list(sorted_surya_lines[si]["bbox"])
-        result_lines.append({
+        entry: dict = {
             "bbox": bbox,
             "canvas_fragment": fragment_fn(bbox),
             "confidence": "line",
             "gemini_text": gemini_lines[gi],
-        })
+        }
+        sc = sorted_surya_lines[si].get("surya_confidence")
+        if sc is not None:
+            entry["surya_confidence"] = sc
+        result_lines.append(entry)
 
     # Any Gemini line not matched by a Surya line is unmatched
     unmatched_gemini = [
@@ -939,12 +975,16 @@ def _build_line_aligned_lines(
             matched_si.add(rem_orig_si[si2])
             any_matched = True
             bbox = list(rem_surya[si2]["bbox"])
-            result_lines.append({
+            rem_entry: dict = {
                 "bbox": bbox,
                 "canvas_fragment": fragment_fn(bbox),
                 "confidence": "line",
                 "gemini_text": rem_gemini[gi2],
-            })
+            }
+            sc = rem_surya[si2].get("surya_confidence")
+            if sc is not None:
+                rem_entry["surya_confidence"] = sc
+            result_lines.append(rem_entry)
 
         unmatched_gemini = [
             rem_gemini[gi2]
@@ -967,6 +1007,7 @@ def align_image(
     model: str,
     force: bool = False,
     quiet: bool = False,
+    min_surya_confidence: float = 0.35,
 ) -> str:
     """
     Align Gemini OCR text and OCR bounding boxes for one image.
@@ -994,8 +1035,11 @@ def align_image(
 
     try:
         # Parse OCR source ----------------------------------------------------
+        surya_median_conf: "float | None" = None
         if use_surya:
-            page_bbox, lines = parse_surya(surya_path)
+            page_bbox, lines, surya_median_conf = parse_surya(
+                surya_path, min_confidence=min_surya_confidence
+            )
         else:
             page_bbox, lines = parse_hocr(hocr_path)
 
@@ -1078,12 +1122,18 @@ def align_image(
                 lines, gemini_lines, fragment
             )
 
+        needs_review = (
+            surya_median_conf is not None
+            and surya_median_conf < _LOW_CONFIDENCE_PAGE_THRESHOLD
+        )
         result = {
             "image": image_path.name,
             "model": model,
             "canvas_uri": canvas_uri or None,
             "canvas_width": nat_w or None,
             "canvas_height": nat_h or None,
+            "surya_median_confidence": round(surya_median_conf, 4) if surya_median_conf is not None else None,
+            "needs_review": needs_review,
             "lines": result_lines,
             "unmatched_gemini": unmatched_gemini,
         }
@@ -1140,6 +1190,17 @@ def main() -> None:
         "--quiet", "-q",
         action="store_true",
         help="Suppress per-image progress output",
+    )
+    parser.add_argument(
+        "--min-surya-confidence",
+        type=float,
+        default=0.35,
+        metavar="THRESHOLD",
+        help=(
+            "Skip Surya lines whose detection confidence is below this threshold "
+            "(0.0–1.0). Filters ghost detections and noisy lines before NW alignment. "
+            "Default: 0.35. Set to 0.0 to keep all lines."
+        ),
     )
     args = parser.parse_args()
 
