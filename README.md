@@ -125,7 +125,7 @@ Copies `manifest.json`, annotation files, and `explorer.html` to the destination
 
 ### Page selection (`--select-pages`)
 
-![Page selector browser UI showing the Sample and Scope tabs](screenshots/select-pages.png)
+![Page selector browser UI showing the Sample and Scope tabs](docs/screenshots/select-pages.png)
 
 *Two-tab browser UI. The **Sample** tab picks 4–10 representative pages for prompt calibration. The **Scope** tab (all pages selected by default) lets you deselect frontmatter, ads, and almanac sections so they're skipped entirely during OCR and extraction.*
 
@@ -133,7 +133,7 @@ Copies `manifest.json`, annotation files, and `explorer.html` to the destination
 
 ### Field-value explorer (`--to-csv --explore`)
 
-![Interactive field-value explorer with density chart, bar charts, and results table](screenshots/explorer.png)
+![Interactive field-value explorer with density chart, bar charts, and results table](docs/screenshots/explorer.png)
 
 *Auto-generated self-contained HTML explorer. Categorical bar charts show distribution; filtering is done via sidebar facet checkboxes and per-column filter inputs. Clicking a row opens a detail panel with all fields, a IIIF thumbnail of the source page, and a "View in source document" link — a IIIF Content State deep link that opens the Clover viewer scrolled directly to that entry in the original scan.*
 
@@ -141,7 +141,7 @@ Copies `manifest.json`, annotation files, and `explorer.html` to the destination
 
 ### Alignment visualization (`--align-ocr --visualize`)
 
-![NW alignment output drawn on a source page scan — green bounding boxes on matched lines](screenshots/alignment-viz.jpg)
+![NW alignment output drawn on a source page scan — green bounding boxes on matched lines](docs/screenshots/alignment-viz.jpg)
 
 *Needleman-Wunsch alignment result drawn on the source image. Green boxes are word-confidence matches between Surya OCR and Gemini text. Unmatched Gemini lines (no bounding box found) are listed in the margin in red.*
 
@@ -149,7 +149,7 @@ Copies `manifest.json`, annotation files, and `explorer.html` to the destination
 
 ### Interactive alignment review (`--review-alignment`)
 
-![Flask alignment review UI with page sidebar, canvas, and proposed match panel](screenshots/review-alignment.png)
+![Flask alignment review UI with page sidebar, canvas, and proposed match panel](docs/screenshots/review-alignment.png)
 
 *Flask-based review UI for fixing pages where automatic alignment left unmatched entries. Draw bounding boxes on the canvas, re-run Surya on the crop, then accept proposed Surya → Gemini pairs. Accepted matches are written back to the aligned JSON with `"confidence": "manual"`.*
 
@@ -157,7 +157,7 @@ Copies `manifest.json`, annotation files, and `explorer.html` to the destination
 
 ### Geocoded map (`--geocode --map`)
 
-![Leaflet map with clustered markers, category sidebar, and a popup with IIIF page thumbnail](screenshots/map.png)
+![Leaflet map with clustered markers, category sidebar, and a popup with IIIF page thumbnail](docs/screenshots/map.png)
 
 *Self-contained Leaflet HTML map. Markers are clustered and color-coded by establishment category. The sidebar has live search, state filter, and category checkboxes. Popups include a IIIF page thumbnail fetched directly from the source institution's image server.*
 
