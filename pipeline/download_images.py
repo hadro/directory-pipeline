@@ -31,8 +31,8 @@ width exceeds the server's limit.  Use --width to request a smaller size.
 Usage
 -----
     # CSV mode:
-    python download_images.py collection_csv/travelguide.csv
-    python download_images.py collection_csv/travelguide.csv --width 2048
+    python download_images.py output/travelguide/travelguide.csv
+    python download_images.py output/travelguide/travelguide.csv --width 2048
 
     # Manifest mode:
     python download_images.py --manifest https://www.loc.gov/item/01015253/manifest.json
@@ -476,7 +476,7 @@ def main() -> None:
         "csv_file",
         nargs="?",
         default=None,
-        help="Path to the collection CSV (e.g. collection_csv/travelguide.csv)",
+        help="Path to the collection CSV (e.g. output/travelguide/travelguide.csv)",
     )
     parser.add_argument(
         "--manifest", "-M",

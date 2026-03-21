@@ -26,7 +26,7 @@ Usage
     python detect_spreads.py output/Hackley_Harrison/4f7822b0-...
     python detect_spreads.py output/ --output spreads_report.csv
     python detect_spreads.py output/Hackley_Harrison --threshold 0.08
-    python detect_spreads.py output/Hackley_Harrison --csv collection_csv/Hackley_Harrison.csv
+    python detect_spreads.py output/Hackley_Harrison --csv output/Hackley_Harrison/Hackley_Harrison.csv
 """
 
 import argparse
