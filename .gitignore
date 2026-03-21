@@ -8,6 +8,7 @@ collection_csv/*
 scripts/*
 docs/item_ideas.md
 docs/notes.md
+my_collections/
 
 # tmp files
 .tmp*
@@ -29,8 +30,9 @@ uv.lock
 .DS_Store
 
 # Claude
-.claude/
+.claude/*/*
 .claudeignore
+.claude/settings.json
 
 # Generated docs / exports
 directory-pipeline-*
@@ -45,3 +47,6 @@ collections.txt
 analysis/chandra_eval.py
 analysis/surya_eval.py
 CLAUDE.md
+
+# Expose skills
+!.claude/skills/*
