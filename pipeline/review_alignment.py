@@ -243,49 +243,56 @@ def page_data():
 @app.route("/annotate", methods=["POST"])
 def annotate():
     """Crop the image, run Surya OCR on each box, NW-align combined lines with unmatched_gemini."""
-    body = request.json
-    json_path = Path(body["json_path"])
-    # Accept either 'bboxes' (array) or legacy 'bbox' (single)
-    bboxes = body.get("bboxes") or [body["bbox"]]
+    try:
+        body = request.json
+        json_path = Path(body["json_path"])
+        # Accept either 'bboxes' (array) or legacy 'bbox' (single)
+        bboxes = body.get("bboxes") or [body["bbox"]]
 
-    _load_surya()
+        _load_surya()
 
-    data = json.loads(json_path.read_text(encoding="utf-8"))
-    # Client may supply an override list (e.g. during reset-alignment mode where
-    # existing matched lines have been moved back to unmatched client-side).
-    unmatched = body.get("unmatched_override") or data.get("unmatched_gemini", [])
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        # Client may supply an override list (e.g. during reset-alignment mode where
+        # existing matched lines have been moved back to unmatched client-side).
+        unmatched = body.get("unmatched_override") or data.get("unmatched_gemini", [])
 
-    img = Image.open(_img_path(json_path)).convert("RGB")
-    iw, ih = img.size
+        img = Image.open(_img_path(json_path)).convert("RGB")
+        iw, ih = img.size
 
-    all_surya_lines: list[dict] = []
-    for bbox in bboxes:
-        x1 = max(0, int(bbox[0]))
-        y1 = max(0, int(bbox[1]))
-        x2 = min(iw, int(bbox[2]))
-        y2 = min(ih, int(bbox[3]))
-        if x2 - x1 < 10 or y2 - y1 < 10:
-            continue
-        crop = img.crop((x1, y1, x2, y2))
-        results = _rec([crop], det_predictor=_det, sort_lines=True)
-        for ln in results[0].text_lines:
-            all_surya_lines.append({
-                "bbox": [
-                    int(ln.bbox[0]) + x1, int(ln.bbox[1]) + y1,
-                    int(ln.bbox[2]) + x1, int(ln.bbox[3]) + y1,
-                ],
-                "text": ln.text,
-                "confidence": round(float(getattr(ln, "confidence", 1.0)), 4),
-            })
+        all_surya_lines: list[dict] = []
+        for bbox in bboxes:
+            x1 = max(0, int(bbox[0]))
+            y1 = max(0, int(bbox[1]))
+            x2 = min(iw, int(bbox[2]))
+            y2 = min(ih, int(bbox[3]))
+            if x2 - x1 < 10 or y2 - y1 < 10:
+                continue
+            crop = img.crop((x1, y1, x2, y2))
+            results = _rec([crop], det_predictor=_det, sort_lines=True)
+            for ln in results[0].text_lines:
+                all_surya_lines.append({
+                    "bbox": [
+                        int(ln.bbox[0]) + x1, int(ln.bbox[1]) + y1,
+                        int(ln.bbox[2]) + x1, int(ln.bbox[3]) + y1,
+                    ],
+                    "text": ln.text,
+                    "confidence": round(float(getattr(ln, "confidence", 1.0)), 4),
+                })
 
-    if not all_surya_lines:
-        return jsonify({"error": "No lines detected (boxes may be too small)"}), 400
+        if not all_surya_lines:
+            return jsonify({"error": "No lines detected (boxes may be too small)"}), 400
 
-    # Sort all lines top-to-bottom across all crops before alignment
-    all_surya_lines.sort(key=lambda ln: ln["bbox"][1])
+        # Sort all lines top-to-bottom across all crops before alignment
+        all_surya_lines.sort(key=lambda ln: ln["bbox"][1])
 
-    pairs = _nw_align(all_surya_lines, unmatched)
-    return jsonify({"surya_lines": all_surya_lines, "pairs": pairs})
+        pairs = _nw_align(all_surya_lines, unmatched)
+        return jsonify({"surya_lines": all_surya_lines, "pairs": pairs})
+
+    except Exception as exc:
+        import traceback
+        tb = traceback.format_exc()
+        print(tb, file=sys.stderr, flush=True)
+        return jsonify({"error": f"{type(exc).__name__}: {exc}", "traceback": tb}), 500
 
 
 @app.route("/save", methods=["POST"])
@@ -415,8 +422,32 @@ button.danger{background:#d93025;color:#fff;border-color:#d93025}
 button.done{background:#2e7d32;color:#fff;border-color:#2e7d32}
 button.done:hover:not(:disabled){background:#1b5e20}
 
+/* ── tabs ── */
+#tab-bar{border-bottom:2px solid #1a73e8;padding:0 12px;background:#f0f0f0;display:flex}
+.tab-btn{border:1px solid #ccc;border-bottom:none;border-radius:4px 4px 0 0;padding:5px 14px;cursor:pointer;background:#e0e0e0;font-size:12px;margin-right:3px;position:relative;top:2px;font-family:inherit}
+.tab-btn.active{background:#fff;border-color:#1a73e8;color:#1a73e8;font-weight:600;z-index:1}
+#box-legend{padding:4px 14px;font-size:11px;color:#555;background:#f9f9f9;border-bottom:1px solid #e0e0e0;display:flex;gap:16px;align-items:center;flex-shrink:0}
+#box-legend svg{vertical-align:middle;margin-right:3px}
+.bl-item{display:inline-flex;align-items:center}
+
 /* ── content area ── */
-#content{flex:1;display:flex;overflow:hidden}
+#align-content{flex:1;display:flex;overflow:hidden}
+#qa-content{flex:1;display:none;flex-direction:column;overflow:auto;padding:16px}
+
+/* ── fragment qa pane ── */
+.qa-summary{font-size:13px;margin-bottom:10px;padding:8px 12px;background:#f5f5f5;border-radius:4px;border-left:4px solid #1a73e8}
+.qa-legend{font-size:11px;color:#555;margin-bottom:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.qa-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:3px;vertical-align:middle}
+.qa-table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px}
+.qa-table th{text-align:left;padding:5px 8px;border-bottom:2px solid #ddd;font-size:11px;color:#555;white-space:nowrap;background:#fafafa}
+.qa-table td{padding:3px 8px;border-bottom:1px solid #f0f0f0;vertical-align:middle}
+.qa-num{color:#888;font-size:11px;white-space:nowrap;width:30px}
+.qa-h{white-space:nowrap;font-family:monospace;width:80px}
+.qa-bar-track{background:#eee;border-radius:2px;height:12px;min-width:120px;max-width:280px}
+.qa-bar{height:12px;border-radius:2px}
+.qa-text{font-family:monospace;font-size:11px;word-break:break-word;max-width:420px}
+.qa-conf{font-size:10px;color:#888;white-space:nowrap;width:55px}
+.qa-note{margin-top:4px;padding:8px 12px;background:#fff3e0;border-left:4px solid #e65100;font-size:12px;color:#bf360c;border-radius:0 4px 4px 0}
 #canvas-wrap{flex:1;overflow:auto;background:#888;padding:10px;display:flex;align-items:flex-start;justify-content:center}
 canvas{cursor:crosshair;display:block;background:#fff}
 
@@ -522,14 +553,32 @@ canvas{cursor:crosshair;display:block;background:#fff}
     <span id="status"></span>
     <button id="done-btn" class="done" onclick="finishReview()">Done reviewing</button>
   </div>
-  <div id="content">
+  <div id="tab-bar">
+    <button id="tab-align" class="tab-btn active" onclick="switchTab('align')">Alignment</button>
+    <button id="tab-qa" class="tab-btn" onclick="switchTab('qa')">Fragment QA</button>
+  </div>
+  <div id="box-legend">
+    <span class="bl-item">
+      <svg width="14" height="14"><rect x="1" y="1" width="12" height="12" fill="none" stroke="rgba(30,160,30,0.8)" stroke-width="2"/></svg>
+      matched line
+    </span>
+    <span class="bl-item">
+      <svg width="14" height="14"><rect x="1" y="1" width="12" height="12" fill="rgba(255,200,0,0.15)" stroke="rgba(230,130,0,0.9)" stroke-width="2"/></svg>
+      low-confidence match
+    </span>
+    <span class="bl-item">
+      <svg width="14" height="14"><rect x="1" y="1" width="12" height="12" fill="none" stroke="rgba(240,100,0,0.9)" stroke-width="2" stroke-dasharray="4,2"/></svg>
+      your selection
+    </span>
+  </div>
+  <div id="align-content">
     <div id="canvas-wrap">
       <!-- Instructions shown before a page is selected -->
       <div id="instructions">
         <h2>How to use this tool</h2>
         <ol>
           <li><strong>Pick a volume</strong> from the dropdown (top of sidebar), then click any page in the list.</li>
-          <li>The page image loads with <span style="color:#1e9e1e;font-weight:600">green boxes</span> overlaid on every already-matched line.</li>
+          <li>The page image loads with <span style="color:#1e9e1e;font-weight:600">green boxes</span> overlaid on every already-matched line (<span style="color:#c47000;font-weight:600">amber</span> = low Surya detection confidence — worth double-checking).</li>
           <li>Look at the <em>Unmatched Gemini text</em> panel on the right to see what entries are missing bounding boxes.</li>
           <li><strong>Draw a box</strong> around the region that contains those missing entries — click and drag on the image.</li>
           <li>Click <strong>Run Surya on box</strong>. Surya re-runs OCR on just that crop.</li>
@@ -557,6 +606,9 @@ canvas{cursor:crosshair;display:block;background:#fff}
         </div>
       </div>
     </div>
+  </div>
+  <div id="qa-content">
+    <div id="qa-pane"><p style="color:#888;padding:20px">Select a page from the sidebar.</p></div>
   </div>
 </div>
 
@@ -707,6 +759,7 @@ function loadPage(el) {
       pageData = data;
       updateUnmatched(data.unmatched_gemini);
       document.getElementById('reset-alignment-btn').disabled = !data.lines || data.lines.length === 0;
+      if (document.getElementById('qa-content').style.display !== 'none') renderQA();
       // Show canvas, hide instructions
       document.getElementById('instructions').style.display = 'none';
       document.getElementById('cv').style.display = 'block';
@@ -825,9 +878,18 @@ function runOcr() {
       unmatched_override: unmatchedOverride,
     }),
   })
-  .then(r => r.json())
+  .then(r => r.text().then(text => {
+    if (!text) throw new Error(`Empty response (HTTP ${r.status})`);
+    try { return JSON.parse(text); }
+    catch(e) { throw new Error(`HTTP ${r.status} — server returned: ${text.slice(0, 300)}`); }
+  }))
   .then(result => {
-    if (result.error) { setStatus('Error: ' + result.error); return; }
+    if (result.error) {
+      setStatus('Error: ' + result.error);
+      console.error(result.traceback || result.error);
+      document.getElementById('run-btn').disabled = false;
+      return;
+    }
     setStatus('Done — ' + result.surya_lines.length + ' Surya lines detected.');
     showPairs(result.pairs, unmatchedOverride);
   })
@@ -967,6 +1029,95 @@ function finishReview() {
   fetch('/done', { method: 'POST' })
     .then(() => setStatus('Done. Server shut down — you may close this tab.'))
     .catch(() => setStatus('Done. Server shut down — you may close this tab.'));
+}
+
+// ── tabs ───────────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  document.getElementById('align-content').style.display = tab === 'align' ? 'flex' : 'none';
+  document.getElementById('qa-content').style.display   = tab === 'qa'    ? 'flex' : 'none';
+  document.getElementById('tab-align').classList.toggle('active', tab === 'align');
+  document.getElementById('tab-qa').classList.toggle('active', tab === 'qa');
+  if (tab === 'qa') { renderQA(); return; }
+  // Recalculate canvas scale after the browser has reflowed the alignment layout
+  if (pageData && img.complete && img.naturalWidth) {
+    requestAnimationFrame(() => {
+      const wrap = document.getElementById('canvas-wrap');
+      scale = Math.min((wrap.clientWidth - 20) / pageData.img_width, 1.0);
+      cv.width  = Math.round(pageData.img_width  * scale);
+      cv.height = Math.round(pageData.img_height * scale);
+      render();
+    });
+  }
+}
+
+// ── fragment qa ─────────────────────────────────────────────────────────────
+function computeMedian(arr) {
+  if (!arr.length) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid-1] + sorted[mid]) / 2;
+}
+
+function renderQA() {
+  const el = document.getElementById('qa-pane');
+  if (!pageData) {
+    el.innerHTML = '<p style="color:#888;padding:20px">Select a page from the sidebar.</p>';
+    return;
+  }
+  const lines = pageData.lines || [];
+  if (!lines.length) {
+    el.innerHTML = '<p style="color:#888;padding:20px">No aligned lines on this page.</p>';
+    return;
+  }
+
+  const heights  = lines.map(ln => Math.max(1, ln.bbox[3] - ln.bbox[1]));
+  const median   = computeMedian(heights);
+  const loThresh = median * 0.5;
+  const hiThresh = median * 2.0;
+  const maxH     = Math.max(...heights);
+  const nFlagged = heights.filter(h => h < loThresh || h > hiThresh).length;
+
+  let html = `<div class="qa-summary">
+    <strong>${lines.length}</strong> aligned lines &nbsp;·&nbsp;
+    median height: <strong>${Math.round(median)}px</strong> &nbsp;·&nbsp;
+    ${nFlagged
+      ? `<span style="color:#c62828"><strong>${nFlagged}</strong> line${nFlagged===1?'':'s'} flagged ⚠</span>`
+      : '<span style="color:#2e7d32">✓ no anomalies</span>'}
+  </div>
+  <div class="qa-legend">
+    <span><span class="qa-dot" style="background:#2e7d32"></span>normal</span>
+    <span><span class="qa-dot" style="background:#e65100"></span>too short (&lt;50% of median height) — may attract false NER matches during extraction</span>
+    <span><span class="qa-dot" style="background:#6a1b9a"></span>too tall (&gt;200% of median height)</span>
+  </div>
+  <table class="qa-table">
+    <thead><tr><th>#</th><th>Height</th><th>Bar</th><th>Gemini text</th><th>Conf</th></tr></thead>
+    <tbody>`;
+
+  lines.forEach((ln, i) => {
+    const h        = heights[i];
+    const flagLow  = h < loThresh;
+    const flagHigh = h > hiThresh;
+    const color    = flagLow ? '#e65100' : flagHigh ? '#6a1b9a' : '#2e7d32';
+    const rowBg    = (flagLow || flagHigh) ? 'background:#fff8f0' : '';
+    const warn     = flagLow ? ' ⚠' : flagHigh ? ' ↑' : '';
+    const barPct   = Math.round((h / maxH) * 100);
+    const raw      = ln.gemini_text || '';
+    const text     = raw.slice(0, 72);
+    const ellip    = raw.length > 72 ? '…' : '';
+    html += `<tr style="${rowBg}">
+      <td class="qa-num">${i+1}</td>
+      <td class="qa-h"><span style="color:${color}">${h}px${warn}</span></td>
+      <td><div class="qa-bar-track"><div class="qa-bar" style="width:${barPct}%;background:${color}"></div></div></td>
+      <td class="qa-text">${escHtml(text)}${ellip}</td>
+      <td class="qa-conf">${escHtml(String(ln.confidence||''))}</td>
+    </tr>`;
+  });
+
+  html += `</tbody></table>`;
+  if (nFlagged) {
+    html += `<div class="qa-note">Lines flagged as <em>too short</em> are likely headings, page numbers, or detection artifacts. If a NER entry text fuzzy-matches one of these lines during <code>--extract-entries</code>, the canvas fragment in the explorer will point to a tiny bounding box rather than the actual entry line.</div>`;
+  }
+  el.innerHTML = html;
 }
 
 // ── keyboard navigation ────────────────────────────────────────────────────

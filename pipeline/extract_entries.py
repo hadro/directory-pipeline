@@ -395,7 +395,7 @@ def _img_path_from_aligned(aligned_path: Path, slug: str) -> Path | None:
 # Canvas fragment linking
 # ---------------------------------------------------------------------------
 
-def _find_fragment(line_text: str, aligned_lines: list[dict]) -> str | None:
+def _find_fragment(line_text: str, aligned_lines: list[dict]) -> tuple[str | None, str | None]:
     """Find the canvas_fragment for an entry by matching its line_text to aligned lines.
 
     Tries three strategies in order:
@@ -404,26 +404,35 @@ def _find_fragment(line_text: str, aligned_lines: list[dict]) -> str | None:
        line includes the city name and dot leaders before the establishment name,
        e.g. "LAKE GEORGE....Woodbine Cottage, 75 Dieskau Street"
     3. Fuzzy match as a last resort
+
+    Returns (canvas_fragment, matched_gemini_text) or (None, None).
     """
     if not line_text or not aligned_lines:
-        return None
+        return None, None
     # Exact match
     for ln in aligned_lines:
         if ln.get("gemini_text", "") == line_text:
-            return ln.get("canvas_fragment")
+            return ln.get("canvas_fragment"), ln.get("gemini_text", "")
     # Substring match
     lt_lower = line_text.lower()
     for ln in aligned_lines:
         if lt_lower in ln.get("gemini_text", "").lower():
-            return ln.get("canvas_fragment")
+            return ln.get("canvas_fragment"), ln.get("gemini_text", "")
     # Fuzzy match (handles minor whitespace / OCR differences)
     candidates = [ln.get("gemini_text", "") for ln in aligned_lines]
     matches = difflib.get_close_matches(line_text, candidates, n=1, cutoff=0.6)
     if matches:
         for ln in aligned_lines:
             if ln.get("gemini_text", "") == matches[0]:
-                return ln.get("canvas_fragment")
-    return None
+                return ln.get("canvas_fragment"), ln.get("gemini_text", "")
+    return None, None
+
+
+def _bbox_height(canvas_fragment: str) -> int | None:
+    """Parse the height from a IIIF canvas fragment URI (#xywh=x,y,w,h)."""
+    import re
+    m = re.search(r"#xywh=\d+,\d+,\d+,(\d+)", canvas_fragment or "")
+    return int(m.group(1)) if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -555,17 +564,62 @@ def process_page(
     # distinctive text (e.g. ship_name) isn't the first field in the dict.
     aligned_lines = aligned.get("lines", [])
     canvas_uri = aligned.get("canvas_uri", "")
+    used_fragments: set[str] = set()  # prevent multiple entries sharing one bounding box
+    page_label = aligned_path.stem
+    conflict_count = 0
+    no_match_count = 0
+    small_bbox_warnings: list[str] = []
+
     for entry in entries:
         cf = None
+        conflict = False
         candidates = [entry.get("line_text", ""), entry.get("establishment_name", "")]
         candidates += [v for v in entry.values() if isinstance(v, str) and len(v) > 3]
         for lt in candidates:
             if lt:
-                cf = _find_fragment(lt, aligned_lines)
-                if cf:
-                    break
+                candidate_cf, matched_text = _find_fragment(lt, aligned_lines)
+                if candidate_cf:
+                    if candidate_cf not in used_fragments:
+                        cf = candidate_cf
+                        # Check if the matched bbox height is suspiciously small
+                        # relative to the entry text being linked
+                        h = _bbox_height(cf)
+                        entry_len = len(lt)
+                        if h is not None and h < 40 and entry_len > 60:
+                            small_bbox_warnings.append(
+                                f"  bbox h={h}px for {entry_len}-char text "
+                                f"'{lt[:50]}…' → matched '{(matched_text or '')[:40]}'"
+                            )
+                        break
+                    else:
+                        conflict = True  # found a match but it was already claimed
+        if cf:
+            used_fragments.add(cf)
+        else:
+            if conflict:
+                conflict_count += 1
+            else:
+                no_match_count += 1
         entry["canvas_fragment"] = cf or canvas_uri  # fall back to full canvas
         entry["image"] = aligned.get("image", "")
+
+    # Emit per-page quality warnings to stderr
+    if conflict_count or no_match_count or small_bbox_warnings:
+        print(f"  [fragment QA] {page_label}:", file=sys.stderr)
+        if conflict_count:
+            print(
+                f"    {conflict_count} entr{'y' if conflict_count == 1 else 'ies'} "
+                f"lost fragment to dedup conflict → fell back to page canvas URI",
+                file=sys.stderr,
+            )
+        if no_match_count:
+            print(
+                f"    {no_match_count} entr{'y' if no_match_count == 1 else 'ies'} "
+                f"found no matching aligned line → fell back to page canvas URI",
+                file=sys.stderr,
+            )
+        for w in small_bbox_warnings:
+            print(f"    ⚠ small bbox: {w}", file=sys.stderr)
 
     # Write per-page output
     output = {
