@@ -29,9 +29,9 @@ Usage
     # Export a collection:
     python ia_collection_csv.py https://archive.org/details/durstoldyorklibrary
 
-    # Write to a named file (default: collection_csv/{slug}.csv):
+    # Write to a named file (default: output/{slug}/{slug}.csv):
     python ia_collection_csv.py https://archive.org/details/durstoldyorklibrary \\
-        --output collection_csv/durstoldyorklibrary.csv
+        --output output/durstoldyorklibrary/durstoldyorklibrary.csv
 """
 
 import argparse

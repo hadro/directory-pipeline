@@ -31,7 +31,7 @@ Usage
 
     # Write to a named file (default: stdout):
     python loc_collection_csv.py https://www.loc.gov/collections/civil-war-maps/ \\
-        --output collection_csv/civil-war-maps.csv
+        --output output/civil-war-maps/civil-war-maps.csv
 """
 
 import argparse
@@ -265,10 +265,18 @@ def process_single_item(
     #   …/item/sn83030313/1847-04-30/ed-1/manifest.json
     # Preserve the full path for both the API call and the manifest URL so
     # the downloader can fetch the right pages (not just the serial title).
+    import re as _re
+    _ca_m = _re.search(r"/item/([^/?#]+)/(\d{4}-\d{2}-\d{2})/ed-(\d+)", item_url)
     if item_url.lower().endswith("/manifest.json"):
         base_url = item_url[: -len("/manifest.json")]
         api_url = f"{base_url}/?fo=json"
         manifest_url = item_url
+    elif _ca_m:
+        # Chronicling America issue URL: build issue-specific manifest URL
+        lccn, date, edition = _ca_m.group(1), _ca_m.group(2), _ca_m.group(3)
+        base_url = f"https://www.loc.gov/item/{lccn}/{date}/ed-{edition}"
+        api_url = f"{base_url}/?fo=json"
+        manifest_url = f"{base_url}/manifest.json"
     else:
         api_url = f"https://www.loc.gov/item/{item_id}/?fo=json"
         manifest_url = _manifest_url(item_id)
