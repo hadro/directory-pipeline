@@ -146,8 +146,8 @@ def load_targets(source: str) -> list[str]:
     """
     p = Path(source)
     if p.exists() and p.is_file():
-        if p.suffix.lower() == ".csv":
-            return [source]  # pre-built collection CSV — use directly
+        if p.suffix.lower() in (".csv", ".json"):
+            return [source]  # pre-built CSV or local manifest — use directly
         return [
             line.strip()
             for line in p.read_text(encoding="utf-8").splitlines()
@@ -258,10 +258,22 @@ def loc_slug(url: str) -> str:
     slug matches what loc_collection_csv.py produces by default:
         /item/01015253/              → 'the_brooklyn_city_directory_01015253'
         /collections/civil-war-maps/ → 'civil-war-maps'
+
+    For Chronicling America issue URLs (/item/{lccn}/{date}/ed-{edition}/)
+    the date and edition are appended so each issue gets a unique slug:
+        /item/sn83030313/1847-05-01/ed-1/ → 'the_new_york_herald_..._sn83030313_1847_05_01_ed1'
     """
     m = re.search(r"/collections/([^/?#]+)", url)
     if m:
         return m.group(1).rstrip("/")
+    # Chronicling America: /item/{lccn}/{date}/ed-{edition}/
+    m = re.search(r"/(?:item|resource)/([^/?#]+)/(\d{4}-\d{2}-\d{2})/ed-(\d+)", url)
+    if m:
+        lccn, date, edition = m.group(1), m.group(2), m.group(3)
+        title = _fetch_loc_title(lccn)
+        base = _make_loc_slug(title, lccn)
+        date_slug = date.replace("-", "_")
+        return f"{base}_{date_slug}_ed{edition}"
     m = re.search(r"/(?:item|resource)/([^/?#]+)", url)
     if m:
         item_id = m.group(1).rstrip("/")
@@ -548,7 +560,8 @@ def build_stage_args(
         # For generic IIIF URLs with no CSV yet, use direct --manifest mode
         # (unless --iiif-csv is also requested in the same run, which will create the CSV first)
         iiif_csv_in_run = getattr(parsed, "iiif_csv", False)
-        if _is_generic_iiif_url(source) and not iiif_csv_in_run and (dry_run or not actual_csv.exists()):
+        _is_local_json = source.lower().endswith(".json") and Path(source).exists()
+        if (_is_generic_iiif_url(source) or _is_local_json) and not iiif_csv_in_run and (dry_run or not actual_csv.exists()):
             a = ["--manifest", source, "--output-dir", str(output_dir), "--resume"]
             if parsed.width is not None:
                 a += ["--width", str(parsed.width)]
@@ -604,6 +617,8 @@ def build_stage_args(
                 a += ["--expand-dittos"]
             if getattr(parsed, "high_res", False):
                 a += ["--high-res"]
+            if getattr(parsed, "ocr_prompt", None):
+                a += ["--prompt-file", parsed.ocr_prompt]
             runs.append(a)
         return runs  # list[list[str]] — one run per model
 
@@ -1105,6 +1120,18 @@ def main() -> None:
         help=argparse.SUPPRESS,  # hidden alias for --ocr-model
     )
     opts.add_argument(
+        "--ocr-prompt",
+        dest="ocr_prompt",
+        default=None,
+        metavar="FILE",
+        help=(
+            "OCR system prompt file for --gemini-ocr. "
+            "If omitted, looks for ocr_prompt.md in the volume output directory, "
+            "then falls back to prompts/ocr_prompt.md (generic default). "
+            "Use this to reuse the prompt from another volume in the same series."
+        ),
+    )
+    opts.add_argument(
         "--ner-prompt",
         dest="ner_prompt",
         default=None,
@@ -1413,6 +1440,13 @@ def main() -> None:
             uuid = None
             label = slug
             kind = "csv"
+
+        # Local IIIF manifest file (.json): treated like a generic IIIF manifest URL
+        elif target.lower().endswith(".json") and Path(target).exists():
+            slug = args.slug or Path(target).stem
+            uuid = None
+            label = slug
+            kind = "iiif-manifest"
 
         # Library of Congress URL: slug derived from URL path
         elif is_loc_url(target):
