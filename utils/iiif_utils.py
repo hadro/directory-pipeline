@@ -159,8 +159,14 @@ def image_url(service_id: str, width: int) -> str:
     """
     Construct a IIIF Image API download URL for the requested pixel width.
     Works for both Image API v2 and v3.
+
+    Pass width=0 to request native/maximum resolution without upscaling.
+    Uses 'full' as the size parameter — valid in IIIF Image API v2 ('full' = native size)
+    and widely supported in v3. ('max' is preferred in v3 but returns HTTP 400 on many
+    v2 servers including the LOC tile server.)
     """
-    return f"{service_id}/full/{width},/0/default.jpg"
+    size = "full" if width == 0 else f"{width},"
+    return f"{service_id}/full/{size}/0/default.jpg"
 
 
 # ---------------------------------------------------------------------------
