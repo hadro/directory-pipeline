@@ -19,6 +19,7 @@ Usage
 
 import argparse
 import os
+import re
 import sys
 import threading
 import time
@@ -29,7 +30,7 @@ from dotenv import load_dotenv
 from google import genai
 
 load_dotenv()
-from google.genai.types import GenerateContentConfig, MediaResolution, Part, ThinkingConfig
+from google.genai.types import FinishReason, GenerateContentConfig, MediaResolution, Part, ThinkingConfig
 
 DEFAULT_MODEL = "gemini-2.0-flash"
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
@@ -47,6 +48,13 @@ _DITTO_INSTRUCTION = (
     "often misread as 66 or as a quotation mark) used to repeat a value from the "
     "row above, expand them in place — write out the full repeated value rather "
     "than transcribing the mark itself."
+)
+
+_NO_LEADER_INSTRUCTION = (
+    "\n\nCRITICAL: Do NOT reproduce dot leaders (sequences of dots, or '. . .' "
+    "patterns used as visual spacing between a name and an address). Replace them "
+    "with a single space or omit them entirely. For example, transcribe "
+    "\"Smith Hotel. . . . . . . . . . 123 Main St\" as \"Smith Hotel 123 Main St\"."
 )
 
 _print_lock = threading.Lock()
@@ -72,19 +80,125 @@ def _find_prompt(output_root: Path, fallback: Path) -> Path:
     """Return a volume-specific ocr_prompt.md if one exists alongside the images,
     otherwise return the global fallback.
 
-    Checks output_root and output_root.parent so the lookup works whether
-    output_root is the item directory or the slug-level directory above it.
+    Search order:
+    1. output_root itself (item directory passed directly)
+    2. output_root.parent (slug-level directory, when called with item subdir)
+    3. Any immediate subdirectory of output_root (item subdir when called with
+       slug-level directory — covers the case where --select-pages and
+       --generate-prompts wrote ocr_prompt.md into the item subdir but the
+       OCR stage is invoked with the parent slug directory)
     """
-    for candidate_dir in (output_root.resolve(), output_root.resolve().parent):
+    root = output_root.resolve()
+    for candidate_dir in (root, root.parent):
         p = candidate_dir / "ocr_prompt.md"
         if p.exists():
             return p
+    for subdir in sorted(root.iterdir()):
+        if subdir.is_dir():
+            p = subdir / "ocr_prompt.md"
+            if p.exists():
+                return p
     return fallback
 
 
 def _log(msg: str) -> None:
     with _print_lock:
         print(msg, file=sys.stderr)
+
+
+# Output quality thresholds
+_REPETITION_THRESHOLD = 0.40   # fraction of lines that are identical → runaway loop
+_REPETITION_MIN_REPEATS = 20   # minimum line count before repetition check applies
+_REPETITION_MIN_LINE_LEN = 4   # ignore lines shorter than this when counting
+_LEADER_RUNAWAY_MIN_RUN = 50   # consecutive identical non-word chars → dot-leader runaway
+_LEADER_SPACED_MIN_RUN = 50   # spaced pattern like ". . . . ." repeated this many times
+_LEADER_MAX_LINE_LEN = 500    # any line longer than this is a runaway (catches spaced variants)
+
+# Temperatures to try in order when output quality checks fail
+_RETRY_TEMPERATURES = [0.1, 0.3, 0.7]
+
+# Regex: 200+ consecutive identical non-word, non-space characters (dots, dashes, etc.)
+_LEADER_RE = re.compile(r"([^\w\s])\1{%d,}" % (_LEADER_RUNAWAY_MIN_RUN - 1))
+# Regex: spaced dot-leader like ". . . . ." — non-word char + space repeated 50+ times
+_LEADER_SPACED_RE = re.compile(r"([^\w\s] ){%d,}" % _LEADER_SPACED_MIN_RUN)
+# Regex: collapse any run of 10+ dots (with optional spaces) to a canonical 5-dot leader
+_LEADER_COLLAPSE_RE = re.compile(r"(\.\s*){10,}")
+
+
+def _clean_output(text: str) -> str:
+    """Apply post-processing cleanup to OCR text before saving.
+
+    Collapses any run of 10+ dots (with optional spaces) down to a canonical
+    5-dot leader, preserving any content that follows (e.g. 'r.' or 'r. m.').
+    This handles pages where dot-leader runaways survive all temperature retries.
+    """
+    return _LEADER_COLLAPSE_RE.sub(".....", text)
+
+
+def _output_issue(text: str) -> str:
+    """Return a non-empty description if the text has a detectable quality problem, else ''.
+
+    Checks for two failure modes:
+      1. Repetition loop  — a single line makes up >= 40% of all lines (min 20 lines).
+      2. Dot-leader runaway — any line contains 200+ consecutive identical non-word chars.
+    """
+    if not text:
+        return ""
+
+    # Dot-leader runaway — consecutive (.....) or spaced (. . . .) or just very long lines
+    for line in text.splitlines():
+        if _LEADER_RE.search(line):
+            return f"leader runaway in line [{line[:50]}…]"
+        if _LEADER_SPACED_RE.search(line):
+            return f"spaced leader runaway in line [{line[:50]}…]"
+        if len(line) > _LEADER_MAX_LINE_LEN:
+            return f"line too long ({len(line)} chars): [{line[:50]}…]"
+
+    # Repetition loop
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if len(lines) >= _REPETITION_MIN_REPEATS:
+        from collections import Counter
+        counts = Counter(l for l in lines if len(l) >= _REPETITION_MIN_LINE_LEN)
+        if counts:
+            top_line, top_count = counts.most_common(1)[0]
+            ratio = top_count / len(lines)
+            if ratio >= _REPETITION_THRESHOLD:
+                return f"repetition loop ({ratio:.0%} of lines are [{top_line[:40]}…])"
+
+    return ""
+
+
+def _call_gemini(
+    client: genai.Client,
+    img_bytes: bytes,
+    image_name: str,
+    model: str,
+    system_prompt: str,
+    media_resolution: "MediaResolution | None",
+    temperature: float,
+):
+    """Call Gemini with 429-retry logic. Returns the response object."""
+    max_retries = 5
+    delay = 10  # seconds; doubles on each 429
+    for attempt in range(max_retries):
+        try:
+            return client.models.generate_content(
+                model=model,
+                config=GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=temperature,
+                    media_resolution=media_resolution,
+                    thinking_config=ThinkingConfig(thinking_budget=0),
+                ),
+                contents=[Part.from_bytes(data=img_bytes, mime_type="image/jpeg")],
+            )
+        except Exception as exc:
+            if "429" in str(exc) and attempt < max_retries - 1:
+                _log(f"  Rate limited — retrying {image_name} in {delay}s (attempt {attempt + 1}/{max_retries})")
+                time.sleep(delay)
+                delay *= 2
+            else:
+                raise
 
 
 def process_image(
@@ -110,36 +224,51 @@ def process_image(
     with open(image_path, "rb") as f:
         img_bytes = f.read()
 
-    max_retries = 5
-    delay = 10  # seconds; doubles on each 429
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=model,
-                config=GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=0.0,
-                    media_resolution=media_resolution,
-                    thinking_config=ThinkingConfig(thinking_budget=0),
-                ),
-                contents=[Part.from_bytes(data=img_bytes, mime_type="image/jpeg")],
-            )
-            break
-        except Exception as exc:
-            if "429" in str(exc) and attempt < max_retries - 1:
-                _log(f"  Rate limited — retrying {image_path.name} in {delay}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(delay)
-                delay *= 2
-            else:
-                raise
+    response = _call_gemini(client, img_bytes, image_path.name, model, system_prompt, media_resolution, temperature=0.0)
 
     text = response.text or ""
+
+    # Determine whether this output needs a retry.
+    # Empty text: retry only on RECITATION (STOP with no text = genuinely blank page).
+    # Non-empty text: retry on repetition loop or dot-leader runaway.
     if not text:
         candidate = response.candidates[0] if response.candidates else None
-        if candidate:
-            _log(f"  finish_reason: {candidate.finish_reason}  [{image_path.name}]")
-            if candidate.safety_ratings:
-                _log(f"  safety_ratings: {candidate.safety_ratings}  [{image_path.name}]")
+        if candidate and candidate.finish_reason == FinishReason.RECITATION:
+            needs_retry, reason = True, "RECITATION"
+        else:
+            needs_retry, reason = False, ""
+            if candidate:
+                _log(f"  finish_reason: {candidate.finish_reason}  [{image_path.name}]")
+                if candidate.safety_ratings:
+                    _log(f"  safety_ratings: {candidate.safety_ratings}  [{image_path.name}]")
+    else:
+        issue = _output_issue(text)
+        needs_retry, reason = bool(issue), issue
+
+    if needs_retry:
+        best_text = text  # track cleanest output seen; start with original (may be empty)
+        is_leader_issue = "leader" in reason or "line too long" in reason
+        retry_prompt = (system_prompt + _NO_LEADER_INSTRUCTION) if is_leader_issue else system_prompt
+        for temp in _RETRY_TEMPERATURES:
+            _log(f"  {reason} — retrying at temperature={temp}: {image_path.name}")
+            retry_response = _call_gemini(client, img_bytes, image_path.name, model, retry_prompt, media_resolution, temperature=temp)
+            retry_text = retry_response.text or ""
+            retry_issue = _output_issue(retry_text)
+            if retry_text and not retry_issue:
+                text = retry_text  # clean output — accept and stop retrying
+                break
+            if retry_text:
+                _log(f"  temperature={temp} still problematic ({retry_issue}): {image_path.name}")
+                best_text = retry_text  # imperfect but non-empty; keep as fallback
+        else:
+            # All temperatures exhausted without a clean result
+            if best_text:
+                text = best_text
+            # Last resort: collapse any surviving dot-leader runaways before saving
+            if is_leader_issue:
+                text = _clean_output(text)
+            _log(f"  All retries exhausted — keeping best available output: {image_path.name}")
+
     txt_path.write_text(text, encoding="utf-8")
     return "ok", True
 

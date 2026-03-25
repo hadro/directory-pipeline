@@ -544,6 +544,7 @@ const DOC_TITLE   = {title_json};
 const DOC_META    = {doc_meta_json};
 const VIEWER_URL  = {viewer_url_json};
 const MANIFEST_URL = {manifest_url_json};
+const FULL_PAGE_THUMBS = {full_page_thumbs_json};
 let activeManifestUrl = MANIFEST_URL;
 let ALL_ENTRIES = ALL_INITIAL_ENTRIES;
 
@@ -946,16 +947,23 @@ function contentStateUrl(canvas_fragment) {{
 // ── Detail panel ───────────────────────────────────────────────────────────
 function thumbUrl(row) {{
   const cf = row.canvas_fragment || "";
-  if (!cf) return "";
+  if (!cf) {{
+    // No canvas fragment — fall back to the local page image (full page, no crop)
+    return row.image ? row.image : "";
+  }}
   const cid = cf.includes("#") ? cf.split("#")[0] : cf;
   const svc = CANVAS_MAP[cid];
   if (!svc) return "";
-  if (cf.includes("#xywh=")) {{
+  if (!FULL_PAGE_THUMBS && cf.includes("#xywh=")) {{
     const xywh = cf.split("#xywh=")[1].split(",").map(Number);
     if (xywh.length !== 4 || xywh[2] <= 0 || xywh[3] <= 0) return "";
     const [cw, ch] = [svc[1], svc[2]];
     if (!cw || !ch) return "";
-    const padH = 40, padV = Math.max(xywh[3], 60), tw = 400;
+    const padV = Math.max(xywh[3], 60), tw = 400;
+    // Ensure the crop is at least 600px wide so narrow Surya detections
+    // (e.g. short names in classified directories) show enough context.
+    const minW = 600;
+    const padH = Math.max(40, Math.ceil((minW - xywh[2]) / 2));
     const rx = Math.max(0, xywh[0] - padH);
     const ry = Math.max(0, xywh[1] - padV);
     const rw = (xywh[0] + xywh[2] + padH) - rx;
@@ -1558,6 +1566,7 @@ def build_html(
     volumes: dict[str, list[dict]] | None = None,
     viewer_url: str = "",
     manifest_url: str = "",
+    full_page_thumbs: bool = False,
 ) -> str:
     return _HTML_TEMPLATE.format(
         entries_json     = _safe_json(list(rows)),
@@ -1572,6 +1581,7 @@ def build_html(
         ),
         viewer_url_json  = _safe_json(viewer_url),
         manifest_url_json = _safe_json(manifest_url),
+        full_page_thumbs_json = _safe_json(full_page_thumbs),
     )
 
 
@@ -1629,6 +1639,12 @@ def main() -> None:
         metavar="URL",
         help="Explicit URL of the IIIF manifest served with the viewer. "
              "Defaults to <viewer-url>/manifest.json.",
+    )
+    parser.add_argument(
+        "--full-page-thumbs",
+        action="store_true",
+        help="Show full-page thumbnails instead of cropped bounding-box regions "
+             "(useful when canvas_fragment bboxes are unreliable or absent)",
     )
     parser.add_argument(
         "--quiet", "-q",
@@ -1788,7 +1804,8 @@ def main() -> None:
     html = build_html(rows, field_meta, canvas_map, title, doc_meta,
                       volumes=volumes if collection_mode else None,
                       viewer_url=viewer_url,
-                      manifest_url=manifest_url)
+                      manifest_url=manifest_url,
+                      full_page_thumbs=args.full_page_thumbs)
     out_path.write_text(html, encoding="utf-8")
     if not args.quiet:
         print(f"Explorer written to {out_path}", file=sys.stderr)

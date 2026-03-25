@@ -378,8 +378,12 @@ def done():
     """Shut the server down so the pipeline can continue to the next stage."""
     def _shutdown() -> None:
         import time
+        import signal
         time.sleep(0.4)   # let the JSON response reach the browser first
-        os._exit(0)
+        # Send SIGTERM so Python's normal shutdown sequence runs, which lets
+        # PyTorch DataLoader workers terminate cleanly (avoids "leaked
+        # semaphore" warning that os._exit() triggers by skipping cleanup).
+        os.kill(os.getpid(), signal.SIGTERM)
     threading.Thread(target=_shutdown, daemon=True).start()
     return jsonify({"ok": True})
 

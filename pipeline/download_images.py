@@ -211,6 +211,11 @@ def fetch_manifest(
     manifest_url: str,
     cache_path: "Path | None" = None,
 ) -> dict:
+    # Local file path — read directly without HTTP
+    local = Path(manifest_url)
+    if local.exists() and local.is_file():
+        with open(local, encoding="utf-8") as f:
+            return json.load(f)
     if cache_path and cache_path.exists():
         with open(cache_path, encoding="utf-8") as f:
             return json.load(f)
@@ -219,11 +224,30 @@ def fetch_manifest(
         resp = get_with_retry(session, manifest_url, timeout=30, label="manifest")
         data = resp.json()
     except requests.HTTPError as exc:
-        if exc.response.status_code == 403:
-            # LoC manifest endpoints are blocked by Cloudflare; fall back to
-            # building a synthetic manifest from the item JSON API.
-            item_json_path = cache_path.parent / "item.json" if cache_path else None
-            data = _build_loc_manifest(session, manifest_url, item_json_path)
+        if exc.response.status_code in (403, 401):
+            # Cloudflare / UA-blocking: retry with urllib + full browser headers
+            # before falling back to a synthetic manifest.
+            import urllib.request as _urllib_request
+            _BROWSER_HEADERS = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": "application/ld+json, application/json, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.loc.gov/",
+            }
+            try:
+                req = _urllib_request.Request(manifest_url, headers=_BROWSER_HEADERS)
+                with _urllib_request.urlopen(req, timeout=30) as _resp:
+                    data = json.loads(_resp.read())
+            except Exception:
+                data = None
+            if data is None and exc.response.status_code == 403:
+                # urllib also blocked — build synthetic manifest from item JSON API.
+                item_json_path = cache_path.parent / "item.json" if cache_path else None
+                data = _build_loc_manifest(session, manifest_url, item_json_path)
             if data is None:
                 raise
         elif exc.response.status_code == 401:
@@ -238,11 +262,21 @@ def fetch_manifest(
         data = None
 
     if data is None:
-        # Fallback: urllib.request with minimal headers avoids User-Agent blocks
+        # Fallback: urllib with browser headers for servers that drop the
+        # python-requests UA at the connection level.
         import urllib.request as _urllib_request
         req = _urllib_request.Request(
             manifest_url,
-            headers={"Accept": "application/ld+json, application/json, */*"},
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": "application/ld+json, application/json, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.loc.gov/",
+            },
         )
         with _urllib_request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
@@ -264,7 +298,8 @@ def iter_canvas_images(manifest: dict, width: int) -> list[tuple[str, str, int |
     """
     result = []
     for c in iiif_utils.iter_canvases(manifest):
-        effective_width = min(width, c["max_width"]) if c["max_width"] else width
+        # width=0 means "native max" — bypass all capping so image_url emits 'max'
+        effective_width = width if width == 0 else (min(width, c["max_width"]) if c["max_width"] else width)
         result.append((c["image_id"], iiif_utils.image_url(c["service_id"], effective_width), c["max_width"]))
     return result
 
@@ -500,7 +535,8 @@ def main() -> None:
         type=int,
         default=DEFAULT_WIDTH,
         metavar="PX",
-        help=f"Image width in pixels (default: {DEFAULT_WIDTH}). Height is auto-scaled.",
+        help=f"Image width in pixels (default: {DEFAULT_WIDTH}). Height is auto-scaled. "
+             "Use 0 for native/maximum resolution (no upscaling).",
     )
     parser.add_argument(
         "--delay",

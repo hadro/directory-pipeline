@@ -56,6 +56,7 @@ import difflib
 import json
 import os
 import re
+import statistics
 import sys
 import threading
 import urllib.request
@@ -288,14 +289,28 @@ def parse_surya(
 # Reading-order correction
 # ---------------------------------------------------------------------------
 
-# Minimum line bbox height in pixels.  Lines below this are dot-leader
-# artifacts or horizontal rules that Tesseract mis-OCRs as text; letting them
-# into the word pool creates false-positive matches with garbage coordinates.
+# Minimum line bbox height in pixels — absolute floor used when there are too
+# few lines to compute a reliable median.  Lines below the effective threshold
+# are dot-leader artifacts or horizontal rules that Tesseract mis-OCRs as text;
+# letting them into the word pool creates false-positive matches with garbage
+# coordinates.
 _MIN_LINE_HEIGHT = 15
 
 
-def filter_short_lines(lines: list[dict], min_height: int = _MIN_LINE_HEIGHT) -> list[dict]:
-    """Remove hOCR lines whose bounding box height is below min_height pixels."""
+def filter_short_lines(lines: list[dict], min_height: int | None = None) -> list[dict]:
+    """Remove hOCR lines whose bounding box height is below an adaptive threshold.
+
+    When *min_height* is not provided, the threshold is computed as 35% of the
+    median line height across all input lines, with *_MIN_LINE_HEIGHT* as a
+    floor.  This keeps the filter proportional to the scan resolution instead
+    of relying on a fixed pixel constant.
+    """
+    if not lines:
+        return lines
+    if min_height is None:
+        heights = [ln["bbox"][3] - ln["bbox"][1] for ln in lines]
+        median_h = statistics.median(heights)
+        min_height = max(_MIN_LINE_HEIGHT, round(median_h * 0.35))
     return [ln for ln in lines if (ln["bbox"][3] - ln["bbox"][1]) >= min_height]
 
 
@@ -599,8 +614,8 @@ def _canvas_fragment(
 # Word-level alignment helpers
 # ---------------------------------------------------------------------------
 
-# Words whose y-center deviates more than this from their Gemini line's
-# median word y-center are discarded as spatial outliers before bbox union.
+# Legacy fallback — _build_word_aligned_lines now computes an adaptive
+# tolerance (2.5× median line height, floor 50 px) instead of this constant.
 _INTRA_LINE_Y_TOLERANCE = 100  # pixels
 
 
@@ -735,6 +750,13 @@ def _build_word_aligned_lines(
     if not sorted_tess_lines or not gemini_lines:
         return [], list(gemini_lines)
 
+    # Adaptive intra-line y-tolerance: 2.5× median Surya/Tesseract line height,
+    # floored at 50 px.  Scales with scan resolution so a loose threshold on a
+    # 400 dpi scan doesn't collapse to a hairline on a 150 dpi scan.
+    _line_heights = [tl["bbox"][3] - tl["bbox"][1] for tl in sorted_tess_lines]
+    _median_line_h = statistics.median(_line_heights) if _line_heights else 40
+    intra_line_y_tol = max(50, round(_median_line_h * 2.5))
+
     # Flat Tesseract word list + per-line boundary indices.
     # tess_line_starts[i]   = first flat index of words for Tess line i.
     # tess_line_starts[i+1] = first flat index of words for Tess line i+1
@@ -825,7 +847,7 @@ def _build_word_aligned_lines(
             med_y = _median(y_centers)
             matches = [
                 (gw, bb) for gw, bb in matches
-                if abs(_y_center(bb) - med_y) <= _INTRA_LINE_Y_TOLERANCE
+                if abs(_y_center(bb) - med_y) <= intra_line_y_tol
             ]
 
         if not matches:

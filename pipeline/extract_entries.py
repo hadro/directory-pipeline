@@ -435,6 +435,30 @@ def _bbox_height(canvas_fragment: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _is_edge_bleed(canvas_fragment: str, canvas_width: int,
+                   edge_pct: float = 0.05) -> bool:
+    """Return True if the bbox is a narrow strip abutting the left or right edge.
+
+    Two-page spread scans include a sliver of the facing page at the extreme
+    left or right of the image. Surya detects these as text lines and the NW
+    alignment can assign an entry to one. Reject any bbox that is both
+    narrower than *edge_pct* of the canvas width AND starts/ends within
+    *edge_pct* of either edge. Using a percentage keeps the threshold
+    proportional across collections with different scan resolutions.
+    """
+    if not canvas_fragment or not canvas_width:
+        return False
+    import re
+    m = re.search(r"#xywh=(\d+),\d+,(\d+),\d+", canvas_fragment)
+    if not m:
+        return False
+    x, w = int(m.group(1)), int(m.group(2))
+    edge_px = canvas_width * edge_pct
+    if w >= edge_px:
+        return False
+    return x < edge_px or (x + w) > (canvas_width - edge_px)
+
+
 # ---------------------------------------------------------------------------
 # Per-page processing
 # ---------------------------------------------------------------------------
@@ -564,62 +588,39 @@ def process_page(
     # distinctive text (e.g. ship_name) isn't the first field in the dict.
     aligned_lines = aligned.get("lines", [])
     canvas_uri = aligned.get("canvas_uri", "")
+    canvas_width = aligned.get("canvas_width") or 0
     used_fragments: set[str] = set()  # prevent multiple entries sharing one bounding box
-    page_label = aligned_path.stem
-    conflict_count = 0
-    no_match_count = 0
-    small_bbox_warnings: list[str] = []
-
+    # Fields that represent inherited context headings, not the entry's own line text.
+    # Matching against these causes the first entry after a heading to steal the
+    # heading's bounding box (e.g. "Alabama" substring-matches "ALABAMA." heading,
+    # "Brooklyn" substring-matches "BROOKLYN." heading).
+    _HEADING_FIELDS = {"section", "subsection", "state", "city"}
     for entry in entries:
         cf = None
-        conflict = False
-        candidates = [entry.get("line_text", ""), entry.get("establishment_name", "")]
-        candidates += [v for v in entry.values() if isinstance(v, str) and len(v) > 3]
+        # Prioritise specific entry-text fields; skip heading/context fields entirely.
+        candidates = [
+            entry.get("line_text", ""),
+            entry.get("establishment_name", ""),
+            entry.get("firm_name", ""),
+            entry.get("business_name", ""),
+            entry.get("name", ""),
+            entry.get("address", "") or "",
+        ]
+        candidates += [
+            v for k, v in entry.items()
+            if k not in _HEADING_FIELDS and isinstance(v, str) and len(v) > 3
+        ]
         for lt in candidates:
             if lt:
-                candidate_cf, matched_text = _find_fragment(lt, aligned_lines)
-                if candidate_cf:
-                    if candidate_cf not in used_fragments:
-                        cf = candidate_cf
-                        # Check if the matched bbox height is suspiciously small
-                        # relative to the entry text being linked
-                        h = _bbox_height(cf)
-                        entry_len = len(lt)
-                        if h is not None and h < 40 and entry_len > 60:
-                            small_bbox_warnings.append(
-                                f"  bbox h={h}px for {entry_len}-char text "
-                                f"'{lt[:50]}…' → matched '{(matched_text or '')[:40]}'"
-                            )
-                        break
-                    else:
-                        conflict = True  # found a match but it was already claimed
+                candidate_uri, _ = _find_fragment(lt, aligned_lines)
+                if (candidate_uri and candidate_uri not in used_fragments
+                        and not _is_edge_bleed(candidate_uri, canvas_width)):
+                    cf = candidate_uri
+                    break
         if cf:
             used_fragments.add(cf)
-        else:
-            if conflict:
-                conflict_count += 1
-            else:
-                no_match_count += 1
         entry["canvas_fragment"] = cf or canvas_uri  # fall back to full canvas
         entry["image"] = aligned.get("image", "")
-
-    # Emit per-page quality warnings to stderr
-    if conflict_count or no_match_count or small_bbox_warnings:
-        print(f"  [fragment QA] {page_label}:", file=sys.stderr)
-        if conflict_count:
-            print(
-                f"    {conflict_count} entr{'y' if conflict_count == 1 else 'ies'} "
-                f"lost fragment to dedup conflict → fell back to page canvas URI",
-                file=sys.stderr,
-            )
-        if no_match_count:
-            print(
-                f"    {no_match_count} entr{'y' if no_match_count == 1 else 'ies'} "
-                f"found no matching aligned line → fell back to page canvas URI",
-                file=sys.stderr,
-            )
-        for w in small_bbox_warnings:
-            print(f"    ⚠ small bbox: {w}", file=sys.stderr)
 
     # Write per-page output
     output = {
