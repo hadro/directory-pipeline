@@ -5,25 +5,20 @@ For each *_entries.json file found, opens the corresponding image, draws
 colour-coded bounding boxes per entry (coloured by category), and saves a
 *_entries_viz.jpg next to it.
 
-Colour coding
--------------
-  blue    — formal_accommodations  (Hotels, Motels)
-  teal    — informal_accommodations (Tourist Homes, Boarding Houses)
-  red     — eating_drinking        (Restaurants, Bars, Taverns)
-  purple  — barber_beauty          (Beauty Parlors, Barber Shops)
-  amber   — service_station        (Service Stations, Garages)
-  grey    — other                  (Drug Stores, Undertakers, etc.)
+Colour coding is determined automatically from the category values present in
+the data.  Pass --ner-prompt to pre-seed all expected categories so colours
+stay consistent across pages even when a category is absent on a given page.
 
-Advertisements get a thicker outline (3 px vs 1 px).
 Entries with no spatial coordinates (canvas_fragment has no #xywh) are
 listed in the right margin in their category colour.
 
 Usage
 -----
-    python visualize_entries.py output/greenbooks/item_uuid/
-    python visualize_entries.py output/greenbooks/item_uuid/0039_123_gemini-2.0-flash_entries.json
-    python visualize_entries.py output/greenbooks/ --model gemini-2.0-flash
-    python visualize_entries.py output/greenbooks/ --force
+    python visualize_entries.py output/my-volume/item_uuid/
+    python visualize_entries.py output/my-volume/item_uuid/ --ner-prompt output/my-volume/ner_prompt.md
+    python visualize_entries.py output/my-volume/item_uuid/0039_gemini-2.0-flash_entries.json
+    python visualize_entries.py output/my-volume/ --model gemini-2.0-flash
+    python visualize_entries.py output/my-volume/ --force
 """
 
 import argparse
@@ -39,34 +34,110 @@ except ImportError:
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# Category colour palette  (fill alpha ~60, outline alpha 255)
+# Perceptually distinct base colours (RGB).  Categories are sorted
+# alphabetically and assigned colours in round-robin order so the mapping
+# is deterministic within a run even across pages.
 # ---------------------------------------------------------------------------
 
-_PALETTE: dict[str, tuple[tuple[int, int, int, int], tuple[int, int, int, int]]] = {
-    "formal_accommodations":   ((50,  110, 220,  60), (40,   90, 200, 255)),
-    "informal_accommodations": ((0,   185, 170,  60), (0,   155, 140, 255)),
-    "eating_drinking":         ((210,  55,  45,  60), (185,  35,  25, 255)),
-    "barber_beauty":           ((175,  55, 210,  60), (150,  35, 185, 255)),
-    "service_station":         ((195, 148,   0,  60), (165, 125,   0, 255)),
-    "other":                   ((110, 110, 130,  60), ( 85,  85, 105, 255)),
-}
-_DEFAULT_PALETTE = ((130, 130, 130, 60), (100, 100, 100, 255))
+_BASE_COLORS: list[tuple[int, int, int]] = [
+    (50,  110, 220),   # blue
+    (210,  55,  45),   # red
+    (0,   185, 170),   # teal
+    (175,  55, 210),   # purple
+    (195, 148,   0),   # amber
+    (20,  160,  80),   # green
+    (220, 100,  20),   # orange
+    (100,  60, 200),   # indigo
+    (160,  30, 100),   # crimson
+    (60,  160, 200),   # sky
+    (140, 180,  30),   # lime
+    (200,  80, 140),   # rose
+]
 
-_CATEGORY_LABELS = {
-    "formal_accommodations":   "Hotels/Motels",
-    "informal_accommodations": "Tourist Homes",
-    "eating_drinking":         "Restaurants/Bars",
-    "barber_beauty":           "Beauty/Barber",
-    "service_station":         "Service Stations",
-    "other":                   "Other",
-}
+_DEFAULT_FILL    = (130, 130, 130, 60)
+_DEFAULT_OUTLINE = (100, 100, 100, 255)
 
 BOX_WIDTH_NORMAL = 1
 BOX_WIDTH_AD     = 3
 
+# Fields tried in order when looking for a display label for an entry.
+_NAME_FIELDS = (
+    "establishment_name",
+    "business_name",
+    "firm_name",
+    "name",
+    "subject",
+    "title",
+    "person_name",
+)
+
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Palette helpers
+# ---------------------------------------------------------------------------
+
+def _make_palette(categories: list[str]) -> dict[str, tuple[tuple, tuple]]:
+    """
+    Assign fill (alpha ~60) and outline (alpha 255) colours to each category.
+    Input list should be pre-sorted for a stable mapping.
+    """
+    palette: dict[str, tuple[tuple, tuple]] = {}
+    for i, cat in enumerate(categories):
+        r, g, b = _BASE_COLORS[i % len(_BASE_COLORS)]
+        fill    = (r, g, b, 60)
+        outline = (max(0, r - 20), max(0, g - 20), max(0, b - 20), 255)
+        palette[cat] = (fill, outline)
+    return palette
+
+
+def _categories_from_prompt(prompt_path: Path) -> list[str]:
+    """
+    Parse category values from a ner_prompt.md file.
+
+    Looks for two patterns:
+      1. Entry schema description like:
+            **category**: ... ("Breweries", "Maltsters", etc.)
+      2. JSON example block containing:
+            "category": "SomeValue"
+    Returns a sorted, deduplicated list of values found.
+    """
+    try:
+        text = prompt_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    cats: set[str] = set()
+
+    # Pattern 1 — parenthetical after **category** description
+    m = re.search(r"\*\*category\*\*[^\n]*\(([^)]+)\)", text)
+    if m:
+        cats.update(re.findall(r'"([^"]+)"', m.group(1)))
+
+    # Pattern 2 — "category": "Value" anywhere in the prompt
+    cats.update(re.findall(r'"category":\s*"([^"]+)"', text))
+
+    # Remove placeholder-style values (contain spaces + look like descriptions)
+    real = {c for c in cats if len(c) < 60 and not c.startswith("The ")}
+    return sorted(real)
+
+
+def _collect_categories(json_files: list[Path]) -> list[str]:
+    """Scan entry files to collect all unique category values."""
+    cats: set[str] = set()
+    for jf in json_files:
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for entry in data.get("entries", []):
+            cat = entry.get("category")
+            if cat and isinstance(cat, str) and cat.strip():
+                cats.add(cat.strip())
+    return sorted(cats)
+
+
+# ---------------------------------------------------------------------------
+# Misc helpers
 # ---------------------------------------------------------------------------
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -117,11 +188,31 @@ def _canvas_dims_from_aligned(entries_path: Path) -> tuple[int, int]:
         return 0, 0
 
 
+def _entry_label(entry: dict) -> str:
+    """Return the best human-readable label for an entry."""
+    for field in _NAME_FIELDS:
+        val = entry.get(field)
+        if val and str(val).strip():
+            return str(val).strip()
+    return ""
+
+
+def _context_str(ctx: dict) -> str:
+    """Render page_context dict as a breadcrumb string."""
+    parts = [str(v) for v in ctx.values() if v and str(v).strip()]
+    return " › ".join(parts) if parts else "—"
+
+
 # ---------------------------------------------------------------------------
 # Core visualizer
 # ---------------------------------------------------------------------------
 
-def visualize(json_path: Path, show_text: bool = True, force: bool = False) -> bool:
+def visualize(
+    json_path: Path,
+    palette: dict[str, tuple[tuple, tuple]],
+    show_text: bool = True,
+    force: bool = False,
+) -> bool:
     """
     Draw entry boxes on the image paired with json_path.
     Returns True on success, False if the image is missing.
@@ -132,9 +223,10 @@ def visualize(json_path: Path, show_text: bool = True, force: bool = False) -> b
         return True
 
     data = json.loads(json_path.read_text(encoding="utf-8"))
+
+    # Resolve image path
     img_path = json_path.parent / data.get("image", "")
     if not img_path.exists():
-        # entries JSON stores image name in first entry's "image" field
         first = next(iter(data.get("entries", [])), None)
         if first:
             img_path = json_path.parent / first.get("image", "")
@@ -147,12 +239,11 @@ def visualize(json_path: Path, show_text: bool = True, force: bool = False) -> b
 
     canvas_w, canvas_h = _canvas_dims_from_aligned(json_path)
     if not canvas_w or not canvas_h:
-        # Fall back: assume canvas == image
         canvas_w, canvas_h = iw, ih
 
     entries = data.get("entries", [])
 
-    # Split entries into those with spatial coords and those without
+    # Split into positioned (have bbox) and unpositioned
     positioned: list[tuple[dict, tuple[int, int, int, int]]] = []
     unpositioned: list[dict] = []
 
@@ -171,8 +262,8 @@ def visualize(json_path: Path, show_text: bool = True, force: bool = False) -> b
     category_counts: dict[str, int] = {}
 
     for entry, xywh in positioned:
-        cat = entry.get("category", "other") or "other"
-        fill, outline = _PALETTE.get(cat, _DEFAULT_PALETTE)
+        cat = (entry.get("category") or "").strip() or "—"
+        fill, outline = palette.get(cat, (_DEFAULT_FILL, _DEFAULT_OUTLINE))
         category_counts[cat] = category_counts.get(cat, 0) + 1
 
         is_ad = bool(entry.get("is_advertisement"))
@@ -182,41 +273,36 @@ def visualize(json_path: Path, show_text: bool = True, force: bool = False) -> b
         x1, y1, x2, y2 = ix, iy, ix + iw_box, iy + ih_box
         draw.rectangle([x1, y1, x2, y2], fill=fill, outline=outline, width=width)
 
-    # ── composite overlay onto image ─────────────────────────────────────────
+    # ── composite overlay ────────────────────────────────────────────────────
     result = Image.alpha_composite(img, overlay).convert("RGB")
 
-    # ── text labels ───────────────────────────────────────────────────────────
+    # ── text labels ──────────────────────────────────────────────────────────
     if show_text:
         td = ImageDraw.Draw(result)
         font_entry = _load_font(max(9, iw // 160))
 
         for entry, xywh in positioned:
-            cat = entry.get("category", "other") or "other"
-            _, outline = _PALETTE.get(cat, _DEFAULT_PALETTE)
+            cat = (entry.get("category") or "").strip() or "—"
+            _, outline = palette.get(cat, (_DEFAULT_FILL, _DEFAULT_OUTLINE))
             outline_rgb = outline[:3]
 
-            name = entry.get("establishment_name", "") or ""
+            name = _entry_label(entry)
             if len(name) > 35:
                 name = name[:33] + "…"
 
             ix, iy, _, _ = _scale_xywh(xywh, canvas_w, canvas_h, iw, ih)
-            # White drop-shadow then category-coloured text
             td.text((ix + 1, iy + 1), name, fill=(255, 255, 255, 210), font=font_entry)
             td.text((ix,     iy    ), name, fill=outline_rgb,           font=font_entry)
 
-        # ── right-margin list for unpositioned entries ────────────────────────
+        # ── right-margin list for unpositioned entries ────────────────────
         if unpositioned:
             font_margin = _load_font(max(9, iw // 170))
             margin_x = iw - max(200, iw // 5)
             margin_y = 8
             lh = max(12, iw // 130)
 
-            # semi-transparent background strip
             strip_h = lh * (len(unpositioned) + 1) + 16
-            td.rectangle(
-                [margin_x - 4, 0, iw, strip_h],
-                fill=(255, 255, 255, 200),
-            )
+            td.rectangle([margin_x - 4, 0, iw, strip_h], fill=(255, 255, 255, 200))
             td.text(
                 (margin_x, margin_y),
                 f"No bbox ({len(unpositioned)}):",
@@ -225,32 +311,29 @@ def visualize(json_path: Path, show_text: bool = True, force: bool = False) -> b
             )
             margin_y += lh
             for entry in unpositioned:
-                cat = entry.get("category", "other") or "other"
-                _, outline = _PALETTE.get(cat, _DEFAULT_PALETTE)
-                name = (entry.get("establishment_name") or "")[:30]
+                cat = (entry.get("category") or "").strip() or "—"
+                _, outline = palette.get(cat, (_DEFAULT_FILL, _DEFAULT_OUTLINE))
+                name = _entry_label(entry)[:30]
                 td.text((margin_x, margin_y), name, fill=outline[:3], font=font_margin)
                 margin_y += lh
 
         # ── legend ───────────────────────────────────────────────────────────
         font_leg = _load_font(max(11, iw // 130))
-        lh_leg = max(14, iw // 100)
-        pad = 8
-        swatch = lh_leg - 2
+        lh_leg   = max(14, iw // 100)
+        pad      = 8
+        swatch   = lh_leg - 2
 
         ctx = data.get("page_context", {})
-        ctx_str = (
-            f"{ctx.get('state','?')} › {ctx.get('city','?')} › {ctx.get('category','?')}"
-        )
+        ads = sum(1 for e in entries if e.get("is_advertisement"))
+        ad_part = f", ad: {ads}" if ads else ""
         header_lines = [
             f"model: {data.get('model', '?')}",
-            f"entries: {len(entries)}  (ad: {sum(1 for e in entries if e.get('is_advertisement'))},"
-            f" no-bbox: {len(unpositioned)})",
-            f"context: {ctx_str}",
+            f"entries: {len(entries)}  (no-bbox: {len(unpositioned)}{ad_part})",
+            f"context: {_context_str(ctx)}",
         ]
         cat_lines = [
-            (cat, _CATEGORY_LABELS.get(cat, cat), category_counts.get(cat, 0))
-            for cat in _PALETTE
-            if category_counts.get(cat, 0) > 0
+            (cat, cat, category_counts[cat])
+            for cat in sorted(category_counts)
         ]
 
         total_lines = len(header_lines) + len(cat_lines)
@@ -265,8 +348,7 @@ def visualize(json_path: Path, show_text: bool = True, force: bool = False) -> b
             y += lh_leg + 2
 
         for cat, label, count in cat_lines:
-            fill_c, outline_c = _PALETTE[cat]
-            # draw colour swatch
+            fill_c, outline_c = palette.get(cat, (_DEFAULT_FILL, _DEFAULT_OUTLINE))
             td.rectangle(
                 [pad, y + 1, pad + swatch, y + swatch + 1],
                 fill=fill_c[:3],
@@ -307,6 +389,12 @@ def main() -> None:
         help="Only visualize JSON files for this model (substring match).",
     )
     parser.add_argument(
+        "--ner-prompt",
+        metavar="PATH",
+        help="Path to ner_prompt.md; used to pre-seed category colours so they "
+             "stay consistent across pages even when a category is absent.",
+    )
+    parser.add_argument(
         "--no-text",
         action="store_true",
         help="Draw boxes only; skip text labels.",
@@ -335,11 +423,29 @@ def main() -> None:
         print("No *_entries.json files found.", file=sys.stderr)
         sys.exit(0)
 
+    # Build colour palette — prefer NER prompt for stable cross-page colours,
+    # fall back to scanning the data files.
+    if args.ner_prompt:
+        cats = _categories_from_prompt(Path(args.ner_prompt))
+        if cats:
+            print(f"Palette from prompt: {cats}", file=sys.stderr)
+        else:
+            print("No categories found in prompt; scanning data files…", file=sys.stderr)
+            cats = _collect_categories(jsons)
+    else:
+        cats = _collect_categories(jsons)
+
+    if not cats:
+        cats = ["—"]   # fallback so palette is never empty
+
+    palette = _make_palette(cats)
+    print(f"Categories ({len(cats)}): {', '.join(cats)}", file=sys.stderr)
+
     print(f"Visualizing {len(jsons)} file(s)…", file=sys.stderr)
     ok = failed = 0
     for j in jsons:
         print(f"[{ok + failed + 1:04d}/{len(jsons)}] {j.name}", file=sys.stderr)
-        if visualize(j, show_text=not args.no_text, force=args.force):
+        if visualize(j, palette, show_text=not args.no_text, force=args.force):
             ok += 1
         else:
             failed += 1
