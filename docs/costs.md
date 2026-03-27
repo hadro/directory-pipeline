@@ -20,11 +20,11 @@ A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens f
 
 **Rough collection estimates:**
 
-| Collection | Pages | OCR | NER | Total | Prompt generation |
+| Collection | Pages | Prompt generation | OCR | NER | Total |
 |---|---|---|---|---|---|
-| One Green Book volume | ~100 pages | ~$0.06 | ~$0.55 | ~$0.61 | ~$0.02 (one-time) |
-| Full Green Books corpus (14 volumes) | ~1,400 pages | ~$0.84 | ~$7.70 | ~$8.54 | ~$0.02/volume |
-| Large city directory (500+ pages) | 500 pages | ~$0.30 | ~$2.75 | ~$3.05 | ~$0.02 (one-time) |
+| One Green Book volume | ~100 pages | ~$0.02 (one-time) | ~$0.06 | ~$0.55 | ~$0.61 |
+| Full Green Books corpus (14 volumes) | ~1,400 pages | ~$0.02/volume | ~$0.84 | ~$7.70 | ~$8.54 |
+| Large city directory (500+ pages) | 500 pages | ~$0.02 (one-time) | ~$0.30 | ~$2.75 | ~$3.05 |
 
 **Free tier:** The Gemini API free tier (no billing required) covers both models at no charge, subject to rate limits of 15 requests/minute and ~1,500 requests/day for `gemini-2.0-flash`. A single 100-page volume (~200 API calls total) fits comfortably within a single day's free quota, though the 15 RPM cap means the API stages take ~15–20 minutes rather than a few minutes. For a full multi-volume corpus you will either need billing enabled or spread the run across several days.
 
