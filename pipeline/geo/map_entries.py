@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Visualize Green Book entries on an interactive map with search & filter.
+"""Visualize geocoded directory entries on an interactive map with search & filter.
 
 Reads a pre-geocoded entries CSV produced by geocode_entries.py and builds
 a self-contained HTML file with a Leaflet map and a sidebar for filtering
 by name/address, state, and category.
 
 Run geocode_entries.py first to produce entries_{slug}_geocoded.csv:
-    python pipeline/geo/geocode_entries.py output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
+    python pipeline/geo/geocode_entries.py output/woods_directory_73644404/ --model gemini-2.0-flash
 
 Then build the map:
-    python pipeline/geo/map_entries.py output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
+    python pipeline/geo/map_entries.py output/woods_directory_73644404/ --model gemini-2.0-flash
     python pipeline/geo/map_entries.py path/to/entries_gemini-2.0-flash_geocoded.csv
     python pipeline/geo/map_entries.py path/to/entries.csv --out my_map.html
 """
@@ -241,8 +241,8 @@ def _prepare_entries(
             lon += rng.uniform(-_JITTER, _JITTER)
 
         entry: dict = {
-            "name":     row.get("establishment_name", ""),
-            "address":  (row.get("raw_address") or "").strip(),
+            "name":     row.get("establishment_name") or row.get("name", ""),
+            "address":  (row.get("raw_address") or row.get("address") or "").strip(),
             "city":     row.get("city", ""),
             "state":    row.get("state", ""),
             "category": row.get("category", "other"),
@@ -282,7 +282,8 @@ _HTML_TEMPLATE = """\
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>Green Book Map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Directory Map</title>
 <link rel="stylesheet"
   href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet"
@@ -306,7 +307,7 @@ body {{ display: flex; height: 100vh; font-family: system-ui, -apple-system, san
   border-bottom: 1px solid #eee;
 }}
 #sidebar-header h1 {{ font-size: 15px; font-weight: 700; }}
-#sidebar-header p  {{ font-size: 11px; color: #888; margin-top: 2px; }}
+#sidebar-header p  {{ font-size: 11px; color: #595959; margin-top: 2px; }}
 #sidebar-body {{
   padding: 12px 14px;
   overflow-y: auto;
@@ -323,9 +324,9 @@ label.field-label {{
 input[type=text], select {{
   width: 100%; padding: 6px 8px; font-size: 13px;
   border: 1px solid #ccc; border-radius: 4px;
-  outline: none;
 }}
-input[type=text]:focus, select:focus {{ border-color: #4e79a7; }}
+input[type=text]:focus, select:focus {{ border-color: #1a6ebd; }}
+input[type=text]:focus-visible, select:focus-visible {{ outline: 2px solid #1a6ebd; outline-offset: 1px; }}
 
 /* ── Category checkboxes ── */
 .cat-row {{
@@ -339,10 +340,12 @@ input[type=text]:focus, select:focus {{ border-color: #4e79a7; }}
 }}
 .cat-label {{ font-size: 13px; }}
 #cat-toggle {{
-  font-size: 11px; color: #4e79a7; cursor: pointer;
+  font-size: 11px; color: #1a6ebd; cursor: pointer;
   text-decoration: underline; margin-top: 3px;
   display: inline-block;
+  background: none; border: none; padding: 0;
 }}
+#cat-toggle:focus-visible {{ outline: 2px solid #1a6ebd; outline-offset: 2px; border-radius: 2px; }}
 
 /* ── Footer count + actions ── */
 #sidebar-footer {{
@@ -369,16 +372,47 @@ input[type=text]:focus, select:focus {{ border-color: #4e79a7; }}
 /* ── Popup ── */
 .popup-name  {{ font-weight: 700; font-size: 13px; }}
 .popup-addr  {{ color: #444; margin: 2px 0; }}
-.popup-cat   {{ color: #777; font-style: italic; font-size: 11px; }}
-.popup-page  {{ color: #aaa; font-size: 10px; margin-top: 3px; }}
+.popup-cat   {{ color: #595959; font-style: italic; font-size: 11px; }}
+.popup-page  {{ color: #767676; font-size: 10px; margin-top: 3px; }}
 .popup-thumb {{
   display: block; width: 100%; border-radius: 3px;
   margin-bottom: 6px; border: 1px solid #e0e0e0;
+}}
+
+/* ── Mobile sidebar toggle ── */
+#sidebar-toggle {{
+  display: none;
+  position: fixed; top: 10px; right: 10px; z-index: 1000;
+  background: #fff; border: 1px solid #bbb; border-radius: 4px;
+  padding: 6px 10px; font-size: 1.2rem; cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+}}
+#sidebar-toggle:focus-visible {{ outline: 2px solid #1a6ebd; outline-offset: 2px; }}
+#sidebar-backdrop {{
+  display: none; position: fixed; inset: 0; z-index: 998;
+  background: rgba(0,0,0,0.35);
+}}
+@media (max-width: 600px) {{
+  body {{ flex-direction: column; }}
+  #sidebar {{
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: 82vw; max-width: 320px;
+    z-index: 1001; transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    border-right: 1px solid #ddd;
+  }}
+  #sidebar.open {{ transform: translateX(0); }}
+  #sidebar-backdrop.open {{ display: block; }}
+  #sidebar-toggle {{ display: block; }}
+  #map {{ flex: 1; height: 100vh; }}
+  #fit-btn, #reset-btn {{ min-height: 44px; }}
 }}
 </style>
 </head>
 <body>
 
+<button id="sidebar-toggle" aria-label="Open sidebar" aria-expanded="false">&#9776;</button>
+<div id="sidebar-backdrop"></div>
 <div id="sidebar">
   <div id="sidebar-header">
     <h1>{map_title}</h1>
@@ -404,7 +438,7 @@ input[type=text]:focus, select:focus {{ border-color: #4e79a7; }}
     <div>
       <label class="field-label">Category</label>
       <div id="cat-checks"></div>
-      <span id="cat-toggle">Select none</span>
+      <button id="cat-toggle" aria-label="Toggle all categories">Select none</button>
     </div>
 
   </div>
@@ -416,7 +450,7 @@ input[type=text]:focus, select:focus {{ border-color: #4e79a7; }}
   </div>
 </div>
 
-<div id="map"></div>
+<div id="map" role="region" aria-label="Map of directory entries"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
@@ -427,7 +461,7 @@ const CAT_LABELS     = {cat_labels_json};
 const TOTAL_ENTRIES  = ALL_ENTRIES.length;
 const YEAR_LABEL     = {year_label_json};
 
-const map = L.map('map', {{ preferCanvas: true }}).setView([38.5, -96.0], 5);
+const map = L.map('map').setView([38.5, -96.0], 5);
 L.tileLayer(
   'https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
   {{ attribution: '&copy; OpenStreetMap contributors &copy; CARTO', maxZoom: 19 }}
@@ -441,6 +475,7 @@ let visibleLatLngs = [];
 const markerByIdx = new Map();  // ALL_ENTRIES index → Leaflet marker
 let _openEntryIdx = null;       // index of currently-open popup, or null
 let _suppressFitBounds = false; // true while restoring a hash-encoded view
+let _initialFitDone    = false; // after the first fit, user controls the viewport
 
 function stateToHash() {{
   const c = map.getCenter();
@@ -526,11 +561,12 @@ function updateMap() {{
       fillOpacity: 0.85, weight: 1.5
     }});
 
+    marker.options.title = `${{esc(e.name)}}${{e.category ? ' — ' + esc(e.category) : ''}}`;
     marker.bindTooltip(esc(e.name), {{ direction: 'top', offset: [0, -4] }});
     marker.bindPopup(
       (e.thumb ? (e.thumb_link
-        ? `<a href="${{e.thumb_link}}" target="_blank" rel="noopener"><img class="popup-thumb" src="${{e.thumb}}" alt="source scan"/></a>`
-        : `<img class="popup-thumb" src="${{e.thumb}}" alt="source scan"/>`) : '') +
+        ? `<a href="${{e.thumb_link}}" target="_blank" rel="noopener"><img class="popup-thumb" src="${{e.thumb}}" alt="${{esc(e.name)}} — source scan"/></a>`
+        : `<img class="popup-thumb" src="${{e.thumb}}" alt="${{esc(e.name)}} — source scan"/>`) : '') +
       `<div class="popup-name">${{esc(e.name)}}</div>` +
       (e.address ? `<div class="popup-addr">${{esc(e.address)}}</div>` : '') +
       `<div class="popup-addr">${{esc(e.city)}}, ${{esc(e.state)}}</div>` +
@@ -551,9 +587,10 @@ function updateMap() {{
   document.getElementById('result-count').textContent =
     n.toLocaleString() + ' of ' + TOTAL_ENTRIES.toLocaleString() + ' entries shown';
 
-  if (!_suppressFitBounds && n > 0) {{
+  if (!_suppressFitBounds && !_initialFitDone && n > 0) {{
     if (n === 1) map.setView(visibleLatLngs[0], 16);
     else map.fitBounds(L.latLngBounds(visibleLatLngs), {{ padding: [30, 30] }});
+    _initialFitDone = true;
   }}
 }}
 
@@ -598,6 +635,29 @@ if (_initState && _initState.idx != null) {{
   const m = markerByIdx.get(_initState.idx);
   if (m) clusterGroup.zoomToShowLayer(m, () => m.openPopup());
 }}
+
+// Mobile sidebar toggle
+(function() {{
+  const toggle   = document.getElementById('sidebar-toggle');
+  const sidebar  = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  if (!toggle) return;
+  function openSidebar() {{
+    sidebar.classList.add('open');
+    backdrop.classList.add('open');
+    toggle.setAttribute('aria-expanded', 'true');
+    toggle.setAttribute('aria-label', 'Close sidebar');
+  }}
+  function closeSidebar() {{
+    sidebar.classList.remove('open');
+    backdrop.classList.remove('open');
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.setAttribute('aria-label', 'Open sidebar');
+  }}
+  toggle.addEventListener('click', () => sidebar.classList.contains('open') ? closeSidebar() : openSidebar());
+  backdrop.addEventListener('click', closeSidebar);
+  document.addEventListener('keydown', e => {{ if (e.key === 'Escape' && sidebar.classList.contains('open')) closeSidebar(); }});
+}})();
 </script>
 </body>
 </html>
@@ -609,6 +669,7 @@ def build_html(
     title_year: str,
     homepage_url: str = "",
     explorer_url: str = "",
+    max_categories: int | None = None,
 ) -> str:
     def safe_json(obj: object) -> str:
         s = json.dumps(obj, ensure_ascii=False)
@@ -626,10 +687,37 @@ def build_html(
         if explorer_url else ""
     )
 
+    # If max_categories is set, collapse long tails into "other"
+    if max_categories is not None:
+        from collections import Counter
+        counts = Counter(e["category"] for e in entries if e.get("category"))
+        top_cats = {cat for cat, _ in counts.most_common(max_categories)}
+        for e in entries:
+            if e.get("category") and e["category"] not in top_cats:
+                e["category"] = "other"
+
+    # Build category maps from the actual data, seeding with known Green Book
+    # values so standard collections keep their colors/labels. Unknown categories
+    # get auto-assigned colors from the overflow palette.
+    _OVERFLOW_PALETTE = ["#edc948","#ff9da7","#9c755f","#bab0ac","#499894",
+                         "#86bcb6","#d4a6c8","#d7b5a6","#8cd17d","#f1ce63"]
+    actual_cats = sorted({e["category"] for e in entries if e.get("category")})
+    cat_colors = dict(CATEGORY_COLORS)
+    cat_labels = dict(CATEGORY_LABELS)
+    overflow_i = 0
+    for cat in actual_cats:
+        if cat not in cat_colors:
+            cat_colors[cat] = _OVERFLOW_PALETTE[overflow_i % len(_OVERFLOW_PALETTE)]
+            cat_labels[cat] = cat
+            overflow_i += 1
+    # Restrict to only categories present in the data
+    cat_colors = {c: cat_colors[c] for c in actual_cats}
+    cat_labels = {c: cat_labels[c] for c in actual_cats}
+
     return _HTML_TEMPLATE.format(
         entries_json       = safe_json(entries),
-        cat_colors_json    = safe_json(CATEGORY_COLORS),
-        cat_labels_json    = safe_json(CATEGORY_LABELS),
+        cat_colors_json    = safe_json(cat_colors),
+        cat_labels_json    = safe_json(cat_labels),
         year_label_json    = safe_json(title_year),
         map_title          = title_year,
         homepage_link_html = homepage_link_html,
@@ -666,7 +754,7 @@ def _find_csv(path: Path, slug: str) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Visualize geocoded Green Book entries on an interactive map.",
+        description="Visualize geocoded directory entries on an interactive map.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -678,15 +766,19 @@ def main() -> None:
         help="Output HTML path (default: <csv_stem>.html next to the CSV)")
     parser.add_argument("--no-ads", action="store_true",
         help="Exclude advertisement entries")
+    parser.add_argument("--max-categories", type=int, default=None, metavar="N",
+        help="Show only the top N categories by entry count; collapse the rest into 'other'. "
+             "Useful when the data has many raw section headers (default: no limit)")
     parser.add_argument("--year", default="", metavar="YEAR",
-        help="Year label shown in the sidebar (e.g. 1962)")
+        help="Year label shown in the sidebar (e.g. 1911). "
+             "If omitted, a title is derived from the directory slug.")
     parser.add_argument("--output-dir", default=None, metavar="DIR",
         help="Root of the images directory tree — used to find IIIF manifests "
              "and add source-scan thumbnails to map popups. "
              "Defaults to the CSV's parent directory.")
     parser.add_argument("--viewer-url", default="", metavar="URL",
         help="Base URL of a self-hosted IIIF viewer (e.g. "
-             "https://hadro.github.io/green-book-iiif-test/). "
+             "https://hadro.github.io/woods-directory/). "
              "When set, thumbnail images in map popups link to a IIIF Content "
              "State deep-link that opens the viewer at the exact entry location. "
              "A manifest.json is assumed to live at <viewer-url>/manifest.json "
@@ -727,7 +819,13 @@ def main() -> None:
             if m:
                 year = m.group(1)
                 break
-    year_label = f"Green Book {year}" if year else "Green Book"
+    # Derive a human-readable title from the directory slug if no --year given.
+    # e.g. "woods_directory_73644404" → "Woods Directory"
+    slug_title = csv_path.parent.name.replace("_", " ").title()
+    # Strip trailing hex IDs (e.g. "9Ab2E8F0")
+    import re as _re
+    slug_title = _re.sub(r"\s+[0-9A-Fa-f]{6,}\s*$", "", slug_title).strip()
+    year_label = f"{slug_title} {year}".strip() if year else slug_title
 
     with csv_path.open(encoding="utf-8", newline="") as fh:
         rows = list(csv.DictReader(fh))
@@ -777,6 +875,7 @@ def main() -> None:
         entries, year_label,
         homepage_url=args.homepage_url,
         explorer_url=explorer_url,
+        max_categories=args.max_categories,
     )
     out_path.write_text(html, encoding="utf-8")
     print(f"Saved: {out_path}", file=sys.stderr)

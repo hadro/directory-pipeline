@@ -174,9 +174,18 @@ def _scale_xywh(
 def _canvas_dims_from_aligned(entries_path: Path) -> tuple[int, int]:
     """
     Read canvas_width / canvas_height from the sibling *_aligned.json.
-    Returns (0, 0) if the file is absent or the keys are missing.
+    First tries the same model slug; if absent, falls back to any aligned.json
+    for the same page stem (handles the case where NER used a different model
+    than the OCR/alignment step).
+    Returns (0, 0) if no aligned.json is found or the keys are missing.
     """
     aligned_path = Path(str(entries_path).replace("_entries.json", "_aligned.json"))
+    if not aligned_path.exists():
+        # Strip _{model}_entries.json to get the bare page stem, then glob
+        page_stem = re.sub(r"_[^_]+_entries\.json$", "", entries_path.name)
+        candidates = sorted(entries_path.parent.glob(f"{page_stem}_*_aligned.json"))
+        if candidates:
+            aligned_path = candidates[0]
     if not aligned_path.exists():
         return 0, 0
     try:
