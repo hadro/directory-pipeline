@@ -35,10 +35,10 @@ command line:
   --select-pages        pipeline/select_pages.py  (interactive browser UI for picking sample pages and scoping entry pages; opens HTML in browser)
   --generate-prompts    pipeline/generate_prompt.py  (Gemini generates volume-specific OCR + NER prompts from sample pages)
 
-  --guided              shorthand for --download --surya-ocr --gemini-ocr --align-ocr
-                          --review-alignment --extract-entries --geocode --map
+  --guided              shorthand for --download --select-pages --surya-ocr --gemini-ocr
+                          --align-ocr --review-alignment --extract-entries --geocode --map
                           (defaults --batch-size and --workers to 8;
-                          run --select-pages + --generate-prompts first for new collection types)
+                          run --generate-prompts first for new collection types)
 
 Key model flags:
   --ocr-model MODEL     Gemini model for OCR and downstream stages (each stage uses its own default if omitted)
@@ -853,14 +853,16 @@ def main() -> None:
         action="store_true",
         help=(
             "Human-in-the-loop shorthand for the full pipeline: "
-            "--download --surya-ocr --gemini-ocr --align-ocr --review-alignment "
+            "--download --select-pages --surya-ocr --gemini-ocr --align-ocr --review-alignment "
             "--extract-entries --geocode --map. "
-            "Pauses at --review-alignment for manual correction of unmatched lines before proceeding. "
-            "Defaults --batch-size to 8 and --workers to 8 unless already set. "
+            "Pauses at --select-pages (page scoping), --review-alignment (unmatched line correction), "
+            "and expects --generate-prompts to have been run first for new collection types. "
+            "Defaults --batch-size to 4 and --workers to 8 unless already set. "
             "Add --ocr-model to override the Gemini model (each stage uses its own default otherwise). "
             "Combine with --nypl-csv / --loc-csv / --ia-csv to also export metadata. "
-            "For new collection types, run --select-pages and --generate-prompts first "
-            "to create volume-specific OCR and NER prompts before --guided."
+            "For microfilm or bound-volume scans that contain double-page spreads, run "
+            "--detect-spreads --split-spreads before --guided so pages are correctly "
+            "separated before OCR."
         ),
     )
 
@@ -1127,11 +1129,11 @@ def main() -> None:
 
     # Expand --guided into its constituent stage flags and defaults (human-in-the-loop path)
     if args.guided:
-        for flag in ("download", "surya_ocr", "gemini_ocr", "align_ocr",
+        for flag in ("download", "select_pages", "surya_ocr", "gemini_ocr", "align_ocr",
                      "review_alignment", "extract_entries", "geocode", "map"):
             setattr(args, flag, True)
         if args.batch_size is None:
-            args.batch_size = 8
+            args.batch_size = 4
         if args.workers is None:
             args.workers = 8
 

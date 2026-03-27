@@ -81,7 +81,7 @@ export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geo
 | Add spatial bounding boxes to every row | `--surya-ocr --align-ocr` [→ details](#precision-upgrade) |
 | Interactively fix unmatched lines | `--review-alignment` |
 | Geocode entries and build a map | `--geocode --map` |
-| Full pipeline with human review at each stage | `--guided` |
+| Full pipeline with page scoping + alignment review | `--guided` |
 | Export W3C/IIIF annotations | `pipeline/iiif/export_annotations.py` |
 
 ### Precision upgrade

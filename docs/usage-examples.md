@@ -23,7 +23,9 @@ python main.py https://archive.org/details/ldpd_11290437_000/ --generate-prompts
 python main.py https://archive.org/details/ldpd_11290437_000/ --extract
 ```
 
-To also include spread detection and the precision bounding-box upgrade, use `--guided` instead of `--extract` in step 4. This will pause at the alignment review step for human correction before proceeding.
+To also include page scoping and the precision bounding-box upgrade, use `--guided` instead of `--extract` in step 4. This will pause at `--select-pages` (to scope which pages to process) and again at `--review-alignment` (to correct unmatched lines) before proceeding.
+
+For microfilm or bound-volume scans that contain double-page spreads, run `--detect-spreads --split-spreads` first, before either `--extract` or `--guided`.
 
 ---
 

@@ -81,6 +81,10 @@ Reads `spreads_report.csv` and, for each spread, crops the image at the detected
 gutter column into `{stem}_left.jpg` and `{stem}_right.jpg`. Also writes a
 `{stem}_split.json` sidecar with the pixel offsets. Original images are untouched.
 
+Run `--detect-spreads --split-spreads` before `--extract` or `--guided` on any
+microfilm or bound-volume collection — OCR accuracy degrades significantly if
+spread pages are not split first.
+
 #### `pipeline/select_pages.py` — Page selector (interactive, two modes)
 Generates a browser UI with two tabs. Opens the page in the default browser
 automatically (pass `--no-open` to suppress).
