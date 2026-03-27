@@ -1,456 +1,116 @@
 # directory-pipeline
 
-Give it a URL or IIIF manifest from the [Library of Congress](https://www.loc.gov/collections/), the [Internet Archive](https://archive.org/), [NYPL Digital Collections](https://digitalcollections.nypl.org/), or **any public IIIF endpoint** — it returns a structured CSV of every entry in that digitized historical directory. It extracts things like name, address, city, state, and category.
+Turn a public digital archive URL into a structured, browsable CSV — no manual transcription, no custom code per collection type.
 
-Every row in the output CSV carries a `canvas_fragment` column: a IIIF URI that links directly back to the source scan. With the precision upgrade (`--surya-ocr --align-ocr`), the fragment includes a `#xywh=` bounding box pinpointing the exact line on the page. The auto-generated data explorer and Clover IIIF viewer use **IIIF Content State** to turn that coordinate into a live deep link — click any row and the viewer opens at exactly that entry, highlighted in the original document.
+Give it a URL from the [Library of Congress](https://www.loc.gov/collections/), [Internet Archive](https://archive.org/), [NYPL Digital Collections](https://digitalcollections.nypl.org/), or any institution that publishes a public IIIF manifest. It downloads the scans, OCRs them, and extracts entries into a structured CSV. With the enrichment steps, every row links back to the exact location in the original scan.
 
-No manual transcription or ground truth required to get started. No custom code per collection needed.
+Built for digitized historical directories — city directories, gazetteers, trade directories — but works on just about any historical document with regularl entry-like structure.
+
+![Interactive data explorer with facet filters, field distribution charts, and a detail panel with IIIF source thumbnail](docs/screenshots/explorer.png)
+
+*The auto-generated data explorer. Categorical facets generated from the data, full-text search, IIIF page thumbnails, and a "View in source document" deep link for every row.*
 
 ---
 
 ## Quick start
 
-The first three commands:
-- pull down the images
-- select a few representative pages
-- generate OCR and entity-recognition prompts for data extraction
-
 ```bash
-# One-time calibration for a new collection type:
+# One-time calibration steps for a new collection type — generates OCR and NER prompts that will work for any item with the same entry structure
 python main.py https://archive.org/details/ldpd_11290437_000/ --download
 python main.py https://archive.org/details/ldpd_11290437_000/ --select-pages
 python main.py https://archive.org/details/ldpd_11290437_000/ --generate-prompts
 
-# Automated run — produces a structured entries CSV:
-python main.py https://archive.org/details/ldpd_11290437_000/ --to-csv
+# "--extract" Automated shortcut — produces entries CSV + browsable HTML explorer for any subsequent volumes in the same series
+python main.py https://archive.org/details/ldpd_11290437_000/ --extract
 ```
 
-For any additional volume in the same **series**, reuse an earlier generated prompt — no re-calibration needed:
+**Calibrate once, run many.** The first three commands are a one-time step per collection type: `--select-pages` opens a browser UI where you pick 4–10 representative pages; `--generate-prompts` has Gemini analyze them and write tailored OCR and extraction prompts. For any additional volume in the same series, skip calibration entirely:
 
 ```bash
-python main.py https://archive.org/details/ldpd_11290437_001/ --to-csv \
+python main.py https://archive.org/details/ldpd_11290437_001/ --extract \
   --ner-prompt output/ldpd_11290437_000/ner_prompt.md
 ```
 
-`--ner-prompt` points to the prompt generated for the first volume. If you forget it, `extract_entries.py` will warn you and suggest nearby candidates automatically.
-
-Requires `GEMINI_API_KEY`. See [Installation](#installation).
-
-These steps are safe to re-run, and will detect existing output unless told to redo the work explicitly (via a `--force` flag).
+Requires `GEMINI_API_KEY`. Runs on the [free tier](#costs) — no billing required for collections up to ~150 pages.
 
 ---
 
-## How it works
+## What you get
 
-The core automated path:
+A CSV where every row is one extracted entry. Field names are driven entirely by your NER prompt — no code changes necessary for a new document or volume of the same type:
 
-```
---download → --gemini-ocr → --extract-entries
-```
+| name | address | city | state | category | canvas_fragment |
+|---|---|---|---|---|---|
+| Mrs. Simmons Tourist Home | 418 Johnson St | Augusta | GA | Tourist Home | `https://...#xywh=142,890,1240,68` |
 
-Expanded by `--to-csv`.
+The `canvas_fragment` column is a IIIF URI pointing back to the source scan. With the [precision upgrade](#precision-upgrade), it includes a `#xywh=` bounding box pinpointing the exact line. The data explorer and map use this to link directly to the highlighted entry in the original document.
 
-Two interactive calibration steps run **once per collection type/similar volumes**:
+Alongside the extracted data CSV, `--extract` also generates a self-contained HTML data explorer (shown above). With `--geocode --map` run on materials with address fields, you also get:
 
-| Step | What it does | Output |
-|---|---|---|
-| `--select-pages` | Browser UI — pick 4–10 representative pages | `selection.txt` |
-| `--generate-prompts` | Gemini analyzes sample pages and writes tailored prompts | `ocr_prompt.md`, `ner_prompt.md` |
+![Leaflet map with clustered markers, category filter sidebar, and a popup with IIIF source thumbnail](docs/screenshots/map.png)
 
-**Calibrate once, run many.** `--select-pages` and `--generate-prompts` prompt
-the model with the vocabulary of a specific document: field names, abbreviations,
-column structure, city/state heading conventions. Run them once for a new series.
-Generated prompts are saved to `output/{slug}/`. For additional volumes in the same
-series, pass `--ner-prompt output/{first-slug}/ner_prompt.md` to reuse it — no
-re-calibration needed. If you forget, `extract_entries.py` warns you and lists
-any nearby candidate prompts it finds.
-
-**What each automated step produces:**
-
-| Step | Output |
-|---|---|
-| `--download` | JPEG images + `manifest.json` (IIIF canvas URIs for linking) |
-| `--gemini-ocr` | One `.txt` file per page |
-| `--extract-entries` | `entries_{model}.csv` + per-page `*_{model}_entries.json` sidecars |
-
-The output CSV includes a `canvas_fragment` column: a IIIF URI pointing back to the exact canvas (and, with the precision upgrade, the exact line) for every row. This is the foundation for the full source-linking chain:
-
-```
-CSV row  →  explorer thumbnail  →  Clover viewer  →  highlighted entry in original scan
-```
-
-With `--surya-ocr --align-ocr`, the fragment gains a `#xywh=` bounding box. The explorer and the deployed Clover viewer encode that coordinate as a **IIIF Content State** parameter, so the "View in source document" link opens the viewer scrolled and zoomed directly to that entry — no manual page-hunting required.
-
----
-
-## Going further
-
-These stages extend the core CSV output but are not required.
-
-**Precision upgrade** — adds spatial bounding boxes to `canvas_fragment`:
-
-```bash
-python main.py URL --surya-ocr --align-ocr        # adds #xywh= coordinates to every row
-python main.py URL --review-alignment              # interactive correction of unmatched lines
-```
-
-**Geocoding and mapping** — resolves addresses to lat/lon, builds an interactive map:
-
-```bash
-python main.py URL --geocode --map
-```
-
-**IIIF annotation export** — W3C/IIIF Annotation Pages for all entries:
-
-```bash
-python pipeline/iiif/export_entry_boxes.py output/{slug}/{item_id}/
-python pipeline/iiif/export_annotations.py output/{slug}/{item_id}/
-```
-
-**GitHub Pages viewer** — Clover IIIF viewer with annotations and data explorer:
-
-```bash
-./scripts/make-git-repo.sh output/{slug}/{item_id}/ ~/github/my-repo https://username.github.io/my-repo
-```
-
-Copies `manifest.json`, annotation files, and `explorer.html` to the destination folder, and generates a Clover-based `index.html` viewer with full IIIF Content State support (deep-linking directly to highlighted entries). Requires `clover.umd.patched.js` in `scripts/` (included).
-
-`--full-run` is the maximal shorthand: `--download --surya-ocr --gemini-ocr
---align-ocr --review-alignment --extract-entries --geocode --map`, with
-`--batch-size` and `--workers` defaulted to 8.
-
----
-
-## Screenshots
-
-### Page selection (`--select-pages`)
-
-![Page selector browser UI showing the Sample and Scope tabs](docs/screenshots/select-pages.png)
-
-*Two-tab browser UI. The **Sample** tab picks 4–10 representative pages for prompt calibration. The **Scope** tab (all pages selected by default) lets you deselect frontmatter, ads, and almanac sections so they're skipped entirely during OCR and extraction.*
-
----
-
-### Field-value explorer (`--to-csv --explore`)
-
-![Interactive field-value explorer with density chart, bar charts, and results table](docs/screenshots/explorer.png)
-
-*Auto-generated self-contained HTML explorer. Categorical bar charts show distribution; filtering is done via sidebar facet checkboxes and per-column filter inputs. Clicking a row opens a detail panel with all fields, a IIIF thumbnail of the source page, and a "View in source document" link — a IIIF Content State deep link that opens the Clover viewer scrolled directly to that entry in the original scan.*
-
----
-
-### Alignment visualization (`--align-ocr --visualize`)
-
-![NW alignment output drawn on a source page scan — green bounding boxes on matched lines](docs/screenshots/alignment-viz.jpg)
-
-*Needleman-Wunsch alignment result drawn on the source image. Green boxes are word-confidence matches between Surya OCR and Gemini text. Unmatched Gemini lines (no bounding box found) are listed in the margin in red.*
-
----
-
-### Interactive alignment review (`--review-alignment`)
-
-![Flask alignment review UI with page sidebar, canvas, and proposed match panel](docs/screenshots/review-alignment.png)
-
-*Flask-based review UI for fixing pages where automatic alignment left unmatched entries. Draw bounding boxes on the canvas, re-run Surya on the crop, then accept proposed Surya → Gemini pairs. Accepted matches are written back to the aligned JSON with `"confidence": "manual"`.*
-
----
-
-### Geocoded map (`--geocode --map`)
-
-![Leaflet map with clustered markers, category sidebar, and a popup with IIIF page thumbnail](docs/screenshots/map.png)
-
-*Self-contained Leaflet HTML map. Markers are clustered and color-coded by establishment category. The sidebar has live search, state filter, and category checkboxes. Popups include a IIIF page thumbnail fetched directly from the source institution's image server.*
-
----
-
-## All pipeline stages
-
-Stages always run in the fixed order below, regardless of flag order on the
-command line. All stages are optional — run only what you need.
-
-**Core stages (URL → CSV):**
-
-| Stage | Script | Output |
-|---|---|---|
-| `--download` | `pipeline/download_images.py` | `output/{slug}/` |
-| `--select-pages` | `pipeline/select_pages.py` | `selection.txt`, `included_pages.txt` *(interactive, once per volume)* |
-| `--generate-prompts` | `pipeline/generate_prompt.py` | `ocr_prompt.md`, `ner_prompt.md` *(once per collection type)* |
-| `--gemini-ocr` | `pipeline/run_gemini_ocr.py` | `*_{model}.txt` |
-| `--extract-entries` | `pipeline/extract_entries.py` | `entries_{model}.csv`, `*_{model}_entries.json` |
-
-**Precision upgrade (adds `#xywh=` bounding boxes to `canvas_fragment`):**
-
-| Stage | Script | Output |
-|---|---|---|
-| `--surya-ocr` | `pipeline/run_surya_ocr.py` | `*_surya.json`, `*_surya.txt` |
-| `--align-ocr` | `pipeline/align_ocr.py` | `*_{model}_aligned.json` |
-| `--review-alignment` | `pipeline/review_alignment.py` | updated `*_{model}_aligned.json` *(interactive)* |
-
-**Extensions:**
-
-| Stage | Script | Output |
-|---|---|---|
-| `--nypl-csv` | `sources/nypl_collection_csv.py` | `output/{slug}/{slug}.csv` |
-| `--loc-csv` | `sources/loc_collection_csv.py` | `output/{slug}/{slug}.csv` |
-| `--ia-csv` | `sources/ia_collection_csv.py` | `output/{slug}/{slug}.csv` |
-| `--iiif-csv` | `sources/iiif_manifest_csv.py` | `output/{slug}/{slug}.csv` — any public IIIF v2/v3 manifest or collection |
-| `--chandra-ocr` | `pipeline/run_chandra_ocr.py` | `*_chandra-ocr-2.txt` — local 5B model, no API key |
-| `--compare-ocr` | `analysis/compare_ocr.py` | `*_comparison.html`, `ocr_comparison_stats.csv` |
-| `--detect-spreads` | `pipeline/detect_spreads.py` | `spreads_report.csv` |
-| `--split-spreads` | `pipeline/split_spreads.py` | `*_left.jpg`, `*_right.jpg` |
-| `--surya-detect` | `pipeline/surya_detect.py` | `columns_report.csv` |
-| `--detect-columns` | `pipeline/detect_columns.py` | `columns_report.csv` *(legacy)* |
-| `--tesseract` | `old/run_ocr.py` | `*_tesseract.hocr`, `*_tesseract.txt` *(legacy)* |
-| `--visualize` | `analysis/visualize_alignment.py` | `*_{model}_viz.jpg` |
-| `--explore` | `pipeline/explore_entries.py` | `entries_{model}_explorer.html` |
-| `--geocode` | `pipeline/geo/geocode_entries.py` | `entries_{model}_geocoded.csv` |
-| `--map` | `pipeline/geo/map_entries.py` | `entries_{model}.html` |
-| *(standalone)* | `pipeline/iiif/export_annotations.py` | `*_{model}_annotations.json`, `*_{model}_entry_annotations.json` |
-| *(standalone)* | `pipeline/iiif/export_entry_boxes.py` | `*_{model}_box_annotations.json` |
-| *(standalone)* | `pipeline/iiif/build_ranges.py` | `ranges_{model}.json` *(directory collections)* |
-| *(standalone)* | `scripts/make-git-repo.sh` | GitHub Pages deployable folder |
-
-See [docs/pipeline-stages.md](docs/pipeline-stages.md) for detailed documentation on each stage.
-
----
-
-## Directory layout
-
-```
-directory-pipeline/
-├── main.py                           # Pipeline orchestrator
-│
-├── pipeline/                         # Active pipeline stage scripts
-│   ├── download_images.py            # Download images from IIIF manifests
-│   ├── detect_spreads.py             # Spread detection
-│   ├── split_spreads.py              # Spread splitting
-│   ├── select_pages.py               # Interactive browser UI for picking sample pages
-│   ├── generate_prompt.py            # Gemini-generated volume-specific OCR + NER prompts
-│   ├── surya_detect.py               # Surya neural column detection (preferred)
-│   ├── detect_columns.py             # Pixel-projection column detection (legacy)
-│   ├── run_surya_ocr.py              # Surya OCR — line-level bboxes (preferred)
-│   ├── run_gemini_ocr.py             # Gemini OCR
-│   ├── run_chandra_ocr.py            # Chandra OCR — local 5B model, no API key
-│   ├── align_ocr.py                  # NW alignment (Surya preferred, Tesseract fallback)
-│   ├── review_alignment.py           # Interactive alignment review UI (Flask)
-│   ├── extract_entries.py            # Structured entry extraction (NER)
-│   ├── explore_entries.py            # Self-contained HTML data explorer
-│   ├── geo/
-│   │   ├── geocode_entries.py        # Entry geocoding
-│   │   └── map_entries.py            # Interactive map generation (IIIF popup thumbnails + Content State links)
-│   └── iiif/
-│       ├── export_annotations.py     # IIIF Annotation Pages export (W3C Web Annotation)
-│       ├── export_entry_boxes.py     # IIIF colored entry bounding boxes (standalone)
-│       └── build_ranges.py           # IIIF table of contents from geocoded entries (standalone)
-│
-├── sources/                          # Collection metadata exporters
-│   ├── nypl_collection_csv.py        # NYPL Digital Collections
-│   ├── loc_collection_csv.py         # Library of Congress
-│   ├── ia_collection_csv.py          # Internet Archive
-│   └── iiif_manifest_csv.py          # Any public IIIF v2/v3 manifest or collection
-│
-├── analysis/                         # Dev tools (not in main pipeline)
-│   ├── compare_ocr.py                # Side-by-side OCR model comparison
-│   ├── visualize_alignment.py        # Draw alignment boxes on images → *_viz.jpg
-│   ├── compare_extraction.py         # Compare entry extraction across models
-│   └── visualize_entries.py          # Draw entry bounding boxes on images
-│
-├── old/                              # Legacy and superseded scripts
-│   └── run_ocr.py                    # Tesseract OCR — word-level hOCR (use --surya-ocr instead)
-│
-├── utils/                            # Shared utilities
-│   └── iiif_utils.py                 # IIIF v2/v3 manifest parsing
-│
-├── prompts/                          # Gemini system prompts
-│   ├── ocr_prompt.md                 # Generic OCR transcription prompt (global fallback)
-│   └── ner_prompt.md                 # Generic NER extraction prompt (global fallback)
-│
-├── docs/                             # Reference documentation
-│   ├── pipeline-stages.md            # Detailed per-stage documentation
-│   ├── usage-examples.md             # Full usage examples by source and stage
-│   ├── key-design-decisions.md       # Technical architecture notes
-│   └── prior-work.md                 # Annotated citations of related work
-│
-├── scripts/                          # Deployment utilities
-│   └── make-git-repo.sh              # Assemble pipeline output into a GitHub Pages folder
-│
-├── pyproject.toml                    # Python project config and dependencies
-└── output/
-    └── {slug}/                       # e.g. the_negro_motorist_green_book_1947_4bea2040/
-        ├── {slug}.csv                                # collection metadata CSV (from --*-csv stages)
-        ├── selection.txt                             # sample page filenames (from --select-pages)
-        ├── included_pages.txt                        # scope filter — pages to include in OCR/extraction
-        ├── ocr_prompt.md                             # volume-specific OCR prompt (from --generate-prompts)
-        ├── ner_prompt.md                             # volume-specific NER prompt (from --generate-prompts)
-        └── {item_id}/                # NYPL UUID or LoC/IA identifier
-            ├── manifest.json
-            ├── select_pages.html                     # page-selector UI (from --select-pages)
-            ├── 0001_{image_id}.jpg
-            ├── 0001_{image_id}_left.jpg              # if spread-split
-            ├── 0001_{image_id}_right.jpg             # if spread-split
-            ├── 0001_{image_id}_split.json            # split coordinate sidecar
-            ├── 0001_{image_id}_surya.json            # Surya line bboxes + text
-            ├── 0001_{image_id}_surya.txt             # Surya plain text
-            ├── 0001_{image_id}_chandra-ocr-2.txt     # Chandra OCR plain text
-            ├── 0001_{image_id}_tesseract.hocr        # (legacy Tesseract output)
-            ├── 0001_{image_id}_tesseract.txt
-            ├── 0001_{image_id}_{model}.txt           # Gemini plain text
-            ├── 0001_{image_id}_{model}_aligned.json            # NW alignment output
-            ├── 0001_{image_id}_{model}_viz.jpg               # alignment visualization
-            ├── 0001_{image_id}_{model}_comparison.html        # OCR model comparison
-            ├── 0001_{image_id}_{model}_entries.json          # per-page entries
-            ├── 0001_{image_id}_{model}_annotations.json      # IIIF line-level annotation page
-            ├── 0001_{image_id}_{model}_entry_annotations.json # IIIF entry-level annotation page
-            ├── 0001_{image_id}_{model}_box_annotations.json  # IIIF colored entry bounding boxes
-            ├── spreads_report.csv
-            ├── columns_report.csv
-            ├── ocr_comparison_stats.csv                      # summary stats from --compare-ocr
-            ├── entries_{model}.csv                   # aggregate entries for collection
-            ├── entries_{model}_geocoded.csv          # entries with lat/lon
-            ├── entries_{model}_explorer.html         # interactive data explorer
-            ├── entries_{model}.html                  # interactive Leaflet map
-            └── geocache.json                         # geocoding cache
-```
-
-For NYPL collections, `{slug}` is derived as `{title_words}_{uuid8}`, e.g.
-`the_negro_motorist_green_book_1940_feb978b0`. For LoC items it is derived from
-the item title and numeric ID. For IA items it is derived from the item title and
-IA identifier. For arbitrary IIIF manifests, it is derived from the manifest label
-and a segment of the URL. Pass `--slug` to override.
+*Markers clustered and color-coded by category. Popups include a IIIF thumbnail fetched directly from the source institution's image server.*
 
 ---
 
 ## Installation
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). Tesseract is only needed for the legacy `--tesseract` stage.
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-# Optional: install Tesseract for legacy OCR support
-brew install tesseract          # macOS
-apt install tesseract-ocr       # Debian/Ubuntu
-
-# Install core dependencies (Gemini OCR, entry extraction, geocoding)
-uv sync
-
-# Add Surya OCR support (requires GPU or Apple Silicon for reasonable speed)
-uv sync --extra gpu
-
-# Add geocoding + map generation
-uv sync --extra geo
-
-# Everything
-uv sync --all-extras
+uv sync                  # core: Gemini OCR + entry extraction
+uv sync --extra gpu      # add Surya OCR (GPU or Apple Silicon recommended)
+uv sync --extra geo      # add geocoding + map generation
+uv sync --all-extras     # everything
 ```
 
-Dependencies are declared in `pyproject.toml` and locked in `uv.lock`. To run any pipeline command without activating the virtual environment: `uv run python main.py ...`
-
-Set environment variables (or copy `.env.template` to `.env`):
+Set your API keys (or copy `.env.template` to `.env`):
 
 ```bash
 export GEMINI_API_KEY=your_key_here
-export NYPL_API_TOKEN=your_token_here      # from https://api.repo.nypl.org/sign_up
-                                            # (not needed for LoC, IA, or generic IIIF)
+export NYPL_API_TOKEN=your_token_here      # only needed for NYPL API access
 export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geocoding
 ```
 
 ---
 
-## Estimated costs
+## Going further
 
-Two cost categories: **API charges** (variable; applies on any platform) and
-**platform costs** (compute infrastructure).
+| Goal | Flags / command |
+|---|---|
+| Add spatial bounding boxes to every row | `--surya-ocr --align-ocr` [→ details](#precision-upgrade) |
+| Interactively fix unmatched lines | `--review-alignment` |
+| Geocode entries and build a map | `--geocode --map` |
+| Full pipeline with page scoping + alignment review | `--guided` |
+| Export W3C/IIIF annotations | `pipeline/iiif/export_annotations.py` |
 
-### Gemini API
+### Precision upgrade
 
-`--gemini-ocr` and `--extract-entries` both call the Gemini API. Pricing as of
-early 2026 (verify current rates at [ai.google.dev/pricing](https://ai.google.dev/pricing)):
-
-| Stage | Model (default) | Input | Output |
-|---|---|---|---|
-| `--gemini-ocr` | `gemini-2.0-flash` | $0.10 / 1M tokens | $0.40 / 1M tokens |
-| `--extract-entries` | `gemini-3.1-flash-lite-preview` | $0.25 / 1M tokens | $1.50 / 1M tokens |
-| fallback (dense pages) | `gemini-2.5-flash` | $0.30 / 1M tokens | $2.50 / 1M tokens |
-
-A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens
-for OCR (`gemini-2.0-flash`, ~$0.0006/page), and another ~10,000 input / 2,000
-output tokens for NER entry extraction (`gemini-3.1-flash-lite-preview`,
-~$0.0055/page) — about **$0.006 per page** combined.
-Dense pages that exceed the output token limit automatically retry with
-`gemini-2.5-flash`, but this affects fewer than 5% of pages in practice.
-
-`--generate-prompts` (`generate_prompt.py`) makes 2 Gemini calls (one for the
-OCR prompt, one for the NER prompt) with 4–8 sample images each. This is a one-time
-per-volume cost of roughly **$0.01–$0.05 total**, negligible compared to the full
-run. `gemini-3-flash-preview` is used by default for prompt generation because
-it produces higher-quality meta-prompts; you can override with `--prompt-model`.
-
-**Rough collection estimates:**
-
-| Collection | Pages | OCR (`gemini-2.0-flash`) | NER (`gemini-3.1-flash-lite-preview`) | Total | Prompt generation |
-|---|---|---|---|---|---|
-| One Green Book volume | ~100 pages | ~$0.06 | ~$0.55 | ~$0.61 total | ~$0.02 (one-time) |
-| Full Green Books corpus (14 volumes) | ~1,400 pages | ~$0.84 | ~$7.70 | ~$8.54 total | ~$0.02 (one-time per volume) |
-| Large city directory (500+ pages) | 500 pages | ~$0.30 | ~$2.75 | ~$3.05 total | ~$0.02 (one-time) |
-
-**Free tier:** The Gemini API free tier (no billing required) covers both
-models at no charge, subject to rate limits of 15 requests/minute and
-~1,500 requests/day for `gemini-2.0-flash`. A single 100-page volume
-(~200 API calls total) fits comfortably within a single day's free quota,
-though the 15 RPM cap means the API stages take ~15–20 minutes rather than
-a few minutes. For the full multi-volume corpus you will either need billing
-enabled or spread the run across several days.
-
-**Chandra OCR** (`--chandra-ocr`) uses a local 5B model — no API key or API cost.
-Requires GPU; see platform costs below.
-
-### Google Maps Geocoding (optional)
-
-The `--geocode` stage uses Nominatim (free, city-level accuracy) by default.
-Setting `GOOGLE_MAPS_API_KEY` enables address-level geocoding at roughly
-$0.005/request. Google Maps includes a $200/month free credit, which covers
-~40,000 geocoding requests — more than the entire Green Books corpus.
-
-### Platform costs
-
-The stages that use significant compute are **Surya OCR** (`--surya-ocr`,
-`--surya-detect`, `--review-alignment`) and **Chandra OCR** (`--chandra-ocr`).
-Gemini API stages are network-bound and run equally fast everywhere.
-
-| Platform | Cost | Surya OCR (200 pages) | Notes |
-|---|---|---|---|
-| **Mac (M-series, 16 GB+)** | $0 (electricity) | ~5–8 min (MPS, `--batch-size 4`) | Good for development and single-volume runs |
-| **Mac (8 GB)** | $0 | ~10–15 min (MPS, `--batch-size 1–2`) | Works; reduce batch size if OOM errors occur |
-| **Google Colab (free T4)** | $0 | ~2–3 min (CUDA, `--batch-size 8`) | Sessions expire; T4 not always available at peak times; `--review-alignment` requires a tunnel (e.g. ngrok) |
-| **Google Colab Pro** | ~$10/month (also pay as you go option) | ~1–2 min (T4/L4, `--batch-size 8`) | Reliable GPU access, longer sessions |
-| **Google Colab Pro+** | ~$50/month | <1 min (A100, `--batch-size 16`) | Background execution; best for large multi-volume runs |
-
-The pipeline is designed so that the compute-heavy steps — Surya OCR and the interactive alignment review — can be run on a GPU machine while everything else (downloading, Gemini OCR, entry extraction, geocoding, map generation) runs fine on a laptop. Gemini API calls are network-bound and complete in seconds regardless of the machine; Surya is a neural vision model that is 5–20× faster on a GPU than on an Apple Silicon Mac and significantly slower or impractical on CPU-only hardware.
-
-A ready-to-run Colab notebook covering the Surya OCR, alignment, and review steps is in [`colab/ocr-align-review.ipynb`](colab/ocr-align-review.ipynb). Open it directly in Colab, mount your Drive, and follow the cells in order.
-
-**Chandra evaluation** (`analysis/chandra_eval.py`) runs Qwen3-VL 7B and
-requires ~9 GB VRAM with `--quantize`. On a Colab T4 this is roughly
-50 seconds per image; on an M-series Mac with MPS it is ~25 minutes per image.
-Chandra is practical only on Colab or a machine with a CUDA GPU.
-
----
-
-## Usage
+The core path (`--download --gemini-ocr --extract-entries`) gives you a canvas URI per row. Adding `--surya-ocr --align-ocr` upgrades every `canvas_fragment` to a `#xywh=` bounding box — the exact line on the page, usable by any IIIF viewer:
 
 ```bash
-# Minimal: download → OCR → CSV
-python main.py collections.txt --to-csv
-
-# Full pipeline: also includes Surya alignment, geocoding, and map
-python main.py collections.txt --full-run
-
-# Dry run — show commands without running anything
-python main.py URL --to-csv --dry-run
+python main.py URL --surya-ocr --align-ocr
+python main.py URL --review-alignment     # optional: fix unmatched lines interactively
 ```
 
-See [docs/usage-examples.md](docs/usage-examples.md) for full usage examples by source (LoC, IA, NYPL, IIIF manifest) and stage.
+![NW alignment result drawn on a source page — green bounding boxes on matched lines, unmatched Gemini lines listed in the margin in red](docs/screenshots/alignment-viz.jpg)
 
 ---
+
+## Costs
+
+A single 100-page volume costs roughly **$0.60 in Gemini API charges** with a paid account but can run within the free tier's daily quota (~15–20 minutes at 15 RPM). See [docs/costs.md](docs/costs.md) for a full breakdown including platform costs (Surya OCR on Mac, Colab, and GPU).
+
+---
+
+## Docs
+
+- [Pipeline stage reference](docs/pipeline-stages.md) — every flag, script, and output file
+- [Usage examples](docs/usage-examples.md) — full examples by source (LoC, IA, NYPL, IIIF manifest)
+- [Costs](docs/costs.md) — API and platform cost breakdown
+- [Key design decisions](docs/key-design-decisions.md) — architecture and technical notes
+- [Prior work](docs/prior-work.md) — related research and citations
+
 
 ## Key design decisions
 

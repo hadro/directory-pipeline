@@ -53,6 +53,7 @@ Usage
 
 import argparse
 import difflib
+import functools
 import json
 import os
 import re
@@ -96,17 +97,13 @@ BBOX_RE = re.compile(r"bbox\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)")
 # IIIF image-service helpers
 # ---------------------------------------------------------------------------
 
-# In-process cache: service_base → (nat_w, nat_h).
-# Shared across threads; worst case two threads fetch the same URL once.
-_info_cache: dict[str, tuple[int, int]] = {}
-
-
+@functools.lru_cache(maxsize=256)
 def _get_natural_dims(canvas_id: str) -> tuple[int, int]:
     """Return (width, height) of the natural image by fetching info.json.
 
     Parses the IIIF Image API service base from *canvas_id* (a URL of the form
     ``https://host/prefix/identifier/region/size/rotation/quality.fmt``), then
-    fetches ``{service_base}/info.json``.  Results are cached in-process.
+    fetches ``{service_base}/info.json``.  Results are cached via lru_cache.
     Returns (0, 0) on any error.
     """
     parts = urlparse(canvas_id)
@@ -116,8 +113,6 @@ def _get_natural_dims(canvas_id: str) -> tuple[int, int]:
     if len(path_parts) < 5:
         return 0, 0
     service_base = f"{parts.scheme}://{parts.netloc}" + "/".join(path_parts[:4])
-    if service_base in _info_cache:
-        return _info_cache[service_base]
     info_url = f"{service_base}/info.json"
     try:
         with urllib.request.urlopen(info_url, timeout=15) as resp:
@@ -127,14 +122,20 @@ def _get_natural_dims(canvas_id: str) -> tuple[int, int]:
     except Exception as exc:
         _log(f"  Warning: could not fetch {info_url}: {exc}")
         w, h = 0, 0
-    _info_cache[service_base] = (w, h)
     return w, h
 
-# Needleman-Wunsch gap penalty (must be negative)
+# ---------------------------------------------------------------------------
+# Tunable alignment parameters
+# ---------------------------------------------------------------------------
+
+# Needleman-Wunsch gap penalty (must be negative).
+# -40 was calibrated on Green Book scans; lower magnitude = more gaps allowed.
 _NW_GAP = -40
-# Second-pass alignment: more permissive penalty + minimum size to bother
+# Second-pass alignment uses a more permissive gap penalty to catch lines that
+# the first pass left unmatched.  Only applied when ≥ _PASS2_MIN_LINES remain.
 _NW_GAP_PASS2    = -20
 _PASS2_MIN_LINES =  5
+
 # Pages whose median Surya detection confidence falls below this threshold are
 # flagged needs_review=True in the aligned JSON so --review-alignment can
 # surface them for manual inspection.
@@ -146,9 +147,9 @@ _LOW_CONFIDENCE_PAGE_THRESHOLD = 0.5
 # wrong Gemini lines — the failure mode where e.g. "CHERAW" entries mapped to
 # CHARLESTON bounding boxes because the global NW preferred nearby wrong words
 # over paying the gap cost to reach the real CHERAW Tesseract line.
-_ANCHOR_MIN_LEN = 3     # minimum normalised chars to consider a line as an anchor
-_ANCHOR_MAX_SUFFIX = 6  # extra trailing chars allowed in prefix match (Tesseract noise)
-_ANCHOR_SIM_HIGH = 0.92 # similarity threshold when prefix match doesn't apply
+_ANCHOR_MIN_LEN    = 3     # minimum normalised chars to consider a line as an anchor
+_ANCHOR_MAX_SUFFIX = 6     # extra trailing chars allowed in prefix match (Tesseract noise)
+_ANCHOR_SIM_HIGH   = 0.92  # similarity threshold when prefix match doesn't apply
 
 
 def _log(msg: str) -> None:

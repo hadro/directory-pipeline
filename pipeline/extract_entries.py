@@ -187,12 +187,8 @@ def _load_canvas_uris(item_dir: Path) -> list[str]:
 
 
 def _infer_fields(entries: list[dict]) -> list[str]:
-    """Return column order inferred from the union of all entry keys."""
-    seen: dict[str, None] = {}
-    for e in entries:
-        for k in e:
-            seen[k] = None
-    return list(seen)
+    """Return column order inferred from the union of all entry keys (insertion order preserved)."""
+    return list(dict.fromkeys(k for e in entries for k in e))
 
 _print_lock = threading.Lock()
 
@@ -460,6 +456,87 @@ def _is_edge_bleed(canvas_fragment: str, canvas_width: int,
 
 
 # ---------------------------------------------------------------------------
+# Per-page processing helpers
+# ---------------------------------------------------------------------------
+
+def _load_cached_result(
+    out_path: Path,
+    prior_context: dict,
+    force: bool,
+    dry_run: bool,
+) -> "dict | None":
+    """Return cached per-page result from *out_path*, or None if the cache
+    should be bypassed (force/dry_run), is absent, or is corrupt."""
+    if force or dry_run or not out_path.exists() or out_path.stat().st_size == 0:
+        return None
+    try:
+        data = json.loads(out_path.read_text(encoding="utf-8"))
+        return {
+            "entries": data.get("entries", []),
+            "page_context": data.get("page_context", prior_context),
+            "status": "skipped",
+        }
+    except Exception:
+        return None  # corrupt file — re-run
+
+
+def _run_ner_call(
+    client: genai.Client,
+    page_name: str,
+    model: str,
+    system_prompt: str,
+    user_msg: str,
+    image_path: "Path | None",
+    error_path: Path,
+    fallback_model: "str | None",
+) -> "tuple[dict | None, bool, str | None]":
+    """Call Gemini NER with primary + optional fallback model, then partial recovery.
+
+    Returns (result, partial, api_error) where:
+      - result      parsed response dict, or None on total failure
+      - partial     True if result came from partial JSON recovery
+      - api_error   non-empty string if the primary API call itself raised
+    On unrecoverable parse failure, writes the raw response to *error_path*.
+    On success, deletes *error_path* if it exists from a prior run.
+    """
+    # Primary API call
+    try:
+        last_raw = _call_gemini(client, model, system_prompt, user_msg, image_path)
+    except Exception as exc:
+        return None, False, str(exc)
+    result = _parse_json_response(last_raw)
+
+    # Fallback when primary model output is unparseable
+    if result is None and fallback_model and fallback_model != model:
+        _log(
+            f"    [{page_name}] primary model exhausted — retrying once"
+            f" with fallback model {fallback_model}"
+        )
+        try:
+            last_raw = _call_gemini(client, fallback_model, system_prompt, user_msg, image_path)
+            result = _parse_json_response(last_raw)
+        except Exception as exc:
+            _log(f"    [{page_name}] fallback model error: {exc}")
+
+    # Partial JSON recovery for truncated responses
+    partial = False
+    if result is None:
+        result = _recover_partial_json(last_raw)
+        if result is None:
+            error_path.write_text(last_raw, encoding="utf-8")
+            return None, False, None
+        partial = True
+        _log(
+            f"    [{page_name}] WARNING: response was truncated; "
+            f"recovered {len(result.get('entries', []))} entries (may be incomplete)"
+        )
+
+    if error_path.exists():
+        error_path.unlink()
+    return result, partial, None
+
+
+# ---------------------------------------------------------------------------
 # Per-page processing
 # ---------------------------------------------------------------------------
 
@@ -494,17 +571,8 @@ def process_page(
     stem = aligned_path.name[: -len(suffix)]
     out_path = aligned_path.parent / f"{stem}_{slug}_entries.json"
 
-    # Return cached result if it exists and --force is not set
-    if not force and not dry_run and out_path.exists() and out_path.stat().st_size > 0:
-        try:
-            data = json.loads(out_path.read_text(encoding="utf-8"))
-            return {
-                "entries": data.get("entries", []),
-                "page_context": data.get("page_context", prior_context),
-                "status": "skipped",
-            }
-        except Exception:
-            pass  # corrupt file — re-run
+    if cached := _load_cached_result(out_path, prior_context, force, dry_run):
+        return cached
 
     # Load aligned JSON
     try:
@@ -533,45 +601,14 @@ def process_page(
             _log(f"    Warning: image not found for {aligned_path.name}; falling back to text-only")
 
     error_path = aligned_path.parent / f"{stem}_{slug}_entries_error.txt"
-
-    # Call primary model once
-    try:
-        last_raw = _call_gemini(client, model, system_prompt, user_msg, image_path)
-    except Exception as exc:
-        return {"entries": [], "page_context": prior_context, "status": f"api_error:{exc}"}
-    result = _parse_json_response(last_raw)
-
-    # If the primary model failed, try once with the fallback model.
-    # Lite models cap output at ~8 k tokens; the fallback handles dense pages with 100+ entries.
-    if result is None and fallback_model and fallback_model != model:
-        _log(
-            f"    [{aligned_path.name}] primary model exhausted — retrying once"
-            f" with fallback model {fallback_model}"
-        )
-        try:
-            last_raw = _call_gemini(client, fallback_model, system_prompt, user_msg, image_path)
-            result = _parse_json_response(last_raw)
-        except Exception as exc:
-            _log(f"    [{aligned_path.name}] fallback model error: {exc}")
-
-    partial = False
+    result, partial, api_error = _run_ner_call(
+        client, aligned_path.name, model, system_prompt, user_msg,
+        image_path, error_path, fallback_model,
+    )
+    if api_error:
+        return {"entries": [], "page_context": prior_context, "status": f"api_error:{api_error}"}
     if result is None:
-        # Full parse failed even after retries and fallback. The response is
-        # likely truncated. Try to salvage complete entries.
-        result = _recover_partial_json(last_raw)
-        if result is None:
-            # Nothing recoverable — save for debugging and skip this page
-            error_path.write_text(last_raw, encoding="utf-8")
-            return {"entries": [], "page_context": prior_context, "status": "parse_error"}
-        partial = True
-        _log(
-            f"    [{aligned_path.name}] WARNING: response was truncated; "
-            f"recovered {len(result.get('entries', []))} entries (may be incomplete)"
-        )
-
-    # Clean up any leftover error file from a prior run
-    if error_path.exists():
-        error_path.unlink()
+        return {"entries": [], "page_context": prior_context, "status": "parse_error"}
 
     entries = result.get("entries", [])
     new_context = result.get("page_context") or prior_context
@@ -622,7 +659,6 @@ def process_page(
         entry["canvas_fragment"] = cf or canvas_uri  # fall back to full canvas
         entry["image"] = aligned.get("image", "")
 
-    # Write per-page output
     output = {
         "image": aligned.get("image", ""),
         "model": model,
@@ -663,17 +699,8 @@ def process_page_txt(
     stem = txt_path.name[: -len(suffix)]
     out_path = txt_path.parent / f"{stem}_{slug}_entries.json"
 
-    # Return cached result if it exists and --force is not set
-    if not force and not dry_run and out_path.exists() and out_path.stat().st_size > 0:
-        try:
-            data = json.loads(out_path.read_text(encoding="utf-8"))
-            return {
-                "entries": data.get("entries", []),
-                "page_context": data.get("page_context", prior_context),
-                "status": "skipped",
-            }
-        except Exception:
-            pass  # corrupt file — re-run
+    if cached := _load_cached_result(out_path, prior_context, force, dry_run):
+        return cached
 
     # Read and normalise the raw text
     try:
@@ -704,39 +731,14 @@ def process_page_txt(
             _log(f"    Warning: image not found for {txt_path.name}; falling back to text-only")
 
     error_path = txt_path.parent / f"{stem}_{slug}_entries_error.txt"
-
-    # Call primary model once
-    try:
-        last_raw = _call_gemini(client, model, system_prompt, user_msg, image_path)
-    except Exception as exc:
-        return {"entries": [], "page_context": prior_context, "status": f"api_error:{exc}"}
-    result = _parse_json_response(last_raw)
-
-    if result is None and fallback_model and fallback_model != model:
-        _log(
-            f"    [{txt_path.name}] primary model exhausted — retrying once"
-            f" with fallback model {fallback_model}"
-        )
-        try:
-            last_raw = _call_gemini(client, fallback_model, system_prompt, user_msg, image_path)
-            result = _parse_json_response(last_raw)
-        except Exception as exc:
-            _log(f"    [{txt_path.name}] fallback model error: {exc}")
-
-    partial = False
+    result, partial, api_error = _run_ner_call(
+        client, txt_path.name, model, system_prompt, user_msg,
+        image_path, error_path, fallback_model,
+    )
+    if api_error:
+        return {"entries": [], "page_context": prior_context, "status": f"api_error:{api_error}"}
     if result is None:
-        result = _recover_partial_json(last_raw)
-        if result is None:
-            error_path.write_text(last_raw, encoding="utf-8")
-            return {"entries": [], "page_context": prior_context, "status": "parse_error"}
-        partial = True
-        _log(
-            f"    [{txt_path.name}] WARNING: response was truncated; "
-            f"recovered {len(result.get('entries', []))} entries (may be incomplete)"
-        )
-
-    if error_path.exists():
-        error_path.unlink()
+        return {"entries": [], "page_context": prior_context, "status": "parse_error"}
 
     entries = result.get("entries", [])
     new_context = result.get("page_context") or prior_context
@@ -796,6 +798,8 @@ def process_item(
         aligned_files = [f for f in aligned_files
                          if Path(f.name[: -len(aligned_suffix)]).stem in scope
                          or f.name[: -len(aligned_suffix)] in scope]
+        if not aligned_files:
+            _log(f"  Warning: scope filter (included_pages.txt) matched no aligned files in {item_dir}")
     if not aligned_files:
         # Fallback: read raw Gemini text files (no bounding boxes)
         txt_suffix = f"_{aligned_slug}"
