@@ -288,19 +288,29 @@ def fetch_manifest(
     return data
 
 
-def iter_canvas_images(manifest: dict, width: int) -> list[tuple[str, str, int | None]]:
+def iter_canvas_images(manifest: dict, width: int) -> list[tuple[str, str, int | None, int]]:
     """
-    Return ordered list of (image_id, url, max_width) for all canvases.
+    Return ordered list of (image_id, url, max_width, effective_width) for all canvases.
     Handles both IIIF Presentation v2 and v3 via iiif_utils.
-    Caps the requested width at the service's maxWidth when advertised, so that
-    servers which only hold a fixed native resolution (e.g. LoC tile servers)
-    are not asked to upscale from lower-quality tiles.
+
+    Caps the requested width at the server's advertised maxWidth when present,
+    or at the canvas's declared width as a fallback.  This prevents requesting a
+    size larger than the server holds natively, which on some servers (e.g.
+    tile.loc.gov) triggers upscaling *and* heavier JPEG compression — producing
+    images that are both larger on disk and visibly blurrier than a native-size
+    request.  effective_width == 0 means the 'full' (native) size parameter will
+    be used in the URL.
     """
     result = []
     for c in iiif_utils.iter_canvases(manifest):
-        # width=0 means "native max" — bypass all capping so image_url emits 'max'
-        effective_width = width if width == 0 else (min(width, c["max_width"]) if c["max_width"] else width)
-        result.append((c["image_id"], iiif_utils.image_url(c["service_id"], effective_width), c["max_width"]))
+        if width == 0:
+            effective_width = 0
+        else:
+            # Prefer the server-advertised maxWidth; fall back to the canvas
+            # declared width.  Either caps the request at native resolution.
+            native = c["max_width"] or (c["canvas_width"] if c["canvas_width"] > 0 else None)
+            effective_width = min(width, native) if native else width
+        result.append((c["image_id"], iiif_utils.image_url(c["service_id"], effective_width), c["max_width"], effective_width))
     return result
 
 
@@ -365,8 +375,17 @@ def _download_item_images(
     total_downloaded = 0
     total_skipped = 0
     consecutive_primary_403 = 0
+    capped_warned = False
 
-    for i, (image_id, primary_url, max_width) in enumerate(canvas_images, start=1):
+    for i, (image_id, primary_url, max_width, effective_width) in enumerate(canvas_images, start=1):
+        if not quiet and not capped_warned and width > 0 and effective_width < width:
+            print(
+                f"  Note: requested --width {width}px exceeds the native width of some pages "
+                f"(e.g. {effective_width}px here). Downloading at native resolution to avoid "
+                f"upscaling artifacts. Use --width 0 to always request native resolution.",
+                file=sys.stderr,
+            )
+            capped_warned = True
         dest = item_dir / f"{i:04d}_{image_id}.jpg"
         # NYPL fallback server is only appropriate for content from NYPL image IDs.
         # For other servers (e.g. dcmny.org), try a size-reduced URL instead.
@@ -536,7 +555,10 @@ def main() -> None:
         default=DEFAULT_WIDTH,
         metavar="PX",
         help=f"Image width in pixels (default: {DEFAULT_WIDTH}). Height is auto-scaled. "
-             "Use 0 for native/maximum resolution (no upscaling).",
+             "Requests are automatically capped at the image's native width to avoid "
+             "upscaling artifacts (some servers apply heavier JPEG compression when "
+             "asked for a size larger than their native resolution). "
+             "Use 0 to always request native resolution via the IIIF 'full' parameter.",
     )
     parser.add_argument(
         "--delay",

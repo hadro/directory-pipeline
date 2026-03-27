@@ -24,14 +24,14 @@ python main.py https://archive.org/details/ldpd_11290437_000/ --generate-prompts
 python main.py https://archive.org/details/ldpd_11290437_000/ --extract
 ```
 
-**Calibrate once, run many.** The first three commands are a one-time step per collection type: `--select-pages` opens a browser UI where you pick 4–10 representative pages; `--generate-prompts` has Gemini analyze them and write tailored OCR and extraction prompts. For any additional volume in the same series, skip calibration entirely:
+**Calibrate once, run many.** The first three commands are a one-time step per collection type: `--select-pages` opens a browser UI where you pick 4–10 representative pages; `--generate-prompts` has Gemini analyze them and write tailored OCR and extraction prompts. For any additional volume in the same series, point to the relevant NER prompt, and skip calibration entirely:
 
 ```bash
 python main.py https://archive.org/details/ldpd_11290437_001/ --extract \
   --ner-prompt output/ldpd_11290437_000/ner_prompt.md
 ```
 
-Requires `GEMINI_API_KEY`. Runs on the [free tier](#costs) — no billing required for collections up to ~150 pages.
+Requires `GEMINI_API_KEY`. Can run on the [free tier](#costs) — no billing required for collections up to ~150 pages.
 
 ---
 
