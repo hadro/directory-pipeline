@@ -1,6 +1,6 @@
-# Pipeline stage reference
+# Pipeline stage full reference
 
-Detailed documentation for each stage in the directory-pipeline. See the [main README](../README.md) for the overview table and quick start.
+Detailed documentation for each stage in the directory-pipeline. See the [main README](../README.md) for an overview and quick start.
 
 ---
 
@@ -189,9 +189,29 @@ flag always overrides it. Prefer `--surya-ocr` for new runs.
 
 #### `pipeline/run_gemini_ocr.py` — Gemini OCR
 Sends each image to the Gemini API using a system prompt from `prompts/ocr_prompt.md`
-and saves the plain-text response as `{stem}_{model_slug}.txt`. Handles HTTP 429
-rate limits with exponential backoff (up to 5 retries, starting at 10s delay).
-Skips images where the output file already exists and is non-empty.
+(auto-discovered; see `--generate-prompts`) and saves the plain-text response as
+`{stem}_{model_slug}.txt`. Handles HTTP 429 rate limits with exponential backoff
+(up to 5 retries, starting at 10 s delay). Skips images where the output file
+already exists and is non-empty; deletes and retries empty output files.
+
+Split images (`_left.jpg`, `_right.jpg`) are preferred over the original spread
+when both exist — the original is skipped to avoid redundant API calls on pages
+that have already been split.
+
+**Quality-failure retry.** When output fails a quality check (dot-leader runaway or
+repetition loop), the page is retried up to three times with escalating temperatures
+`[0.1, 0.3, 0.7]`. Dot-leader failures also trigger an additional `_NO_LEADER_INSTRUCTION`
+appended to the system prompt. If all retries fail, dot-leader runs are collapsed to
+a canonical five-dot sequence rather than discarding the page.
+
+**Auto-resolution for handwriting.** If the OCR prompt contains any of the keywords
+`handwrit`, `manuscript`, or `cursive`, high-resolution image mode is enabled
+automatically. Override explicitly with `--high-res`.
+
+**Ditto mark expansion.** Pass `--expand-dittos` to append a ditto-expansion
+instruction to the system prompt, directing the model to interpret `"` ditto marks
+as repeating the value from the line above. Useful for directories that use ditto
+marks to avoid repeating city names or categories.
 
 #### `analysis/compare_ocr.py` — Model comparison
 Calls multiple models (any mix of Gemini model names and the special token
@@ -200,7 +220,7 @@ Calls multiple models (any mix of Gemini model names and the special token
 - `ocr_comparison_stats.csv` — character-level similarity stats across all images
 
 Useful for evaluating which Gemini model performs best on a collection before
-committing to a full run.
+committing to a full extract or guided run.
 
 #### `pipeline/align_ocr.py` — NW alignment
 The core output stage. For each image that has both a Gemini `.txt` file and a
@@ -328,8 +348,8 @@ other document types the fields will match that volume's NER prompt.
 
 Outputs a per-page `*_entries.json` sidecar and an aggregate `entries_{model}.csv`.
 
-By default uses `gemini-2.5-flash-lite` (fast and cheap). Dense pages that exceed the
-model's output token limit automatically fall back to `gemini-3.1-flash-lite` (higher
+By default uses `gemini-3.1-flash-lite-preview` (fast and cheap). Dense pages that exceed the
+model's output token limit automatically fall back to `gemini-2.5-flash` (higher
 output limit), and then to partial JSON recovery if needed. Previously failed pages
 (where a `*_entries_error.txt` sidecar exists) are auto-retried without `--force`.
 
@@ -466,4 +486,104 @@ python pipeline/iiif/build_ranges.py output/green_book_1947_4bea2040/uuid/
 python pipeline/iiif/build_ranges.py output/green_book_1947_4bea2040/uuid/ \
     --model gemini-2.0-flash --depth 2 --update-manifest \
     --base-url https://hadro.github.io/green-book-iiif-test
+```
+
+---
+
+#### `pipeline/explore_entries.py` — Interactive data explorer
+Reads an `entries_{model}.csv` (or an output directory containing one) and writes
+a **self-contained HTML file** — no server or dependencies required. Open it in
+any browser.
+
+The explorer auto-introspects the CSV schema, so it works for any document type:
+
+- **Facet filters** — auto-generated for low-cardinality fields (category, state, etc.); clicking a bar in a chart filters the table
+- **Full-text search** across all fields
+- **Page density strip** — entry count per canvas, showing document structure at a glance
+- **Field fill-rate overview** — which columns have reliable data across the volume
+- **Detail panel** — click any row to see all fields plus a live IIIF thumbnail of the source page region (when `manifest.json` files are present)
+- **CSV export** — download the current filtered subset
+
+No geocoding or alignment required; runs directly after `--extract-entries`.
+
+```bash
+python pipeline/explore_entries.py output/green_book_1947_4bea2040/
+python pipeline/explore_entries.py output/green_book_1947_4bea2040/ --out my_explorer.html
+python pipeline/explore_entries.py output/green_book_1947_4bea2040/uuid/entries_gemini-2.0-flash.csv
+```
+
+#### `pipeline/run_chandra_ocr.py` — Chandra OCR (local model, GPU)
+Runs [Chandra](https://github.com/datalab-to/chandra-ocr) (a 5B vision-language
+model) on each image and saves `{stem}_chandra-ocr-2.txt`. Converts Chandra's
+Markdown output (tables, bold headers) to plain text compatible with `align_ocr.py`.
+Safe to re-run — already-processed images are skipped.
+
+Chandra is fully local — no API key or per-call cost — and produces layout-aware
+transcriptions well-suited to complex multi-column pages. GPU strongly recommended
+(T4 16 GB fits the BF16 model with headroom). Supports two inference backends:
+
+- `--method hf` — HuggingFace Transformers (default; works on Colab T4)
+- `--method vllm` — vLLM server (faster; requires H100 80 GB)
+
+To use Chandra output for alignment, pass `--model chandra-ocr-2` to `align_ocr.py`.
+
+```bash
+python pipeline/run_chandra_ocr.py output/travelguide/
+python pipeline/run_chandra_ocr.py output/travelguide/ --method hf --batch-size 4
+python pipeline/align_ocr.py output/travelguide/ --model chandra-ocr-2
+```
+
+#### `pipeline/review_ocr.py` — OCR anomaly triage report
+Compares each page's line count and average line length to a rolling window of
+neighboring pages and flags pages that deviate significantly. Writes a
+**self-contained HTML report** with per-page thumbnails for quick visual triage.
+
+Flagged pages are not necessarily errors — title pages, ad pages, or other
+non-directory content will also be flagged. The thumbnail lets you tell at a glance
+whether a flag is a legitimate layout difference or an OCR problem worth investigating.
+
+Useful as a fast sanity check before running `--extract-entries` on a new volume.
+
+```bash
+python pipeline/review_ocr.py output/my-collection/item_dir/
+python pipeline/review_ocr.py output/my-collection/item_dir/ --model gemini-2.0-flash
+python pipeline/review_ocr.py output/my-collection/item_dir/ --threshold 0.5 --window 3
+```
+
+#### `analysis/visualize_entries.py` — Entry bounding box visualization
+Reads each `*_entries.json` file and draws color-coded bounding boxes on the
+corresponding image, saving `*_entries_viz.jpg`. Color assignment is driven by
+category values present in the data — consistent across pages within a run. Pass
+`--ner-prompt` to pre-seed all expected categories so colors stay stable even on
+pages where a category is absent.
+
+Entries with no spatial coordinates (`canvas_fragment` has no `#xywh`) are listed
+in the right margin in their category color.
+
+Distinct from `analysis/visualize_alignment.py` (which shows the raw NW alignment
+result) — this script shows the final extracted entry footprints.
+
+```bash
+python analysis/visualize_entries.py output/green_book_1947_4bea2040/uuid/
+python analysis/visualize_entries.py output/green_book_1947_4bea2040/uuid/ \
+    --ner-prompt output/green_book_1947_4bea2040/ner_prompt.md
+python analysis/visualize_entries.py output/green_book_1947_4bea2040/ \
+    --model gemini-2.0-flash --force
+```
+
+#### `pipeline/patch_canvas_fragments.py` — Retroactive bounding box patching
+Re-runs the canvas fragment matching logic against existing `*_aligned.json` files
+and updates `*_entries.json` sidecars and the volume CSV — **without making any
+Gemini API calls**. Useful when alignment has been improved (e.g. after a
+`--review-alignment` session) and you want the entry coordinates updated to reflect
+the better alignment without re-running the full extraction.
+
+Uses the same three-strategy matching chain as `extract_entries.py` (exact →
+substring → fuzzy).
+
+```bash
+python pipeline/patch_canvas_fragments.py output/my_volume/ \
+    --aligned-model gemini-2.0-flash
+python pipeline/patch_canvas_fragments.py output/collection/ \
+    --aligned-model gemini-2.0-flash
 ```

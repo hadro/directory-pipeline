@@ -35,7 +35,7 @@ command line:
   --select-pages        pipeline/select_pages.py  (interactive browser UI for picking sample pages and scoping entry pages; opens HTML in browser)
   --generate-prompts    pipeline/generate_prompt.py  (Gemini generates volume-specific OCR + NER prompts from sample pages)
 
-  --full-run            shorthand for --download --surya-ocr --gemini-ocr --align-ocr
+  --guided              shorthand for --download --surya-ocr --gemini-ocr --align-ocr
                           --review-alignment --extract-entries --geocode --map
                           (defaults --batch-size and --workers to 8;
                           run --select-pages + --generate-prompts first for new collection types)
@@ -95,7 +95,9 @@ SCRIPT_DIR = Path(__file__).parent
 
 sys.path.insert(0, str(SCRIPT_DIR))
 from utils.iiif_utils import manifest_item_id as _iiif_manifest_item_id
-API_BASE = "https://api.repo.nypl.org/api/v2"
+from sources.nypl_utils import fetch_title, make_slug
+from sources.loc_utils import _resource_url_to_item_url, loc_slug
+from sources.ia_utils import _extract_ia_identifier, _fetch_ia_info, _make_ia_slug
 
 UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
@@ -186,233 +188,6 @@ def _is_generic_iiif_url(text: str) -> bool:
     )
 
 
-def _resource_url_to_item_url(resource_url: str) -> str:
-    """Convert a LoC /resource/ URL to its canonical /item/ URL via the JSON API.
-
-    https://www.loc.gov/resource/rbc0001.2026batch96169559/?sp=74
-        → https://www.loc.gov/item/rbc0001.2026batch96169559/
-
-    The resource JSON response includes a 'related_items' or 'item' field that
-    points back to the catalog item.  Falls back to substituting /resource/ with
-    /item/ in the URL path, which works for many LoC identifiers.
-    """
-    if "/resource/" not in resource_url:
-        return resource_url
-    # Strip ?sp= page parameter before querying the API
-    base = re.sub(r"\?.*", "", resource_url).rstrip("/")
-    try:
-        resp = requests.get(f"{base}?fo=json", timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        # The JSON 'item' key usually contains a dict with an 'id' or 'link' field
-        item = data.get("item") or {}
-        link = item.get("id") or item.get("link") or ""
-        if link and "/item/" in link:
-            # Normalise to https and strip trailing query/fragment
-            link = re.sub(r"^http:", "https:", link.split("?")[0].split("#")[0])
-            return link.rstrip("/") + "/"
-    except Exception:  # noqa: BLE001
-        pass
-    # Fallback: swap /resource/ → /item/ in the path
-    return re.sub(r"/resource/", "/item/", resource_url.split("?")[0]).rstrip("/") + "/"
-
-
-def _fetch_loc_title(item_id: str) -> str:
-    """Best-effort fetch of a LoC item title from the public JSON API."""
-    try:
-        resp = requests.get(
-            f"https://www.loc.gov/item/{item_id}/?fo=json",
-            timeout=15,
-        )
-        resp.raise_for_status()
-        v = resp.json().get("item", {}).get("title", "")
-        if isinstance(v, list):
-            return str(v[0]).strip() if v else ""
-        return str(v).strip() if v else ""
-    except Exception:  # noqa: BLE001
-        return ""
-
-
-def _make_loc_slug(title: str, item_id: str) -> str:
-    """Build a slug from a LoC title and item ID.
-
-    Mirrors _make_slug() in loc_collection_csv.py so both scripts
-    produce the same slug for the same item.
-
-    ('The Brooklyn city directory', '01015253')
-        → 'the_brooklyn_city_directory_01015253'
-    """
-    id_suffix = item_id[:12]
-    if title:
-        sanitized = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
-        sanitized = re.sub(r"_+", "_", sanitized)[:40].rstrip("_")
-        if sanitized:
-            return f"{sanitized}_{id_suffix}"
-    return id_suffix
-
-
-def loc_slug(url: str) -> str:
-    """Derive a filesystem-safe slug from a LoC URL.
-
-    For item URLs, fetches the item title from the LoC JSON API so the
-    slug matches what loc_collection_csv.py produces by default:
-        /item/01015253/              → 'the_brooklyn_city_directory_01015253'
-        /collections/civil-war-maps/ → 'civil-war-maps'
-
-    For Chronicling America issue URLs (/item/{lccn}/{date}/ed-{edition}/)
-    the date and edition are appended so each issue gets a unique slug:
-        /item/sn83030313/1847-05-01/ed-1/ → 'the_new_york_herald_..._sn83030313_1847_05_01_ed1'
-    """
-    m = re.search(r"/collections/([^/?#]+)", url)
-    if m:
-        return m.group(1).rstrip("/")
-    # Chronicling America: /item/{lccn}/{date}/ed-{edition}/
-    m = re.search(r"/(?:item|resource)/([^/?#]+)/(\d{4}-\d{2}-\d{2})/ed-(\d+)", url)
-    if m:
-        lccn, date, edition = m.group(1), m.group(2), m.group(3)
-        title = _fetch_loc_title(lccn)
-        base = _make_loc_slug(title, lccn)
-        date_slug = date.replace("-", "_")
-        return f"{base}_{date_slug}_ed{edition}"
-    m = re.search(r"/(?:item|resource)/([^/?#]+)", url)
-    if m:
-        item_id = m.group(1).rstrip("/")
-        title = _fetch_loc_title(item_id)
-        return _make_loc_slug(title, item_id)
-    return re.sub(r"[^a-z0-9]+", "_", url.lower()).strip("_")[:40]
-
-
-_IA_IDENTIFIER_RE = re.compile(r"archive\.org/details/([^/?#]+)")
-_IA_METADATA_API  = "https://archive.org/metadata/{identifier}"
-
-
-def _extract_ia_identifier(url: str) -> str | None:
-    m = _IA_IDENTIFIER_RE.search(url)
-    return m.group(1).rstrip("/") if m else None
-
-
-def _fetch_ia_info(identifier: str) -> tuple[str, str]:
-    """Return (title, kind) for an IA identifier.
-
-    kind is "ia-collection" or "ia-item".  Returns ("", "ia-item") on failure.
-    """
-    try:
-        resp = requests.get(
-            _IA_METADATA_API.format(identifier=identifier),
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        meta = data.get("metadata", {})
-        title = meta.get("title", "")
-        if isinstance(title, list):
-            title = title[0] if title else ""
-        mediatype = meta.get("mediatype", "")
-        kind = "ia-collection" if mediatype == "collection" else "ia-item"
-        return str(title).strip(), kind
-    except Exception:  # noqa: BLE001
-        return "", "ia-item"
-
-
-def _make_ia_slug(title: str, identifier: str) -> str:
-    """Build a filesystem-safe slug from an IA title and identifier."""
-    id_part = identifier[:20]
-    if title:
-        sanitized = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
-        sanitized = re.sub(r"_+", "_", sanitized)[:40].rstrip("_")
-        if sanitized:
-            return f"{sanitized}_{id_part}"
-    return id_part
-
-
-def _as_list(obj) -> list:
-    if obj is None:
-        return []
-    return obj if isinstance(obj, list) else [obj]
-
-
-def _str_val(obj) -> str:
-    """Unwrap a {'$': 'value'} node or coerce to str."""
-    if isinstance(obj, dict):
-        return str(obj.get("$", ""))
-    return str(obj) if obj else ""
-
-
-def fetch_title(session: requests.Session, uuid: str, item: bool) -> str:
-    """
-    Best-effort: fetch a human-readable title for a UUID from the NYPL API.
-    Returns an empty string on any failure — callers fall back to UUID-only slugs.
-    """
-    try:
-        if item:
-            resp = session.get(
-                f"{API_BASE}/items/item_details/{uuid}",
-                params={"page": 1, "per_page": 1},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            mods = (
-                resp.json().get("nyplAPI", {}).get("response", {}).get("mods") or {}
-            )
-            for ti in _as_list(mods.get("titleInfo")):
-                t = _str_val(ti.get("title") if isinstance(ti, dict) else None)
-                if t:
-                    return t
-        else:
-            resp = session.get(
-                f"{API_BASE}/collections/{uuid}",
-                params={"page": 1, "per_page": 1},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json().get("nyplAPI", {}).get("response", {})
-            # Try top-level keys first
-            candidates = [
-                data.get("title"),
-                data.get("heading"),
-                (data.get("collection") or {}).get("title"),
-            ]
-            for candidate in candidates:
-                t = _str_val(candidate)
-                if t:
-                    return t
-            # Fall back to mods structure (some collection responses embed mods)
-            mods = data.get("mods") or {}
-            for ti in _as_list(mods.get("titleInfo")):
-                t = _str_val(ti.get("title") if isinstance(ti, dict) else None)
-                if t:
-                    return t
-            # Last resort: item_details endpoint — always has full mods with title
-            resp2 = session.get(
-                f"{API_BASE}/items/item_details/{uuid}",
-                params={"page": 1, "per_page": 1},
-                timeout=15,
-            )
-            resp2.raise_for_status()
-            mods2 = (
-                resp2.json().get("nyplAPI", {}).get("response", {}).get("mods") or {}
-            )
-            for ti in _as_list(mods2.get("titleInfo")):
-                t = _str_val(ti.get("title") if isinstance(ti, dict) else None)
-                if t:
-                    return t
-    except Exception:  # noqa: BLE001
-        pass
-    return ""
-
-
-def make_slug(title: str, uuid: str) -> str:
-    """
-    Build a filesystem-safe slug: {title_words}_{uuid8}.
-    Falls back to just {uuid8} if no usable title is available.
-    """
-    uuid8 = uuid.replace("-", "")[:8]
-    if title:
-        sanitized = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
-        sanitized = re.sub(r"_+", "_", sanitized)[:40].rstrip("_")
-        if sanitized:
-            return f"{sanitized}_{uuid8}"
-    return uuid8
 
 
 def run_stage(
@@ -1062,29 +837,30 @@ def main() -> None:
         ),
     )
     stages.add_argument(
-        "--to-csv",
-        dest="to_csv",
+        "--extract",
+        dest="extract",
         action="store_true",
         help=(
-            "Minimal shorthand: --download --gemini-ocr --extract-entries. "
-            "Produces a structured entries CSV from any supported URL with no further steps. "
+            "Automated shorthand: --download --gemini-ocr --extract-entries --explore. "
+            "Produces a structured entries CSV and self-contained HTML explorer from any supported URL. "
             "Run --select-pages and --generate-prompts once first for a new collection type; "
-            "after that, --to-csv works on any subsequent volume in the same series."
+            "after that, --extract works on any subsequent volume in the same series."
         ),
     )
     stages.add_argument(
-        "--full-run",
-        dest="full_run",
+        "--guided",
+        dest="guided",
         action="store_true",
         help=(
-            "Shorthand for the maximal end-to-end pipeline: "
+            "Human-in-the-loop shorthand for the full pipeline: "
             "--download --surya-ocr --gemini-ocr --align-ocr --review-alignment "
             "--extract-entries --geocode --map. "
+            "Pauses at --review-alignment for manual correction of unmatched lines before proceeding. "
             "Defaults --batch-size to 8 and --workers to 8 unless already set. "
-            "Add --ocr-model / --models to override the Gemini model (each stage uses its own default otherwise). "
+            "Add --ocr-model to override the Gemini model (each stage uses its own default otherwise). "
             "Combine with --nypl-csv / --loc-csv / --ia-csv to also export metadata. "
             "For new collection types, run --select-pages and --generate-prompts first "
-            "to create volume-specific OCR and NER prompts before --full-run."
+            "to create volume-specific OCR and NER prompts before --guided."
         ),
     )
 
@@ -1344,13 +1120,13 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Expand --to-csv into its constituent stage flags (minimal automated path)
-    if args.to_csv:
+    # Expand --extract into its constituent stage flags (automated path)
+    if args.extract:
         for flag in ("download", "gemini_ocr", "extract_entries", "explore"):
             setattr(args, flag, True)
 
-    # Expand --full-run into its constituent stage flags and defaults
-    if args.full_run:
+    # Expand --guided into its constituent stage flags and defaults (human-in-the-loop path)
+    if args.guided:
         for flag in ("download", "surya_ocr", "gemini_ocr", "align_ocr",
                      "review_alignment", "extract_entries", "geocode", "map"):
             setattr(args, flag, True)
