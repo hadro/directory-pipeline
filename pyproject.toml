@@ -1,7 +1,7 @@
 [project]
 name = "directory-pipeline"
 version = "0.1.0"
-description = "Add your description here"
+description = "Turn a public IIIF archive URL into a structured CSV using Gemini OCR and named entity extraction"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
