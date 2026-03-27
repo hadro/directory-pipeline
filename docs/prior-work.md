@@ -20,7 +20,7 @@ Demonstrates that layout detection as a preprocessing step improves OCR accuracy
 
 The canonical prior digitization of the Green Books. Establishes that the pre-mLLM state of the art was entirely manual data entry (OCR was explicitly rejected due to irregular formatting and ad placement), uses the US Census Geocoder as a national baseline (~50% exact match), and produces the canonical six-category establishment taxonomy used in the NER schema here. Also documents the cross-year identity matching problem and calls for city directory cross-referencing as a research next step.
 
-**Smith & Cordell (2018) — "A Research Agenda for Historical and Multilingual Optical Character Recognition"** ([Northeastern University / NEH](https://repository.library.northeastern.edu/files/neu:m043p093w))
+**Smith & Cordell (2018) — "A Research Agenda for Historical and Multilingual Optical Character Recognition"** ([Northeastern University / NEH](https://repository.library.northeastern.edu/files/neu:f1881m035))
 
 A practitioner-consensus research agenda identifying layout analysis as the top barrier to historical OCR progress and OCR post-correction as high-leverage and underinvested. Validates line-level sequence alignment for ground truth creation (the same approach as Needleman-Wunsch alignment used here) and argues that "how dirty is too dirty" is a task-specific empirical question — informing the pipeline's decision to expose confidence metrics rather than hard-filter at a fixed threshold.
 
