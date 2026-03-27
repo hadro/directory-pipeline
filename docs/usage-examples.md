@@ -1,254 +1,196 @@
 # Usage examples
 
-Full usage examples for directory-pipeline by source type and stage. See the [main README](../README.md) for the quick start.
+See the [main README](../README.md) for the quick start. This page covers the full workflow in detail, source-specific notes, and advanced options.
 
 ---
 
-## Standard end-to-end run
+## 1. First-time setup: calibrating for a new collection
 
-```bash
-# Minimal automated path: download → OCR → CSV
-python main.py collections.txt --to-csv
-
-# Full pipeline: also includes Surya alignment, geocoding, and map
-python main.py collections.txt --full-run
-```
-
-## Library of Congress items
-
-```bash
-# Export metadata and download images for a single LoC item
-python main.py https://www.loc.gov/item/01015253/ \
-    --loc-csv --download --gemini-ocr --model gemini-2.0-flash
-
-# Export metadata and download images for a full LoC collection
-python main.py https://www.loc.gov/collections/civil-war-maps/ \
-    --loc-csv --download --gemini-ocr --model gemini-2.0-flash
-
-# Override slug if desired
-python main.py https://www.loc.gov/item/01015253/ \
-    --loc-csv --download --slug brooklyn_directory_1852
-```
-
-## Internet Archive
-
-```bash
-# Download a single IA item
-python main.py https://archive.org/details/ldpd_11290437_000/ \
-    --ia-csv --download --gemini-ocr --model gemini-2.0-flash
-
-# Download an IA collection
-python main.py https://archive.org/details/durstoldyorklibrary \
-    --ia-csv --download --gemini-ocr --model gemini-2.0-flash
-```
-
-## NYPL collections
-
-```bash
-# Export metadata and download images
-python main.py collections.txt --nypl-csv --download
-
-# Detect and split spreads, then run OCR
-python main.py collections.txt --detect-spreads --split-spreads \
-    --surya-ocr --gemini-ocr --model gemini-2.0-flash
-
-# Run alignment and visualize results
-python main.py collections.txt --align-ocr --visualize \
-    --model gemini-2.0-flash
-
-# Interactively review and correct unmatched entries
-python pipeline/review_alignment.py output/ --model gemini-2.0-flash
-
-# Run the review tool on Google Colab (see below for full setup)
-# The key difference is --host 0.0.0.0 so the ngrok tunnel can reach it
-
-# Extract entries, geocode, and build a map
-python main.py collections.txt --extract-entries --geocode --map \
-    --model gemini-2.0-flash
-```
-
-## Volume-specific prompt calibration
-
-For any new collection type, generate tailored OCR and NER prompts before running OCR.
-The generated NER prompt defines whatever entry fields are appropriate for the
-document — no code changes are needed.
+Every new collection type needs a one-time calibration step that generates tailored OCR and NER prompts. Once generated, those prompts are reused automatically for every subsequent volume in the same series — no code changes needed.
 
 ```bash
 # Step 1: Download images
+python main.py https://archive.org/details/ldpd_11290437_000/ --download
+
+# Step 2: Open the page selector in your browser — pick 4–10 representative pages,
+#         then click "Save" and press Ctrl+C when done.
+python main.py https://archive.org/details/ldpd_11290437_000/ --select-pages
+
+# Step 3: Generate tailored prompts (Gemini analyzes your selected pages)
+python main.py https://archive.org/details/ldpd_11290437_000/ --generate-prompts
+
+# Step 4: Run the pipeline — prompts are auto-discovered from the output directory
+python main.py https://archive.org/details/ldpd_11290437_000/ --extract
+```
+
+To also include page scoping and the precision bounding-box upgrade, use `--guided` instead of `--extract` in step 4. This will pause at `--select-pages` (to scope which pages to process) and again at `--review-alignment` (to correct unmatched lines) before proceeding.
+
+For microfilm or bound-volume scans that contain double-page spreads, run `--detect-spreads --split-spreads` first, before either `--extract` or `--guided`.
+
+---
+
+## 2. Running on additional volumes (same series)
+
+After calibrating once, point subsequent volumes to the first volume's NER prompt:
+
+```bash
+python main.py https://archive.org/details/ldpd_11290437_001/ --extract \
+  --ner-prompt output/ldpd_11290437_000/ner_prompt.md
+```
+
+The OCR prompt is auto-discovered from the same directory. If both prompts live in the first volume's output folder, `--extract` will find them automatically without any explicit flags.
+
+---
+
+## 3. Source URLs at a glance
+
+The pipeline accepts any of these URL forms directly — no preprocessing needed.
+
+| Source | Example URL | Notes |
+|---|---|---|
+| Internet Archive item | `https://archive.org/details/ldpd_11290437_000/` | |
+| Internet Archive collection | `https://archive.org/details/durstoldyorklibrary` | |
+| Library of Congress item | `https://www.loc.gov/item/01015253/` | |
+| Library of Congress collection | `https://www.loc.gov/collections/civil-war-maps/` | |
+| NYPL item or collection | UUID or collection URL | Requires `NYPL_API_TOKEN` |
+| Any IIIF manifest | `https://example.org/iiif/manifest.json` | Accepts v2 or v3 |
+
+NYPL requires an API token. Set it in your environment or `.env` file:
+
+```bash
+export NYPL_API_TOKEN=your_token_here
 python main.py collections.txt --nypl-csv --download
-
-# Step 2: Open the browser UI and pick 4–10 representative sample pages
-#         Click "Save to output folder" — selection.txt is written automatically.
-#         Press Ctrl+C in the terminal when done.
-python main.py collections.txt --select-pages
-
-# Step 3: Generate volume-specific prompts (Gemini analyzes the selected pages)
-python main.py collections.txt --generate-prompts
-
-# Step 4: Automated CSV run — prompts are auto-discovered
-python main.py collections.txt --to-csv
-
-# Or the full pipeline with precision upgrade, geocoding, and map:
-python main.py collections.txt --full-run
 ```
 
-Or run the prompt generation standalone:
+To download a single IIIF manifest directly without a CSV:
 
 ```bash
-# Standalone — with explicit selection file
-python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
-    --selection output/the_travelers_guide_e088efa0/selection.txt
-
-# OCR prompt only, using explicit page filenames instead of selection.txt
-python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
-    --pages 0005_58019060.jpg 0012_58019067.jpg 0023_58019078.jpg 0041_58019096.jpg \
-    --ocr-only
-```
-
-## Any IIIF manifest
-
-```bash
-# Download a single manifest directly (no CSV needed)
 python pipeline/download_images.py \
     --manifest https://example.org/iiif/item/manifest.json \
     --output-dir output/my-item
 ```
 
-## Other options
+---
+
+## 4. Precision upgrade: bounding boxes per entry
+
+The default `--extract` path gives each entry a canvas URI pointing to its page. Adding Surya OCR and alignment upgrades every `canvas_fragment` to a `#xywh=` bounding box — the exact line on the page.
 
 ```bash
-# Compare two Gemini models before committing to a full run
-python main.py collections.txt --compare-ocr \
-    --models gemini-2.0-flash gemini-2.5-pro
+# Add to any run:
+python main.py URL --surya-ocr --align-ocr
 
-# Dry run — show every command the pipeline would execute, without running anything
-python main.py https://archive.org/details/ldpd_11290437_000/ --to-csv --dry-run
-
-# Force re-processing of already-completed files
-python main.py collections.txt --align-ocr --model gemini-2.0-flash --force
+# Then optionally review and correct unmatched lines:
+python pipeline/review_alignment.py output/ --model gemini-2.0-flash
 ```
 
-## Running pipeline scripts directly
+`--guided` runs this full path automatically, pausing at the review step.
+
+---
+
+## 5. Geocoding and maps
 
 ```bash
-python pipeline/align_ocr.py output/the_negro_motorist_green_book_1940_feb978b0 \
-    --model gemini-2.0-flash --force
+# Geocode entries (Nominatim city-level by default; Google Maps with API key)
+python main.py collections.txt --geocode --model gemini-2.0-flash
 
-python pipeline/extract_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
-    --model gemini-2.0-flash
+# Build the interactive Leaflet map
+python main.py collections.txt --map --model gemini-2.0-flash
 
-python pipeline/geo/geocode_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
-    --model gemini-2.0-flash
-
-python pipeline/geo/map_entries.py output/the_negro_motorist_green_book_1940_feb978b0 \
-    --model gemini-2.0-flash
-```
-
-Analysis tools can be run from the `analysis/` directory:
-
-```bash
-python analysis/visualize_alignment.py \
-    output/the_negro_motorist_green_book_1940_feb978b0 --model gemini-2.0-flash
-
-python analysis/compare_extraction.py \
-    output/the_negro_motorist_green_book_1940_feb978b0
-```
-
-## IIIF annotation export and self-hosted viewer
-
-```bash
-# Export line-level and entry-level IIIF annotation pages
-python pipeline/iiif/export_annotations.py \
-    output/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
-
-# Export colored entry bounding boxes (standalone — not in --full-run)
-python pipeline/iiif/export_entry_boxes.py \
-    output/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
-
-# Export boxes and update manifest so viewers auto-load them
-python pipeline/iiif/export_entry_boxes.py \
-    output/green_book_1947_xxx/uuid/ \
-    --base-url https://hadro.github.io/green-book-iiif-test/annotations \
-    --update-manifest
-
-# Generate map with IIIF Content State deep-links (open viewer at correct page/region)
+# Generate map with IIIF Content State deep-links (opens viewer at exact page and region)
 python pipeline/geo/map_entries.py output/green_book_1947_xxx/ \
     --model gemini-2.0-flash \
     --viewer-url https://hadro.github.io/green-book-iiif-test \
     --manifest-url https://hadro.github.io/green-book-iiif-test/manifest.json
 ```
 
-## Running the review tool on Google Colab
+---
 
-The review tool is a local Flask web app, so running it on Colab requires a tunnel
-to expose the server to your browser. The steps below use [ngrok](https://ngrok.com)
-(free tier is sufficient).
+## 6. IIIF annotation export
 
-**Prerequisites**
+```bash
+# Line-level and entry-level W3C Annotation Pages
+python pipeline/iiif/export_annotations.py \
+    output/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
 
-- Your `output/` data must be accessible in Colab — either copy it from Google Drive
-  or mount Drive and copy locally (Drive-mounted paths can cause Flask to hang on
-  directory scans):
-  ```python
-  !cp -r /content/drive/MyDrive/pipeline-output /content/output
-  ```
-- Install pyngrok in your Colab environment:
-  ```python
-  !pip install pyngrok
-  ```
+# Colored entry bounding boxes as annotation overlays
+python pipeline/iiif/export_entry_boxes.py \
+    output/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
 
-**Step 1 — Start the server**
-
-Run this cell. It starts Flask in the background via `nohup` so it survives cell
-completion, and writes all output to `/tmp/review.log`.
-
-```python
-# Kill anything already on port 5000
-!fuser -k 5000/tcp
-
-!nohup python -m pipeline.review_alignment /content/output/my_volume \
-    --host 0.0.0.0 --port 5000 --model gemini-2.0-flash \
-    > /tmp/review.log 2>&1 &
+# Export boxes and update the manifest so IIIF viewers load them automatically
+python pipeline/iiif/export_entry_boxes.py \
+    output/green_book_1947_xxx/uuid/ \
+    --base-url https://hadro.github.io/green-book-iiif-test/annotations \
+    --update-manifest
 ```
 
-**Step 2 — Wait for the server to be ready**
+---
 
-Run this cell and wait until you see `Models ready.` in the output (takes ~30 s).
-Stop the cell (square button) once you see it — the server keeps running.
+## 7. Running the review tool on Google Colab
+
+The alignment review tool is a local Flask app. Colab's built-in port proxy (`google.colab.kernel.proxyPort`) exposes it to your browser without any third-party tunnel.
+
+**Prerequisite**
+
+Copy your `output/` data into Colab's local filesystem first — Drive-mounted paths can cause Flask to hang on directory scans:
+
+```python
+!cp -r /content/drive/MyDrive/pipeline-output /content/output
+```
+
+**Step 1 — Start the server and get the URL**
+
+Set your variables, then run this cell. The URL is printed immediately; the server loads models in the background (~30 s).
+
+```python
+import subprocess
+from google.colab.output import eval_js
+
+PORT   = 5000
+MODEL  = "gemini-2.0-flash"
+VOLUME = "/content/output/my_volume"
+
+subprocess.run(["fuser", "-k", f"{PORT}/tcp"], capture_output=True)
+
+subprocess.Popen(
+    ["python", "-m", "pipeline.review_alignment",
+     VOLUME, "--host", "0.0.0.0", "--port", str(PORT), "--model", MODEL],
+    stdout=open("/tmp/review.log", "w"),
+    stderr=subprocess.STDOUT,
+    start_new_session=True,
+)
+
+print(f"Server starting — run the next cell to watch the log.")
+print(f"URL: {eval_js(f'google.colab.kernel.proxyPort({PORT})')}")
+```
+
+**Step 2 — Watch the log until ready**
+
+Run this cell and wait for `Models ready.` (~30 s), then stop it — the server keeps running.
 
 ```python
 !tail -f /tmp/review.log
 ```
 
-**Step 3 — Open the ngrok tunnel**
-
-```python
-from pyngrok import ngrok
-
-NGROK_TOKEN = "your_token_here"   # from https://dashboard.ngrok.com
-ngrok.set_auth_token(NGROK_TOKEN)
-
-public_url = ngrok.connect(5000)
-print("Review tool URL:", public_url)
-```
-
-Open the printed URL in your browser.
+Open the URL printed in Step 1.
 
 **Notes**
+- Server not responding: check `!cat /tmp/review.log`
+- Clicking **Done reviewing** in the UI shuts the Flask server down — repeat from Step 1 to restart
+- Copy results back to Drive when finished: `!cp -r /content/output /content/drive/MyDrive/pipeline-output`
 
-- If you see `ERR_NGROK_324` (too many tunnels), kill old ones first:
-  ```python
-  for t in ngrok.get_tunnels():
-      ngrok.disconnect(t.public_url)
-  ```
-- If you see `connection refused`, check that the server is still running:
-  ```python
-  !cat /tmp/review.log
-  ```
-- When you click **Done reviewing** in the UI the Flask server shuts down. To restart,
-  repeat from Step 1.
-- Saves are written back to the local `/content/output/` copy. Copy results back to
-  Drive when finished:
-  ```python
-  !cp -r /content/output /content/drive/MyDrive/pipeline-output
-  ```
+---
+
+## 8. Useful flags
+
+```bash
+# Preview every command the pipeline would run, without executing anything
+python main.py https://archive.org/details/ldpd_11290437_000/ --extract --dry-run
+
+# Compare two Gemini models on OCR quality before committing to a full run
+python main.py collections.txt --compare-ocr \
+    --models gemini-2.0-flash gemini-2.5-pro
+
+# Force re-processing of already-completed files
+python main.py collections.txt --align-ocr --model gemini-2.0-flash --force
+```
