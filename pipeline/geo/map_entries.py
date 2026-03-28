@@ -455,11 +455,7 @@ input[type=text]:focus-visible, select:focus-visible {{ outline: 2px solid #1a6e
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script>
-const ALL_ENTRIES    = {entries_json};
-const CAT_COLORS     = {cat_colors_json};
-const CAT_LABELS     = {cat_labels_json};
-const TOTAL_ENTRIES  = ALL_ENTRIES.length;
-const YEAR_LABEL     = {year_label_json};
+{data_block}
 
 const map = L.map('map').setView([38.5, -96.0], 5);
 L.tileLayer(
@@ -502,13 +498,7 @@ map.on('moveend zoomend', updateHash);
 document.getElementById('subtitle').textContent =
   YEAR_LABEL + ' · ' + TOTAL_ENTRIES.toLocaleString() + ' entries';
 
-const stateSet = new Set(ALL_ENTRIES.map(e => e.state));
-const stateSelect = document.getElementById('state-select');
-[...stateSet].sort().forEach(s => {{
-  const opt = document.createElement('option');
-  opt.value = s; opt.textContent = s;
-  stateSelect.appendChild(opt);
-}});
+{state_block}
 
 const catChecks = document.getElementById('cat-checks');
 Object.keys(CAT_LABELS).forEach(cat => {{
@@ -623,18 +613,7 @@ document.querySelectorAll('.cat-cb').forEach(cb =>
   }})
 );
 
-const _initState = hashToState();
-if (_initState) {{
-  map.setView([_initState.lat, _initState.lon], _initState.zoom);
-  _suppressFitBounds = true;
-}}
-updateMap();
-_suppressFitBounds = false;
-
-if (_initState && _initState.idx != null) {{
-  const m = markerByIdx.get(_initState.idx);
-  if (m) clusterGroup.zoomToShowLayer(m, () => m.openPopup());
-}}
+{init_block}
 
 // Mobile sidebar toggle
 (function() {{
@@ -664,12 +643,47 @@ if (_initState && _initState.idx != null) {{
 """
 
 
+_CSV_PARSER_JS = """\
+function _parseCSV(text) {
+  const rows = [];
+  let headers = null, i = 0, n = text.length;
+  while (i < n) {
+    const record = [];
+    while (true) {
+      let v = '';
+      if (i < n && text[i] === '"') {
+        i++;
+        while (i < n) {
+          if (text[i] === '"' && text[i+1] === '"') { v += '"'; i += 2; }
+          else if (text[i] === '"') { i++; break; }
+          else v += text[i++];
+        }
+      } else {
+        while (i < n && text[i] !== ',' && text[i] !== '\\n' && text[i] !== '\\r') v += text[i++];
+      }
+      record.push(v);
+      if (i >= n || text[i] === '\\n' || text[i] === '\\r') break;
+      i++;
+    }
+    if (i < n && text[i] === '\\r') i++;
+    if (i < n && text[i] === '\\n') i++;
+    if (record.length === 1 && record[0] === '') continue;
+    if (!headers) { headers = record; continue; }
+    const obj = {};
+    headers.forEach((h, j) => { obj[h] = record[j] !== undefined ? record[j] : ''; });
+    rows.push(obj);
+  }
+  return rows;
+}"""
+
+
 def build_html(
     entries: list[dict],
     title_year: str,
     homepage_url: str = "",
     explorer_url: str = "",
     max_categories: int | None = None,
+    external_csv: str = "",
 ) -> str:
     def safe_json(obj: object) -> str:
         s = json.dumps(obj, ensure_ascii=False)
@@ -714,11 +728,93 @@ def build_html(
     cat_colors = {c: cat_colors[c] for c in actual_cats}
     cat_labels = {c: cat_labels[c] for c in actual_cats}
 
+    # JS snippets shared between normal and external-csv modes
+    _state_build = (
+        "const stateSet = new Set(ALL_ENTRIES.map(e => e.state));\n"
+        "const stateSelect = document.getElementById('state-select');\n"
+        "[...stateSet].sort().forEach(s => {\n"
+        "  const opt = document.createElement('option');\n"
+        "  opt.value = s; opt.textContent = s;\n"
+        "  stateSelect.appendChild(opt);\n"
+        "});"
+    )
+    _init_normal = (
+        "const _initState = hashToState();\n"
+        "if (_initState) {\n"
+        "  map.setView([_initState.lat, _initState.lon], _initState.zoom);\n"
+        "  _suppressFitBounds = true;\n"
+        "}\n"
+        "updateMap();\n"
+        "_suppressFitBounds = false;\n"
+        "\n"
+        "if (_initState && _initState.idx != null) {\n"
+        "  const m = markerByIdx.get(_initState.idx);\n"
+        "  if (m) clusterGroup.zoomToShowLayer(m, () => m.openPopup());\n"
+        "}"
+    )
+
+    if external_csv:
+        data_block = "\n".join([
+            "let ALL_ENTRIES    = [];",
+            "let TOTAL_ENTRIES  = 0;",
+            f"const CAT_COLORS     = {safe_json(cat_colors)};",
+            f"const CAT_LABELS     = {safe_json(cat_labels)};",
+            f"const YEAR_LABEL     = {safe_json(title_year)};",
+        ])
+        state_block = ""  # built after CSV load
+        csv_json = safe_json(external_csv)
+        indented_state = _state_build.replace("\n", "\n    ")
+        indented_init  = _init_normal.replace("\n", "\n    ")
+        init_block = (
+            _CSV_PARSER_JS + "\n"
+            + f"fetch({csv_json})\n"
+            + "  .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })\n"
+            + "  .then(function(text) {\n"
+            + "    var parsed = _parseCSV(text);\n"
+            + "    // Replicate _prepare_entries: map column names, parse lat/lon, jitter city-level\n"
+            + "    var _s = 42;\n"
+            + "    function _rng() { _s = (_s * 1664525 + 1013904223) & 0xffffffff; return (_s >>> 0) / 4294967296; }\n"
+            + "    var JITTER = 0.018;\n"
+            + "    ALL_ENTRIES = parsed\n"
+            + "      .filter(function(r) { return r.lat && r.lon; })\n"
+            + "      .map(function(r) {\n"
+            + "        var lat = parseFloat(r.lat), lon = parseFloat(r.lon);\n"
+            + "        if (r.geocode_level === 'city') {\n"
+            + "          lat += (_rng() - 0.5) * 2 * JITTER;\n"
+            + "          lon += (_rng() - 0.5) * 2 * JITTER;\n"
+            + "        }\n"
+            + "        return {\n"
+            + "          name:     r.establishment_name || r.name || '',\n"
+            + "          address:  (r.raw_address || r.address || '').trim(),\n"
+            + "          city:     r.city || '',\n"
+            + "          state:    r.state || '',\n"
+            + "          category: r.category || 'other',\n"
+            + "          page:     (r.image || r.page || '').replace('.jpg', ''),\n"
+            + "          lat:      Math.round(lat * 1e6) / 1e6,\n"
+            + "          lon:      Math.round(lon * 1e6) / 1e6,\n"
+            + "        };\n"
+            + "      });\n"
+            + "    TOTAL_ENTRIES = ALL_ENTRIES.length;\n"
+            + "    " + indented_state + "\n"
+            + "    " + indented_init + "\n"
+            + "  })\n"
+            + "  .catch(function(err) { console.error('Failed to load map data:', err); });"
+        )
+    else:
+        data_block = "\n".join([
+            f"const ALL_ENTRIES    = {safe_json(entries)};",
+            f"const CAT_COLORS     = {safe_json(cat_colors)};",
+            f"const CAT_LABELS     = {safe_json(cat_labels)};",
+            "const TOTAL_ENTRIES  = ALL_ENTRIES.length;",
+            f"const YEAR_LABEL     = {safe_json(title_year)};",
+        ])
+        state_block = _state_build
+        init_block  = _init_normal
+
     return _HTML_TEMPLATE.format(
-        entries_json       = safe_json(entries),
-        cat_colors_json    = safe_json(cat_colors),
-        cat_labels_json    = safe_json(cat_labels),
-        year_label_json    = safe_json(title_year),
+        data_block         = data_block,
+        state_block        = state_block,
+        init_block         = init_block,
         map_title          = title_year,
         homepage_link_html = homepage_link_html,
         explorer_link_html = explorer_link_html,
@@ -789,6 +885,11 @@ def main() -> None:
     parser.add_argument("--homepage-url", default="", metavar="URL",
         help="URL of the source institution item page (e.g. https://www.loc.gov/item/73644404/). "
              "Shown as 'Item page ↗' in the map sidebar.")
+    parser.add_argument("--external-csv", action="store_true",
+        help="Generate a lightweight HTML shell that fetches entry data from the CSV "
+             "at runtime via fetch(), rather than embedding it inline. "
+             "The CSV must be served from the same location as the HTML (e.g. GitHub Pages). "
+             "Note: IIIF thumbnails are not added in this mode.")
     args = parser.parse_args()
 
     import re
@@ -876,6 +977,7 @@ def main() -> None:
         homepage_url=args.homepage_url,
         explorer_url=explorer_url,
         max_categories=args.max_categories,
+        external_csv=csv_path.name if args.external_csv else "",
     )
     out_path.write_text(html, encoding="utf-8")
     print(f"Saved: {out_path}", file=sys.stderr)

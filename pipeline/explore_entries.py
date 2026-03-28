@@ -536,17 +536,7 @@ mark {{ background: #ffe066; color: inherit; padding: 0 1px; border-radius: 2px;
 </div>
 
 <script>
-const ALL_INITIAL_ENTRIES = {entries_json};
-const VOLUMES     = {volumes_json};
-const FIELD_META  = {field_meta_json};
-const CANVAS_MAP  = {canvas_map_json};
-const DOC_TITLE   = {title_json};
-const DOC_META    = {doc_meta_json};
-const VIEWER_URL  = {viewer_url_json};
-const MANIFEST_URL = {manifest_url_json};
-const FULL_PAGE_THUMBS = {full_page_thumbs_json};
-let activeManifestUrl = MANIFEST_URL;
-let ALL_ENTRIES = ALL_INITIAL_ENTRIES;
+{data_block}
 
 // ── Field display-name and value-label overrides ──────────────────────────
 const FIELD_LABELS = {{
@@ -1378,15 +1368,7 @@ function renderAll() {{
   syncFilterUI();
 }}
 
-renderFillRate();
-if (window.innerWidth <= 640) {{
-  document.getElementById("charts-row").classList.add("collapsed");
-  const _ctBtn = document.getElementById("charts-toggle");
-  _ctBtn.textContent = "Show summary \u25be";
-  _ctBtn.setAttribute("aria-expanded", "false");
-}}
-applyHashState();
-renderAll();
+{init_block}
 </script>
 </body>
 </html>
@@ -1549,6 +1531,44 @@ def _find_csv(path: Path, slug: str | None) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# CSV parser (JS, used in --external-csv mode)
+# ---------------------------------------------------------------------------
+
+_CSV_PARSER_JS = """\
+function _parseCSV(text) {
+  const rows = [];
+  let headers = null, i = 0, n = text.length;
+  while (i < n) {
+    const record = [];
+    while (true) {
+      let v = '';
+      if (i < n && text[i] === '"') {
+        i++;
+        while (i < n) {
+          if (text[i] === '"' && text[i+1] === '"') { v += '"'; i += 2; }
+          else if (text[i] === '"') { i++; break; }
+          else v += text[i++];
+        }
+      } else {
+        while (i < n && text[i] !== ',' && text[i] !== '\\n' && text[i] !== '\\r') v += text[i++];
+      }
+      record.push(v);
+      if (i >= n || text[i] === '\\n' || text[i] === '\\r') break;
+      i++;
+    }
+    if (i < n && text[i] === '\\r') i++;
+    if (i < n && text[i] === '\\n') i++;
+    if (record.length === 1 && record[0] === '') continue;
+    if (!headers) { headers = record; continue; }
+    const obj = {};
+    headers.forEach((h, j) => { obj[h] = record[j] !== undefined ? record[j] : ''; });
+    rows.push(obj);
+  }
+  return rows;
+}"""
+
+
+# ---------------------------------------------------------------------------
 # HTML builder
 # ---------------------------------------------------------------------------
 
@@ -1567,21 +1587,71 @@ def build_html(
     viewer_url: str = "",
     manifest_url: str = "",
     full_page_thumbs: bool = False,
+    external_csv: str = "",
 ) -> str:
+    vols_json = _safe_json(
+        {k: {"rows": list(v["rows"]), "field_meta": v["field_meta"], "doc_meta": v.get("doc_meta", {})}
+         for k, v in (volumes or {}).items()}
+    )
+    common_consts = "\n".join([
+        f"const FIELD_META  = {_safe_json(field_meta)};",
+        f"const CANVAS_MAP  = {_safe_json(canvas_map)};",
+        f"const DOC_TITLE   = {_safe_json(title)};",
+        f"const DOC_META    = {_safe_json(doc_meta or {})};",
+        f"const VIEWER_URL  = {_safe_json(viewer_url)};",
+        f"const MANIFEST_URL = {_safe_json(manifest_url)};",
+        f"const FULL_PAGE_THUMBS = {_safe_json(full_page_thumbs)};",
+        "let activeManifestUrl = MANIFEST_URL;",
+    ])
+    _init_prefix = (
+        'renderFillRate();\n'
+        'if (window.innerWidth <= 640) {\n'
+        '  document.getElementById("charts-row").classList.add("collapsed");\n'
+        '  const _ctBtn = document.getElementById("charts-toggle");\n'
+        '  _ctBtn.textContent = "Show summary \u25be";\n'
+        '  _ctBtn.setAttribute("aria-expanded", "false");\n'
+        '}\n'
+    )
+    if external_csv:
+        data_block = "\n".join([
+            "let ALL_INITIAL_ENTRIES = [];",
+            "let ALL_ENTRIES = [];",
+            "const VOLUMES = {};",
+            common_consts,
+        ])
+        csv_json = _safe_json(external_csv)
+        init_block = (
+            _init_prefix
+            + _CSV_PARSER_JS + "\n"
+            + f"fetch({csv_json})\n"
+            + '  .then(function(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); })\n'
+            + '  .then(function(text) {\n'
+            + '    var entries = _parseCSV(text);\n'
+            + '    ALL_INITIAL_ENTRIES = entries;\n'
+            + '    ALL_ENTRIES = entries;\n'
+            + '    document.getElementById("doc-sub").textContent =\n'
+            + '      entries.length.toLocaleString() + " entries";\n'
+            + '    document.getElementById("mobile-sub").textContent =\n'
+            + '      entries.length.toLocaleString() + " entries";\n'
+            + '    applyHashState();\n'
+            + '    renderAll();\n'
+            + '  })\n'
+            + '  .catch(function(err) {\n'
+            + '    document.getElementById("doc-sub").textContent = "Error loading data: " + err.message;\n'
+            + '  });'
+        )
+    else:
+        data_block = "\n".join([
+            f"const ALL_INITIAL_ENTRIES = {_safe_json(list(rows))};",
+            f"const VOLUMES     = {vols_json};",
+            common_consts,
+            "let ALL_ENTRIES = ALL_INITIAL_ENTRIES;",
+        ])
+        init_block = _init_prefix + "applyHashState();\nrenderAll();"
     return _HTML_TEMPLATE.format(
-        entries_json     = _safe_json(list(rows)),
-        field_meta_json  = _safe_json(field_meta),
-        canvas_map_json  = _safe_json(canvas_map),
-        title_json       = _safe_json(title),
-        title_json_safe  = title.replace('"', '&quot;'),
-        doc_meta_json    = _safe_json(doc_meta or {}),
-        volumes_json     = _safe_json(
-            {k: {"rows": list(v["rows"]), "field_meta": v["field_meta"], "doc_meta": v.get("doc_meta", {})}
-             for k, v in (volumes or {}).items()}
-        ),
-        viewer_url_json  = _safe_json(viewer_url),
-        manifest_url_json = _safe_json(manifest_url),
-        full_page_thumbs_json = _safe_json(full_page_thumbs),
+        data_block      = data_block,
+        init_block      = init_block,
+        title_json_safe = title.replace('"', '&quot;'),
     )
 
 
@@ -1651,6 +1721,14 @@ def main() -> None:
         action="store_true",
         help="Suppress progress output",
     )
+    parser.add_argument(
+        "--external-csv",
+        action="store_true",
+        help="Generate a lightweight HTML shell that fetches entry data from the CSV "
+             "at runtime via fetch(), rather than embedding it inline. "
+             "The CSV must be served from the same location as the HTML (e.g. GitHub Pages). "
+             "Cannot be used with multi-source collections.",
+    )
     args = parser.parse_args()
 
     sources = [Path(s) for s in args.source]
@@ -1699,6 +1777,13 @@ def main() -> None:
 
     csv_path = all_csvs[0]  # used for title/meta fallback
     collection_mode = len(all_csvs) > 1
+
+    if args.external_csv and collection_mode:
+        print(
+            "Error: --external-csv cannot be used with multiple source CSVs (collection mode).",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     # For a collection, write the explorer one level up (the slug directory),
     # not inside an individual item subdirectory.
@@ -1805,7 +1890,8 @@ def main() -> None:
                       volumes=volumes if collection_mode else None,
                       viewer_url=viewer_url,
                       manifest_url=manifest_url,
-                      full_page_thumbs=args.full_page_thumbs)
+                      full_page_thumbs=args.full_page_thumbs,
+                      external_csv=csv_path.name if args.external_csv else "")
     out_path.write_text(html, encoding="utf-8")
     if not args.quiet:
         print(f"Explorer written to {out_path}", file=sys.stderr)
