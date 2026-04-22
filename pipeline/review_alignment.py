@@ -555,6 +555,11 @@ canvas{cursor:crosshair;display:block;background:#fff}
     <button id="reset-alignment-btn" onclick="enterClearMode()" disabled title="Move all existing matched lines back to unmatched so you can re-align from scratch">Reset alignment</button>
     <button id="cancel-clear-btn" onclick="cancelClearMode()" style="display:none" class="done">Cancel reset</button>
     <span id="status"></span>
+    <input id="txt-search" type="text" placeholder="Search text…"
+           style="width:150px;padding:2px 5px;font-size:12px;border:1px solid #aaa;border-radius:3px;margin-left:8px;"
+           oninput="onSearchInput(this.value)">
+    <span id="search-count" style="font-size:11px;color:#555;min-width:55px;display:inline-block;padding-left:4px;"></span>
+    <button id="btn-search-next" onclick="searchNext()" style="font-size:12px;padding:2px 7px;" disabled>▼</button>
     <button id="done-btn" class="done" onclick="finishReview()">Done reviewing</button>
   </div>
   <div id="tab-bar">
@@ -573,6 +578,10 @@ canvas{cursor:crosshair;display:block;background:#fff}
     <span class="bl-item">
       <svg width="14" height="14"><rect x="1" y="1" width="12" height="12" fill="none" stroke="rgba(240,100,0,0.9)" stroke-width="2" stroke-dasharray="4,2"/></svg>
       your selection
+    </span>
+    <span class="bl-item">
+      <svg width="14" height="14"><rect x="1" y="1" width="12" height="12" fill="rgba(30,100,220,0.12)" stroke="rgba(30,100,220,0.9)" stroke-width="2"/></svg>
+      search match
     </span>
   </div>
   <div id="align-content">
@@ -625,6 +634,8 @@ let scale = 1;
 let drag = null, boxes = [];   // boxes: array of {x1,y1,x2,y2} in original image coords
 let clearMode = false;         // true while the user is doing a reset-alignment session
 let savedLines = null;         // original pageData.lines preserved during clearMode
+let searchMatches = [];        // indices into pageData.lines matching current query
+let searchIdx = 0;             // which match is "current" for Next navigation
 
 // ── canvas events ──────────────────────────────────────────────────────────
 cv.addEventListener('mousedown', e => {
@@ -706,6 +717,22 @@ function render() {
       ctx.fillText(String(i + 1), b.x1*scale + 3, b.y1*scale + 14);
     }
   });
+
+  // Search match highlights — blue, drawn on top of existing boxes
+  searchMatches.forEach((lineIdx, matchPos) => {
+    const ln = pageData.lines[lineIdx];
+    if (!ln || !ln.bbox) return;
+    const [x1, y1, x2, y2] = ln.bbox;
+    const isCurrent = (matchPos === searchIdx);
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = isCurrent ? 'rgba(20,80,220,1.0)' : 'rgba(30,100,220,0.6)';
+    ctx.lineWidth = isCurrent ? 2.5 : 1.5;
+    ctx.fillStyle = isCurrent ? 'rgba(30,100,220,0.15)' : 'rgba(30,100,220,0.06)';
+    ctx.fillRect(x1*scale, y1*scale, (x2-x1)*scale, (y2-y1)*scale);
+    ctx.strokeRect(x1*scale, y1*scale, (x2-x1)*scale, (y2-y1)*scale);
+    ctx.restore();
+  });
 }
 
 // ── filter sidebar ─────────────────────────────────────────────────────────
@@ -721,6 +748,45 @@ function filterPages() {
     const volOk = !vol || elVol === vol;
     el.style.display = (cnt >= min && volOk && (!q || txt.includes(q))) ? '' : 'none';
   });
+}
+
+// ── text search ────────────────────────────────────────────────────────────
+function onSearchInput(val) {
+  runSearch(val.trim());
+  render();
+}
+
+function runSearch(q) {
+  searchMatches = [];
+  searchIdx = 0;
+  const lq = q.toLowerCase();
+  if (lq && pageData && pageData.lines) {
+    pageData.lines.forEach((ln, i) => {
+      if (ln.gemini_text && ln.gemini_text.toLowerCase().includes(lq)) {
+        searchMatches.push(i);
+      }
+    });
+  }
+  updateSearchCount();
+}
+
+function updateSearchCount() {
+  const el = document.getElementById('search-count');
+  const n = searchMatches.length;
+  el.textContent = n ? `${n} match${n > 1 ? 'es' : ''}` : '';
+  document.getElementById('btn-search-next').disabled = n === 0;
+}
+
+function searchNext() {
+  if (!searchMatches.length) return;
+  searchIdx = (searchIdx + 1) % searchMatches.length;
+  render();
+  const ln = pageData.lines[searchMatches[searchIdx]];
+  if (ln && ln.bbox) {
+    const midY = ((ln.bbox[1] + ln.bbox[3]) / 2) * scale;
+    const wrap = document.getElementById('canvas-wrap');
+    wrap.scrollTop = midY - wrap.clientHeight / 2;
+  }
 }
 
 // ── load page ──────────────────────────────────────────────────────────────
@@ -761,6 +827,10 @@ function loadPage(el) {
     .then(r => r.json())
     .then(data => {
       pageData = data;
+      // Clear search when navigating to a new page
+      searchMatches = []; searchIdx = 0;
+      document.getElementById('txt-search').value = '';
+      updateSearchCount();
       updateUnmatched(data.unmatched_gemini);
       document.getElementById('reset-alignment-btn').disabled = !data.lines || data.lines.length === 0;
       if (document.getElementById('qa-content').style.display !== 'none') renderQA();
@@ -993,6 +1063,8 @@ function saveAccepted() {
       .then(r => r.json())
       .then(data => {
         pageData = data;
+        // Re-run search against updated lines (Surya may have added/changed lines)
+        runSearch(document.getElementById('txt-search').value.trim());
         updateUnmatched(data.unmatched_gemini);
         document.getElementById('reset-alignment-btn').disabled = !data.lines || data.lines.length === 0;
         // Update sidebar count
