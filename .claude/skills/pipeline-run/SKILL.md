@@ -16,10 +16,11 @@ the project root directory.
 
 Present the following numbered choices and ask the user to pick one:
 
-1. Run full pipeline from scratch (download → OCR → CSV)
-2. Add precision bounding boxes to an existing download (Surya OCR + align)
-3. Extract or re-extract structured entries from existing OCR
-4. Create a data explorer (interactive HTML from an existing entries CSV)
+1. Run full pipeline from scratch (download → OCR → CSV + explorer)
+2. Run full pipeline with precision bounding boxes and manual review (`--guided`)
+3. Add precision bounding boxes to an existing download (Surya OCR + align)
+4. Extract or re-extract structured entries from existing OCR
+5. Create a data explorer (interactive HTML from an existing entries CSV)
 
 ## Step 2: Ask for the source
 
@@ -50,27 +51,44 @@ Use the detected state and the user's goal to construct the command.
 ### Goal 1: Full pipeline from scratch
 
 ```
-python main.py <URL> --download --gemini-ocr --extract-entries
+python main.py <URL> --extract
 ```
+
+`--extract` is shorthand for `--download --gemini-ocr --extract-entries --explore`.
+If `ner_prompt.md` exists from a prior collection run, append:
+```
+--ner-prompt output/{prior-slug}/ner_prompt.md
+```
+
+### Goal 2: Full pipeline with precision bounding boxes and manual review
+
+```
+python main.py <URL> --guided
+```
+
+`--guided` is shorthand for `--download --select-pages --surya-ocr --gemini-ocr
+--align-ocr --review-alignment --extract-entries --geocode --map`. It pauses at
+`--select-pages` (to scope which pages to process) and again at `--review-alignment`
+(to correct unmatched lines) before continuing. Requires GPU or Apple Silicon for Surya.
 
 If `ner_prompt.md` exists from a prior collection run, append:
 ```
 --ner-prompt output/{prior-slug}/ner_prompt.md
 ```
 
-### Goal 2: Add precision bounding boxes
+### Goal 3: Add precision bounding boxes
 
 Requires Surya (GPU or Apple Silicon). Command:
 ```
 python main.py output/{slug} --surya-ocr --gemini-ocr --align-ocr
 ```
 
-If `*_gemini.txt` files already exist, `--gemini-ocr` can be omitted (output is cached).
+If `*_{model}.txt` files already exist, `--gemini-ocr` can be omitted (output is cached).
 
 After alignment, `--review-alignment` opens a Flask browser UI to manually fix
 unmatched lines.
 
-### Goal 3: Extract or re-extract entries
+### Goal 4: Extract or re-extract entries
 
 Base command:
 ```
@@ -87,7 +105,7 @@ Conditional additions:
   `"text-only"` but alignment now exists, append `--force`
 - To use a specific NER model: `--model MODEL`
 
-### Goal 4: Create data explorer
+### Goal 5: Create data explorer
 
 Base command:
 ```
@@ -103,4 +121,4 @@ Show the final command in a code block. Provide a brief explanation of each flag
 used, and describe what output file(s) to expect.
 
 All stages run in fixed order regardless of flag order on the command line.
-See `main.py` lines 109–133 for the full PIPELINE stage list.
+See `main.py` lines 111–135 for the full PIPELINE stage list.

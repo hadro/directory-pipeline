@@ -85,13 +85,19 @@ After calibration, show how to process additional volumes:
 
 ```bash
 # First volume (after calibration above):
-python main.py output/{slug-vol1} --gemini-ocr --extract-entries \
+python main.py output/{slug-vol1} --extract \
   --ner-prompt output/{slug-vol1}/ner_prompt.md
 
 # Subsequent volumes — reuse prompts from volume 1:
-python main.py <URL-vol2> --download --gemini-ocr --extract-entries \
+python main.py <URL-vol2> --extract \
   --ner-prompt output/{slug-vol1}/ner_prompt.md
 ```
+
+`--extract` is shorthand for `--download --gemini-ocr --extract-entries --explore`.
+
+For the full precision path (bounding boxes + manual alignment review), use
+`--guided` instead of `--extract`. This adds Surya OCR, NW alignment, and pauses
+for interactive review before extracting entries.
 
 Notes:
 - `--select-pages` and `--generate-prompts` do not need to be re-run for later

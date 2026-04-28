@@ -72,4 +72,4 @@ Show the complete command in a code block. Explain:
 - If `canvas_fragment` values contain `#xywh=` bounding boxes (from `--align-ocr`),
   thumbnails are cropped to the exact entry region. Without alignment, the full
   page is shown. To add bounding boxes, run `--surya-ocr --align-ocr` first.
-- To generate a custom color palette from cover pages, run `--generate-palette` first.
+- Color theming via `palette.json` is applied automatically if the file is present — no extra flag needed.
