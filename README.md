@@ -31,7 +31,7 @@ python main.py https://archive.org/details/ldpd_11290437_001/ --extract \
   --ner-prompt output/ldpd_11290437_000/ner_prompt.md
 ```
 
-Requires `GEMINI_API_KEY`. Can run on the [free tier](#costs) — no billing required for collections up to ~150 pages.
+Requires `GEMINI_API_KEY`. Can run on the [free tier](#costs) — no billing required for collections up to ~150 pages. Add `--flex` to any `--gemini-ocr` run for ~50% cheaper API calls (1–15 min latency per request, best-effort availability).
 
 ---
 
@@ -99,7 +99,7 @@ python main.py URL --review-alignment     # optional: fix unmatched lines intera
 
 ## Costs
 
-A single 100-page volume costs roughly **$0.60 in Gemini API charges** with a paid account but can run within the free tier's daily quota (~15–20 minutes at 15 RPM). See [docs/costs.md](docs/costs.md) for a full breakdown including platform costs (Surya OCR on Mac, Colab, and GPU).
+A single 100-page volume costs roughly **$0.60 in Gemini API charges** with a paid account (less with `--flex`), but can run within the free tier's daily quota (~15–20 minutes at 15 RPM). See [docs/costs.md](docs/costs.md) for a full breakdown including platform costs (Surya OCR on Mac, Colab, and GPU).
 
 ---
 

@@ -10,11 +10,18 @@ Two cost categories: **API charges** (variable; applies on any platform) and **p
 
 | Stage | Model (default) | Input | Output |
 |---|---|---|---|
-| `--gemini-ocr` | `gemini-2.0-flash` | $0.10 / 1M tokens | $0.40 / 1M tokens |
-| `--extract-entries` | `gemini-3.1-flash-lite-preview` | $0.25 / 1M tokens | $1.50 / 1M tokens |
-| fallback (dense pages) | `gemini-2.5-flash` | $0.30 / 1M tokens | $2.50 / 1M tokens |
+| `--gemini-ocr` | `gemini-2.5-flash` | $0.15 / 1M tokens | $0.60 / 1M tokens |
+| `--gemini-ocr` (budget option) | `gemini-3.1-flash-lite-preview` | $0.125 / 1M tokens | $0.50 / 1M tokens |
+| `--extract-entries` | `gemini-3.1-flash-lite-preview` | $0.125 / 1M tokens | $0.50 / 1M tokens |
+| fallback (dense pages) | `gemini-2.5-flash` | $0.15 / 1M tokens | $0.60 / 1M tokens |
 
-A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens for OCR (`gemini-2.0-flash`, ~$0.0006/page), and another ~10,000 input / 2,000 output tokens for entry extraction (`gemini-3.1-flash-lite-preview`, ~$0.0055/page) — about **$0.006 per page** combined. Dense pages that exceed the output token limit automatically retry with `gemini-2.5-flash`, but this affects fewer than 5% of pages in practice.
+**Flex inference (`--flex`):** Add `--flex` to `--gemini-ocr` for approximately **50% off** the standard rates above, with 1–15 minute latency per request and best-effort availability. Flex works well for bulk runs where real-time throughput is not needed. Combine with `gemini-3.1-flash-lite-preview` for the lowest possible cost:
+
+```bash
+python main.py URL --gemini-ocr --ocr-model gemini-3.1-flash-lite-preview --flex
+```
+
+A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens for OCR (`gemini-2.5-flash`, ~$0.0009/page), and another ~10,000 input / 2,000 output tokens for entry extraction (`gemini-3.1-flash-lite-preview`, ~$0.0023/page) — about **$0.003 per page** combined. Dense pages that exceed the output token limit automatically retry with `gemini-2.5-flash`, but this affects fewer than 5% of pages in practice.
 
 `--generate-prompts` makes 2 Gemini calls with 4–8 sample images each — a one-time per-volume cost of roughly **$0.01–$0.05 total**.
 
@@ -22,11 +29,11 @@ A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens f
 
 | Collection | Pages | Prompt generation | OCR | NER | Total |
 |---|---|---|---|---|---|
-| One Green Book volume | ~100 pages | ~$0.02 (one-time) | ~$0.06 | ~$0.55 | ~$0.61 |
-| Full Green Books corpus (14 volumes) | ~1,400 pages | ~$0.02/volume | ~$0.84 | ~$7.70 | ~$8.54 |
-| Large city directory (500+ pages) | 500 pages | ~$0.02 (one-time) | ~$0.30 | ~$2.75 | ~$3.05 |
+| One Green Book volume | ~100 pages | ~$0.02 (one-time) | ~$0.09 | ~$0.23 | ~$0.32 |
+| Full Green Books corpus (14 volumes) | ~1,400 pages | ~$0.02/volume | ~$1.26 | ~$3.22 | ~$4.48 |
+| Large city directory (500+ pages) | 500 pages | ~$0.02 (one-time) | ~$0.45 | ~$1.15 | ~$1.60 |
 
-**Free tier:** The Gemini API free tier (no billing required) covers both models at no charge, subject to rate limits of 15 requests/minute and ~1,500 requests/day for `gemini-2.0-flash`. A single 100-page volume (~200 API calls total) fits comfortably within a single day's free quota, though the 15 RPM cap means the API stages take ~15–20 minutes rather than a few minutes. For a full multi-volume corpus you will either need billing enabled or spread the run across several days.
+**Free tier:** The Gemini API free tier (no billing required) covers both models at no charge, subject to rate limits of 15 requests/minute and ~1,500 requests/day. A single 100-page volume (~200 API calls total) fits comfortably within a single day's free quota, though the 15 RPM cap means the API stages take ~15–20 minutes rather than a few minutes. For a full multi-volume corpus you will either need billing enabled or spread the run across several days.
 
 **Chandra OCR** (`--chandra-ocr`) uses a local 5B model — no API key or API cost. Requires GPU.
 

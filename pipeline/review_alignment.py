@@ -11,7 +11,7 @@ Opens a local web UI where you can:
 Usage
 -----
     uv run review_alignment.py output/
-    uv run review_alignment.py output/ --model gemini-2.0-flash --port 5001
+    uv run review_alignment.py output/ --model gemini-3.1-flash-lite-preview --port 5001
 
 Then open http://localhost:5000 in your browser.
 """
@@ -38,7 +38,7 @@ PROJECT_ROOT: Path = Path(__file__).parent.parent
 
 # Set at startup
 OUTPUT_ROOT: Path = Path("output")
-MODEL: str = "gemini-2.0-flash"
+MODEL: str = "gemini-3.1-flash-lite-preview"
 
 # Surya models – pre-loaded at startup (see main())
 _det = None
@@ -373,6 +373,29 @@ def save():
     return jsonify({"ok": True, "remaining_unmatched": len(unmatched)})
 
 
+@app.route("/delete_lines", methods=["POST"])
+def delete_lines():
+    """Remove matched lines by bbox and return their gemini_text to unmatched."""
+    body = request.json
+    json_path = Path(body["json_path"])
+    bboxes_to_delete = {tuple(b) for b in body["bboxes"]}
+
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    removed_texts = []
+    kept = []
+    for ln in data.get("lines", []):
+        if tuple(ln["bbox"]) in bboxes_to_delete:
+            if ln.get("gemini_text"):
+                removed_texts.append(ln["gemini_text"])
+        else:
+            kept.append(ln)
+    data["lines"] = kept
+    data["unmatched_gemini"] = removed_texts + list(data.get("unmatched_gemini", []))
+    json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return jsonify({"ok": True, "removed": len(removed_texts),
+                    "remaining_unmatched": len(data["unmatched_gemini"])})
+
+
 @app.route("/done", methods=["POST"])
 def done():
     """Shut the server down so the pipeline can continue to the next stage."""
@@ -412,6 +435,7 @@ body{display:flex;height:100vh;font:13px/1.4 system-ui,sans-serif;overflow:hidde
 .pi .nm{font-family:monospace;font-size:11px;color:#555;word-break:break-all}
 .pi .low-conf-badge{display:inline-block;font-size:10px;font-weight:700;color:#fff;background:#e65100;border-radius:3px;padding:1px 5px;margin-left:4px;vertical-align:middle}
 #low-conf-banner{display:none;padding:7px 12px;background:#fff3e0;border-bottom:2px solid #e65100;font-size:12px;color:#bf360c}
+#delete-banner{display:none;padding:6px 12px;background:#fce8e6;border-bottom:2px solid #c62828;font-size:12px;color:#7f0000;align-items:center;gap:8px}
 
 /* ── main ── */
 #main{flex:1;display:flex;flex-direction:column;overflow:hidden}
@@ -547,6 +571,12 @@ canvas{cursor:crosshair;display:block;background:#fff}
 
 <div id="main">
   <div id="low-conf-banner"></div>
+  <div id="delete-banner">
+    <span id="delete-count"></span> selected for deletion —
+    <button class="danger" style="padding:2px 8px;font-size:12px" onclick="commitDeletions()">Commit deletions</button>
+    <button style="padding:2px 8px;font-size:12px" onclick="cancelSelection()">Cancel</button>
+    <span style="font-size:11px;margin-left:4px">(shift-click to multi-select · Delete key to commit)</span>
+  </div>
   <div id="toolbar">
     <span id="page-name">← select a page</span>
     <button id="clear-btn" onclick="clearBoxes()" disabled>Clear box</button>
@@ -582,6 +612,10 @@ canvas{cursor:crosshair;display:block;background:#fff}
     <span class="bl-item">
       <svg width="14" height="14"><rect x="1" y="1" width="12" height="12" fill="rgba(30,100,220,0.12)" stroke="rgba(30,100,220,0.9)" stroke-width="2"/></svg>
       search match
+    </span>
+    <span class="bl-item">
+      <svg width="14" height="14"><rect x="1" y="1" width="12" height="12" fill="rgba(200,0,0,0.12)" stroke="rgba(200,0,0,0.9)" stroke-width="2"/></svg>
+      pending deletion
     </span>
   </div>
   <div id="align-content">
@@ -636,6 +670,8 @@ let clearMode = false;         // true while the user is doing a reset-alignment
 let savedLines = null;         // original pageData.lines preserved during clearMode
 let searchMatches = [];        // indices into pageData.lines matching current query
 let searchIdx = 0;             // which match is "current" for Next navigation
+let hoveredLine = null;        // line object currently under the cursor (or null)
+let selectedIndices = new Set(); // indices into pageData.lines pending deletion
 
 // ── canvas events ──────────────────────────────────────────────────────────
 cv.addEventListener('mousedown', e => {
@@ -645,16 +681,37 @@ cv.addEventListener('mousedown', e => {
   render();
 });
 cv.addEventListener('mousemove', e => {
-  if (!drag) return;
   const r = cv.getBoundingClientRect();
-  drag.x2 = e.clientX - r.left;
-  drag.y2 = e.clientY - r.top;
-  render();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  if (drag) {
+    drag.x2 = mx;
+    drag.y2 = my;
+    render();
+    return;
+  }
+  if (!pageData || clearMode) return;
+  const hit = pageData.lines.find(ln => {
+    const [x1,y1,x2,y2] = ln.bbox.map(v => v * scale);
+    return mx >= x1 && mx <= x2 && my >= y1 && my <= y2;
+  });
+  if (hit !== hoveredLine) {
+    hoveredLine = hit || null;
+    render();
+  }
+});
+cv.addEventListener('mouseleave', () => {
+  if (hoveredLine) { hoveredLine = null; render(); }
+});
+document.addEventListener('keydown', e => {
+  if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
+  if (e.key === 'Escape' && selectedIndices.size > 0) { cancelSelection(); }
+  else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIndices.size > 0) { commitDeletions(); }
 });
 cv.addEventListener('mouseup', e => {
   if (!drag) return;
   const r = cv.getBoundingClientRect();
   const ex = e.clientX - r.left, ey = e.clientY - r.top;
+  const isClick = Math.abs(ex - drag.x) < 6 && Math.abs(ey - drag.y) < 6;
   const b = {
     x1: Math.round(Math.min(drag.x, ex) / scale),
     y1: Math.round(Math.min(drag.y, ey) / scale),
@@ -662,7 +719,29 @@ cv.addEventListener('mouseup', e => {
     y2: Math.round(Math.max(drag.y, ey) / scale),
   };
   drag = null;
-  if ((b.x2 - b.x1) > 20 && (b.y2 - b.y1) > 10) {
+  if (isClick && pageData && !clearMode) {
+    // Hit-test: see if click landed on a matched line
+    const hitIdx = pageData.lines.findIndex(ln => {
+      const [x1,y1,x2,y2] = ln.bbox.map(v => v * scale);
+      return ex >= x1 && ex <= x2 && ey >= y1 && ey <= y2;
+    });
+    if (hitIdx >= 0) {
+      if (e.shiftKey) {
+        if (selectedIndices.has(hitIdx)) selectedIndices.delete(hitIdx);
+        else selectedIndices.add(hitIdx);
+      } else {
+        // Toggle single; plain click on already-sole selection deselects
+        if (selectedIndices.has(hitIdx) && selectedIndices.size === 1) selectedIndices.clear();
+        else { selectedIndices.clear(); selectedIndices.add(hitIdx); }
+      }
+    } else {
+      selectedIndices.clear();  // click on empty space clears selection
+    }
+    updateDeleteBanner();
+    render();
+    return;
+  }
+  if (!isClick && (b.x2 - b.x1) > 20 && (b.y2 - b.y1) > 10) {
     boxes.push(b);
   }
   updateBoxButtons();
@@ -693,6 +772,44 @@ function render() {
       }
       ctx.strokeRect(x1, y1, x2-x1, y2-y1);
     }
+  }
+
+  // Pending-deletion overlays — red, drawn above green/amber boxes
+  if (!clearMode && selectedIndices.size > 0) {
+    ctx.save();
+    ctx.lineWidth = 2;
+    selectedIndices.forEach(idx => {
+      const ln = pageData.lines[idx];
+      if (!ln || !ln.bbox) return;
+      const [x1,y1,x2,y2] = ln.bbox.map(v => v * scale);
+      ctx.strokeStyle = 'rgba(200,0,0,0.9)';
+      ctx.fillStyle = 'rgba(200,0,0,0.12)';
+      ctx.fillRect(x1, y1, x2-x1, y2-y1);
+      ctx.strokeRect(x1, y1, x2-x1, y2-y1);
+    });
+    ctx.restore();
+  }
+
+  // Hover tooltip — drawn on top of boxes, below drag/committed overlays
+  if (!clearMode && hoveredLine && hoveredLine.gemini_text) {
+    const label = hoveredLine.gemini_text;
+    const [x1,y1,x2,y2] = hoveredLine.bbox.map(v => v * scale);
+    const pad = 5;
+    ctx.font = '12px sans-serif';
+    const tw = ctx.measureText(label).width;
+    const th = 16;
+    let tx = x1;
+    let ty = y1 - th - pad * 2 - 2;
+    if (ty < 0) ty = y2 + 2;
+    if (tx + tw + pad * 2 > cv.width) tx = cv.width - tw - pad * 2;
+    ctx.save();
+    ctx.fillStyle = 'rgba(20,20,20,0.82)';
+    ctx.beginPath();
+    ctx.roundRect(tx, ty, tw + pad * 2, th + pad * 2, 3);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, tx + pad, ty + pad + th - 2);
+    ctx.restore();
   }
 
   // Live drag box — dashed orange
@@ -733,6 +850,52 @@ function render() {
     ctx.strokeRect(x1*scale, y1*scale, (x2-x1)*scale, (y2-y1)*scale);
     ctx.restore();
   });
+}
+
+// ── pending-deletion management ────────────────────────────────────────────
+function updateDeleteBanner() {
+  const banner = document.getElementById('delete-banner');
+  const n = selectedIndices.size;
+  if (n === 0) { banner.style.display = 'none'; return; }
+  document.getElementById('delete-count').textContent = n + ' line' + (n > 1 ? 's' : '');
+  banner.style.display = 'flex';
+}
+
+function cancelSelection() {
+  selectedIndices.clear();
+  updateDeleteBanner();
+  render();
+}
+
+function commitDeletions() {
+  if (!selectedIndices.size || !pageInfo) return;
+  const bboxes = [...selectedIndices].map(i => pageData.lines[i].bbox);
+  setStatus('Removing ' + bboxes.length + ' line(s)…');
+  fetch('/delete_lines', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ json_path: pageInfo.json_path, bboxes }),
+  })
+  .then(r => r.json())
+  .then(result => {
+    if (!result.ok) { setStatus('Delete failed.'); return; }
+    setStatus(`Removed ${result.removed} line(s). ${result.remaining_unmatched} unmatched remain.`);
+    selectedIndices.clear();
+    updateDeleteBanner();
+    fetch('/page_data?json_path=' + encodeURIComponent(pageInfo.json_path))
+      .then(r => r.json())
+      .then(data => {
+        pageData = data;
+        runSearch(document.getElementById('txt-search').value.trim());
+        updateUnmatched(data.unmatched_gemini);
+        document.getElementById('reset-alignment-btn').disabled = !data.lines || data.lines.length === 0;
+        document.querySelectorAll('.pi.active .cnt').forEach(el => {
+          el.textContent = data.unmatched_gemini.length + ' unmatched';
+        });
+        render();
+      });
+  })
+  .catch(err => setStatus('Error: ' + err));
 }
 
 // ── filter sidebar ─────────────────────────────────────────────────────────
@@ -801,6 +964,7 @@ function loadPage(el) {
   };
   pageInfo = info;
   boxes = []; drag = null;
+  selectedIndices.clear(); updateDeleteBanner();
   // Exit any active clear-mode session when switching pages
   clearMode = false; savedLines = null;
   document.getElementById('reset-alignment-btn').style.display = '';
@@ -887,6 +1051,7 @@ function clearBoxes() {
 // Nothing is written to disk until the user saves a new alignment.
 function enterClearMode() {
   if (!pageData || !pageData.lines || pageData.lines.length === 0) return;
+  selectedIndices.clear(); updateDeleteBanner();
   savedLines = pageData.lines.slice();  // snapshot original lines
   clearMode = true;
 
@@ -1239,7 +1404,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--model", "-m",
-        default="gemini-2.0-flash",
+        default="gemini-3.1-flash-lite-preview",
         help="Gemini model name used in aligned JSON filenames (default: gemini-2.0-flash)",
     )
     parser.add_argument(

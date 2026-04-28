@@ -56,6 +56,17 @@ _DITTO_INSTRUCTION = (
     "write out the full repeated value on each line rather than transcribing the mark itself."
 )
 
+# Appended to the OCR meta-prompt when pixel analysis detects a two-column layout,
+# to ensure the generated prompt explicitly forbids merging columns onto one line.
+_COLUMN_INJECTION = (
+    "\n\nIMPORTANT — pixel analysis of the sample pages confirms a two-column layout. "
+    "Your generated prompt MUST include this instruction verbatim, placed immediately "
+    "after the column-layout sentence:\n\n"
+    '  "When the page has two columns, text in the left column and text in the right '
+    "column at the same vertical position are two separate output lines. Never place "
+    'entries from both columns on the same output line."'
+)
+
 # Locate sibling prompts/ directory (two levels up from this file)
 _PIPELINE_ROOT = Path(__file__).parent.parent
 _DEFAULT_OCR_PROMPT = _PIPELINE_ROOT / "prompts" / "ocr_prompt.md"
@@ -84,8 +95,11 @@ categories, and entries. Use concrete examples from what you see (e.g. \
 STATE → CITY → CATEGORY → one-line entries, or CITY → street listing with \
 occupants, etc.).
 
-3. **Column layout** — Typical number of columns. Note exceptions (e.g., \
-full-width headings, index pages, advertisements).
+3. **Column layout** — Typical number of columns on content pages. If pages are \
+two-column, say so explicitly and include this instruction: "When the page has two \
+columns, text in the left column and text in the right column at the same vertical \
+position are two separate output lines. Never place entries from both columns on the \
+same output line." Note exceptions (full-width headings, index pages, advertisements).
 
 4. **Typographic and formatting conventions** — Common abbreviations \
 (e.g. St., Ave., Cor., Bds., N.W.), punctuation styles, whether entries \
@@ -239,6 +253,31 @@ def _save(text: str, path: Path, quiet: bool) -> None:
     path.write_text(text + "\n", encoding="utf-8")
     if not quiet:
         print(f"  Saved → {path}", file=sys.stderr)
+
+
+def _detect_two_columns(image_paths: list[Path]) -> bool:
+    """Return True if the majority of sample pages appear to be two-column layout.
+
+    Delegates to detect_columns.analyze_image(), which uses recursive valley
+    prominence on the vertical dark-pixel projection.  Uses a conservative
+    gutter_threshold of 0.45 (only deep, unambiguous gutters count) to avoid
+    false positives from single-column layouts with leader dots or binding edges.
+
+    A strict majority of usable pages must be detected as 2-column.
+    """
+    from detect_columns import analyze_image  # sibling pipeline module
+
+    two_col = 0
+    usable = 0
+    for p in image_paths[:6]:
+        try:
+            result = analyze_image(p, margin_frac=0.10, gutter_threshold=0.45)
+            usable += 1
+            if result["num_columns"] >= 2:
+                two_col += 1
+        except Exception:
+            pass
+    return usable > 0 and two_col > max(1, usable // 2)
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +459,13 @@ def main() -> None:
             ocr_meta = _OCR_META_PROMPT.format(n=len(image_names))
             if args.expand_dittos:
                 ocr_meta = ocr_meta.rstrip() + _DITTO_INSTRUCTION
+            if _detect_two_columns([item_dir / n for n in image_names]):
+                if not args.quiet:
+                    print(
+                        "  Detected two-column layout — injecting column instruction.",
+                        file=sys.stderr,
+                    )
+                ocr_meta = ocr_meta.rstrip() + _COLUMN_INJECTION
             ocr_text = _call_gemini(client, args.model, ocr_meta, image_parts, args.quiet)
         except Exception as exc:
             print(f"Error generating OCR prompt: {exc}", file=sys.stderr)

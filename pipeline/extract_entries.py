@@ -40,6 +40,7 @@ With aligned JSON (adds precise bounding-box fragments):
 import argparse
 import csv
 import difflib
+import io
 import json
 import os
 import re
@@ -48,16 +49,18 @@ import threading
 import time
 from pathlib import Path
 
+from PIL import Image
+
 from dotenv import load_dotenv
 from google import genai
 
 load_dotenv()
-from google.genai.types import GenerateContentConfig, Part
+from google.genai.types import GenerateContentConfig, HttpOptions, Part
 
 DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
 # Fallback used when the primary model appears to have hit its output token limit.
 # Lite models cap output at ~8 k tokens; the fallback handles dense pages with 100+ entries.
-FALLBACK_MODEL = "gemini-2.5-flash"
+FALLBACK_MODEL = "gemini-3-flash"
 NER_PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ner_prompt.md"
 
 
@@ -206,17 +209,32 @@ def model_slug(model: str) -> str:
 # Gemini API
 # ---------------------------------------------------------------------------
 
+# Gemini tiles images at 768 px; staying at or below this boundary keeps each
+# page image to exactly one tile (258 tokens) regardless of original resolution.
+_MULTIMODAL_MAX_PX = 768
+
+
+def _resize_image_bytes(image_path: Path, max_px: int = _MULTIMODAL_MAX_PX) -> bytes:
+    """Return JPEG bytes for image_path resized to fit within max_px × max_px."""
+    img = Image.open(image_path)
+    img.thumbnail((max_px, max_px), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
 def _call_gemini(
     client: genai.Client,
     model: str,
     system_prompt: str,
     user_text: str,
     image_path: Path | None = None,
+    service_tier: str | None = None,
 ) -> str:
     """Call Gemini with optional image. Returns raw response text."""
     parts: list = []
     if image_path is not None:
-        parts.append(Part.from_bytes(data=image_path.read_bytes(), mime_type="image/jpeg"))
+        parts.append(Part.from_bytes(data=_resize_image_bytes(image_path), mime_type="image/jpeg"))
     parts.append(Part.from_text(text=user_text))
 
     max_retries = 5
@@ -229,13 +247,15 @@ def _call_gemini(
                     system_instruction=system_prompt,
                     temperature=0.0,
                     max_output_tokens=65536,
+                    http_options=HttpOptions(extra_body={"service_tier": service_tier}) if service_tier else None,
                 ),
                 contents=parts,
             )
             return response.text or ""
         except Exception as exc:
-            if "429" in str(exc) and attempt < max_retries - 1:
-                _log(f"  Rate limited — retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+            retryable = ("429" in str(exc) or "503" in str(exc) or "overloaded" in str(exc).lower())
+            if retryable and attempt < max_retries - 1:
+                _log(f"  Transient error ({exc}) — retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
                 time.sleep(delay)
                 delay *= 2
             else:
@@ -489,6 +509,7 @@ def _run_ner_call(
     image_path: "Path | None",
     error_path: Path,
     fallback_model: "str | None",
+    service_tier: "str | None" = None,
 ) -> "tuple[dict | None, bool, str | None]":
     """Call Gemini NER with primary + optional fallback model, then partial recovery.
 
@@ -501,7 +522,7 @@ def _run_ner_call(
     """
     # Primary API call
     try:
-        last_raw = _call_gemini(client, model, system_prompt, user_msg, image_path)
+        last_raw = _call_gemini(client, model, system_prompt, user_msg, image_path, service_tier)
     except Exception as exc:
         return None, False, str(exc)
     result = _parse_json_response(last_raw)
@@ -513,7 +534,7 @@ def _run_ner_call(
             f" with fallback model {fallback_model}"
         )
         try:
-            last_raw = _call_gemini(client, fallback_model, system_prompt, user_msg, image_path)
+            last_raw = _call_gemini(client, fallback_model, system_prompt, user_msg, image_path, service_tier)
             result = _parse_json_response(last_raw)
         except Exception as exc:
             _log(f"    [{page_name}] fallback model error: {exc}")
@@ -551,6 +572,7 @@ def process_page(
     dry_run: bool,
     aligned_model: str | None = None,
     fallback_model: str | None = FALLBACK_MODEL,
+    service_tier: str | None = None,
 ) -> dict:
     """
     Extract entries from one aligned JSON page.
@@ -596,14 +618,14 @@ def process_page(
     # Resolve image path for multimodal mode
     image_path: Path | None = None
     if mode == "multimodal":
-        image_path = _img_path_from_aligned(aligned_path, slug)
+        image_path = _img_path_from_aligned(aligned_path, aligned_slug)
         if image_path is None:
             _log(f"    Warning: image not found for {aligned_path.name}; falling back to text-only")
 
     error_path = aligned_path.parent / f"{stem}_{slug}_entries_error.txt"
     result, partial, api_error = _run_ner_call(
         client, aligned_path.name, model, system_prompt, user_msg,
-        image_path, error_path, fallback_model,
+        image_path, error_path, fallback_model, service_tier,
     )
     if api_error:
         return {"entries": [], "page_context": prior_context, "status": f"api_error:{api_error}"}
@@ -684,6 +706,7 @@ def process_page_txt(
     dry_run: bool,
     aligned_model: str | None = None,
     fallback_model: str | None = FALLBACK_MODEL,
+    service_tier: str | None = None,
 ) -> dict:
     """Extract entries from one raw Gemini .txt page (no alignment data).
 
@@ -733,7 +756,7 @@ def process_page_txt(
     error_path = txt_path.parent / f"{stem}_{slug}_entries_error.txt"
     result, partial, api_error = _run_ner_call(
         client, txt_path.name, model, system_prompt, user_msg,
-        image_path, error_path, fallback_model,
+        image_path, error_path, fallback_model, service_tier,
     )
     if api_error:
         return {"entries": [], "page_context": prior_context, "status": f"api_error:{api_error}"}
@@ -776,6 +799,7 @@ def process_item(
     quiet: bool,
     aligned_model: str | None = None,
     fallback_model: str | None = FALLBACK_MODEL,
+    service_tier: str | None = None,
 ) -> list[dict]:
     """
     Process all aligned JSON pages in an item directory in page order.
@@ -839,7 +863,7 @@ def process_item(
             result = process_page_txt(
                 client, txt_path, canvas_uri, model, system_prompt,
                 context, mode, force, dry_run, aligned_model,
-                fallback_model=fallback_model,
+                fallback_model=fallback_model, service_tier=service_tier,
             )
             status = result["status"]
             n = len(result["entries"])
@@ -880,7 +904,7 @@ def process_item(
         result = process_page(
             client, aligned_path, model, system_prompt,
             context, mode, page_force, dry_run, aligned_model,
-            fallback_model=fallback_model,
+            fallback_model=fallback_model, service_tier=service_tier,
         )
         status = result["status"]
         n = len(result["entries"])
@@ -996,6 +1020,14 @@ def main() -> None:
         action="store_true",
         help="Suppress per-page progress output",
     )
+    parser.add_argument(
+        "--flex",
+        action="store_true",
+        help=(
+            "Use Gemini Flex inference (service_tier='flex'): ~50%% cheaper, "
+            "1–15 min latency per request, best-effort availability."
+        ),
+    )
     args = parser.parse_args()
 
     # API key
@@ -1086,6 +1118,9 @@ def main() -> None:
         sys.exit(1)
 
     fallback_model = args.fallback_model or None  # empty string → disabled
+    service_tier = "flex" if args.flex else None
+    if service_tier and not args.quiet:
+        print("Flex inference enabled (service_tier='flex')", file=sys.stderr)
 
     print(
         f"\nExtracting entries: {len(item_dirs)} item dir(s), model={args.model}"
@@ -1109,7 +1144,7 @@ def main() -> None:
         entries = process_item(
             client, item_dir, args.model, item_prompt,
             args.mode, args.force, args.dry_run, args.quiet, aligned_model,
-            fallback_model=fallback_model,
+            fallback_model=fallback_model, service_tier=service_tier,
         )
         if not args.dry_run:
             csv_path = item_dir / f"entries_{slug}.csv"

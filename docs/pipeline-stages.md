@@ -217,6 +217,12 @@ instruction to the system prompt, directing the model to interpret `"` ditto mar
 as repeating the value from the line above. Useful for directories that use ditto
 marks to avoid repeating city names or categories.
 
+**Flex inference (`--flex`).** Pass `--flex` to use Gemini's Flex inference tier
+(`service_tier="flex"`): approximately 50% cheaper than standard pricing, with
+1–15 minute latency per request and best-effort availability. Recommended for large
+bulk runs. Combine with `--ocr-model gemini-3.1-flash-lite-preview` for the lowest
+cost option.
+
 #### `analysis/compare_ocr.py` — Model comparison
 Calls multiple models (any mix of Gemini model names and the special token
 `surya`) on each image and produces:

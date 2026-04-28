@@ -79,6 +79,7 @@ Usage
 """
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -394,6 +395,8 @@ def build_stage_args(
                 a += ["--high-res"]
             if getattr(parsed, "ocr_prompt", None):
                 a += ["--prompt-file", parsed.ocr_prompt]
+            if getattr(parsed, "flex", False):
+                a += ["--flex"]
             runs.append(a)
         return runs  # list[list[str]] — one run per model
 
@@ -593,6 +596,8 @@ def build_stage_args(
                 a += ["--prompt", parsed.ner_prompt]
             if getattr(parsed, "force", False):
                 a += ["--force"]
+            if getattr(parsed, "flex", False):
+                a += ["--flex"]
             runs.append(a)
         return runs
 
@@ -939,6 +944,16 @@ def main() -> None:
         help="Two or more Gemini models for --compare-ocr",
     )
     opts.add_argument(
+        "--flex",
+        action="store_true",
+        default=False,
+        help=(
+            "Use Gemini Flex inference for --gemini-ocr: ~50%% cheaper, "
+            "1–15 min latency per request. Good for large batches where "
+            "real-time throughput is not required."
+        ),
+    )
+    opts.add_argument(
         "--workers",
         type=int,
         default=None,
@@ -1029,6 +1044,17 @@ def main() -> None:
         "--force",
         action="store_true",
         help="Force --split-spreads to delete and re-split existing output files",
+    )
+    opts.add_argument(
+        "--retry-merged",
+        action="store_true",
+        dest="retry_merged",
+        help=(
+            "Find pages flagged possible_column_merge=true in existing aligned JSON "
+            "files, delete their Gemini OCR .txt outputs, then automatically run "
+            "--gemini-ocr and --align-ocr to fix them. Combine with --ocr-prompt to "
+            "use an updated prompt for the re-OCR pass."
+        ),
     )
     opts.add_argument(
         "--min-surya-confidence",
@@ -1147,7 +1173,7 @@ def main() -> None:
         and not enabled & {"nypl_csv", "loc_csv", "ia_csv"}
     )
 
-    if not enabled:
+    if not enabled and not getattr(args, "retry_merged", False):
         parser.error(
             "No pipeline stages selected. "
             "Use --nypl-csv, --loc-csv, --ia-csv, --iiif-csv, --download, --surya-ocr, "
@@ -1308,6 +1334,41 @@ def main() -> None:
 
         # Per-target stage set — may include an auto-detected *-csv stage.
         target_enabled = set(enabled)
+
+        # --retry-merged: find aligned JSONs flagged possible_column_merge, delete
+        # their .txt files so --gemini-ocr will re-OCR them, then force both
+        # --gemini-ocr and --align-ocr to run for this target.
+        if getattr(args, "retry_merged", False):
+            _ocr_slug = (args.ocr_model or "gemini-2.0-flash").replace("/", "_")
+            _flagged: list[Path] = []
+            for _json_path in sorted(output_dir.rglob(f"*_{_ocr_slug}_aligned.json")):
+                if uuid and uuid not in _json_path.parts:
+                    continue
+                try:
+                    _data = json.loads(_json_path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if _data.get("possible_column_merge"):
+                    _txt = _json_path.with_name(
+                        _json_path.stem[: -len("_aligned")] + ".txt"
+                    )
+                    if _txt.exists():
+                        _flagged.append(_txt)
+            if not _flagged:
+                print(
+                    "  --retry-merged: no merged-column pages found.", file=sys.stderr
+                )
+            else:
+                print(
+                    f"  --retry-merged: {len(_flagged)} page(s) flagged — "
+                    "deleting OCR files and queuing re-OCR + re-alignment…",
+                    file=sys.stderr,
+                )
+                for _txt in _flagged:
+                    _txt.unlink()
+                target_enabled.add("gemini_ocr")
+                target_enabled.add("align_ocr")
+                args.force = True
         if _auto_infer_csv:
             csv_check = Path("output") / slug / f"{slug}.csv"
             if not csv_check.exists() and not args.dry_run:

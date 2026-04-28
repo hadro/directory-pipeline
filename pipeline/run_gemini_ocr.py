@@ -13,8 +13,10 @@ Usage
 -----
     python run_gemini_ocr.py output/travelguide
     python run_gemini_ocr.py output/greenbooks --workers 8
-    python run_gemini_ocr.py output/travelguide --model gemini-2.0-flash
+    python run_gemini_ocr.py output/travelguide --model gemini-2.5-flash
     python run_gemini_ocr.py output/travelguide --quiet
+    python run_gemini_ocr.py output/travelguide --flex                      # ~50% cheaper, 1-15 min/req
+    python run_gemini_ocr.py output/travelguide --model gemini-3.1-flash-lite-preview --flex
 """
 
 import argparse
@@ -30,9 +32,9 @@ from dotenv import load_dotenv
 from google import genai
 
 load_dotenv()
-from google.genai.types import FinishReason, GenerateContentConfig, MediaResolution, Part, ThinkingConfig
+from google.genai.types import FinishReason, GenerateContentConfig, HttpOptions, MediaResolution, Part, ThinkingConfig
 
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
 
 # Keywords in the OCR prompt that indicate handwriting → high resolution recommended
@@ -176,27 +178,41 @@ def _call_gemini(
     system_prompt: str,
     media_resolution: "MediaResolution | None",
     temperature: float,
+    service_tier: str | None = None,
 ):
-    """Call Gemini with 429-retry logic. Returns the response object."""
-    max_retries = 5
-    delay = 10  # seconds; doubles on each 429
-    for attempt in range(max_retries):
+    """Call Gemini with 429-retry and 503-retry logic. Returns the response object."""
+    max_503_retries = 4
+    delay_503 = 30  # seconds; doubles on each 503
+
+    for s503 in range(max_503_retries):
         try:
-            return client.models.generate_content(
-                model=model,
-                config=GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=temperature,
-                    media_resolution=media_resolution,
-                    thinking_config=ThinkingConfig(thinking_budget=0),
-                ),
-                contents=[Part.from_bytes(data=img_bytes, mime_type="image/jpeg")],
-            )
+            max_retries = 5
+            delay = 10  # seconds; doubles on each 429
+            for attempt in range(max_retries):
+                try:
+                    return client.models.generate_content(
+                        model=model,
+                        config=GenerateContentConfig(
+                            system_instruction=system_prompt,
+                            temperature=temperature,
+                            media_resolution=media_resolution,
+                            thinking_config=ThinkingConfig(thinking_budget=0),
+                            http_options=HttpOptions(extra_body={"service_tier": service_tier}) if service_tier else None,
+                        ),
+                        contents=[Part.from_bytes(data=img_bytes, mime_type="image/jpeg")],
+                    )
+                except Exception as exc:
+                    if "429" in str(exc) and attempt < max_retries - 1:
+                        _log(f"  Rate limited — retrying {image_name} in {delay}s (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(delay)
+                        delay *= 2
+                    else:
+                        raise
         except Exception as exc:
-            if "429" in str(exc) and attempt < max_retries - 1:
-                _log(f"  Rate limited — retrying {image_name} in {delay}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(delay)
-                delay *= 2
+            if "503" in str(exc) and s503 < max_503_retries - 1:
+                _log(f"  Service unavailable — retrying {image_name} in {delay_503}s (attempt {s503 + 1}/{max_503_retries})")
+                time.sleep(delay_503)
+                delay_503 *= 2
             else:
                 raise
 
@@ -207,6 +223,7 @@ def process_image(
     model: str,
     system_prompt: str,
     media_resolution: "MediaResolution | None" = None,
+    service_tier: str | None = None,
 ) -> tuple[str, bool | None]:
     """
     OCR one image via Gemini. Returns (status, success) where status is one of
@@ -224,7 +241,7 @@ def process_image(
     with open(image_path, "rb") as f:
         img_bytes = f.read()
 
-    response = _call_gemini(client, img_bytes, image_path.name, model, system_prompt, media_resolution, temperature=0.0)
+    response = _call_gemini(client, img_bytes, image_path.name, model, system_prompt, media_resolution, temperature=0.0, service_tier=service_tier)
 
     text = response.text or ""
 
@@ -324,6 +341,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--flex",
+        action="store_true",
+        help=(
+            "Use Flex inference (service_tier='flex'): ~50%% cheaper, "
+            "1–15 min latency per request, best-effort availability."
+        ),
+    )
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="Suppress per-file progress output",
@@ -400,10 +425,13 @@ def main() -> None:
                 file=sys.stderr,
             )
 
+    service_tier = "flex" if args.flex else None
+
     total = len(images)
     if not args.quiet:
+        tier_note = " [flex inference]" if service_tier else ""
         print(
-            f"Processing {total} image(s) with {args.workers} worker(s) using {args.model}…",
+            f"Processing {total} image(s) with {args.workers} worker(s) using {args.model}{tier_note}…",
             file=sys.stderr,
         )
 
@@ -413,7 +441,7 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(process_image, client, img, args.model, system_prompt, media_resolution): img
+            executor.submit(process_image, client, img, args.model, system_prompt, media_resolution, service_tier): img
             for img in images
         }
         for future in as_completed(futures):

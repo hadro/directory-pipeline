@@ -141,6 +141,17 @@ _PASS2_MIN_LINES =  5
 # surface them for manual inspection.
 _LOW_CONFIDENCE_PAGE_THRESHOLD = 0.5
 
+# Pages where Surya detects significantly more lines than Gemini produced are
+# flagged possible_column_merge=True.  A ratio near 2.0 is the signature of
+# Gemini reading across two columns and merging each visual row into one line.
+# Pages with fewer than _MERGE_MIN_LINES (e.g. ads, covers) are excluded
+# because short pages have naturally noisy ratios.
+# _MERGE_RATIO_MAX caps the upper end: extremely high ratios (> 5×) indicate
+# a map or diagram where Surya over-detects tiny labels — not a column merge.
+_MERGE_RATIO_THRESHOLD = 1.8
+_MERGE_RATIO_MAX       = 5.0
+_MERGE_MIN_LINES       = 10
+
 # Anchor matching: commit Gemini↔Tesseract line pairs that are near-verbatim
 # matches BEFORE running the global NW.  This prevents the aligner from
 # consuming heading words (city names, state names, category lines) on the
@@ -313,6 +324,29 @@ def filter_short_lines(lines: list[dict], min_height: int | None = None) -> list
         median_h = statistics.median(heights)
         min_height = max(_MIN_LINE_HEIGHT, round(median_h * 0.35))
     return [ln for ln in lines if (ln["bbox"][3] - ln["bbox"][1]) >= min_height]
+
+
+def filter_margin_lines(
+    lines: list[dict], img_w: int, margin: float = 0.05
+) -> list[dict]:
+    """Drop Surya lines whose entire bbox falls within a left or right scan margin.
+
+    Book scans often capture a sliver of the facing page at one or both edges.
+    Surya correctly detects this text with high confidence, but it should not be
+    aligned to the main page's Gemini output.  Lines are excluded when they start
+    past the right margin boundary (x1 > img_w * (1 - margin)) or end before the
+    left margin boundary (x2 < img_w * margin).  The default 5 % margin is wide
+    enough to catch all facing-page bleed observed across tested volumes while
+    leaving no legitimate content at risk.
+    """
+    if not lines or not img_w or margin <= 0:
+        return lines
+    left_limit  = img_w * margin
+    right_limit = img_w * (1 - margin)
+    return [
+        ln for ln in lines
+        if ln["bbox"][2] >= left_limit and ln["bbox"][0] <= right_limit
+    ]
 
 
 _READING_ORDER_BAND = 50  # pixels — horizontal band height for y-band sort.
@@ -1031,14 +1065,16 @@ def align_image(
     force: bool = False,
     quiet: bool = False,
     min_surya_confidence: float = 0.35,
-) -> str:
+) -> tuple[str, bool]:
     """
     Align Gemini OCR text and OCR bounding boxes for one image.
 
     Prefers Surya (_surya.json, line-level) over Tesseract (_tesseract.hocr,
     word-level) when both are present.
 
-    Returns 'ok', 'skipped', 'missing', or 'failed'.
+    Returns (status, possible_column_merge) where status is one of
+    'ok' / 'skipped' / 'missing' / 'failed' and possible_column_merge is True
+    when the Surya:Gemini line-count ratio exceeds _MERGE_RATIO_THRESHOLD.
     """
     slug = model_slug(model)
     stem = image_path.stem
@@ -1048,13 +1084,13 @@ def align_image(
     out_path    = image_path.parent / f"{stem}_{slug}_aligned.json"
 
     if out_path.exists() and not force:
-        return "skipped"
+        return "skipped", False
 
     use_surya = surya_path.exists()
     use_hocr  = hocr_path.exists()
 
     if not gemini_txt.exists() or (not use_surya and not use_hocr):
-        return "missing"
+        return "missing", False
 
     try:
         # Parse OCR source ----------------------------------------------------
@@ -1071,6 +1107,7 @@ def align_image(
 
         lines = sort_by_reading_order(lines, page_w)
         lines = filter_short_lines(lines)
+        lines = filter_margin_lines(lines, img_w)
 
         # Gemini text ---------------------------------------------------------
         gemini_text = gemini_txt.read_text(encoding="utf-8")
@@ -1149,6 +1186,16 @@ def align_image(
             surya_median_conf is not None
             and surya_median_conf < _LOW_CONFIDENCE_PAGE_THRESHOLD
         )
+
+        # Flag pages where Gemini may have merged two columns per line.
+        n_surya  = len(lines)
+        n_gemini = len(gemini_lines)
+        ratio = n_surya / n_gemini if n_gemini >= _MERGE_MIN_LINES else 0.0
+        possible_column_merge = (
+            n_surya  >= _MERGE_MIN_LINES
+            and _MERGE_RATIO_THRESHOLD < ratio <= _MERGE_RATIO_MAX
+        )
+
         result = {
             "image": image_path.name,
             "model": model,
@@ -1157,18 +1204,19 @@ def align_image(
             "canvas_height": nat_h or None,
             "surya_median_confidence": round(surya_median_conf, 4) if surya_median_conf is not None else None,
             "needs_review": needs_review,
+            "possible_column_merge": possible_column_merge,
             "lines": result_lines,
             "unmatched_gemini": unmatched_gemini,
         }
         out_path.write_text(
             json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
         )
-        return "ok"
+        return "ok", possible_column_merge
 
     except Exception as exc:  # noqa: BLE001
         if not quiet:
             _log(f"  Error aligning {image_path.name}: {exc}")
-        return "failed"
+        return "failed", False
 
 
 # ---------------------------------------------------------------------------
@@ -1267,6 +1315,7 @@ def main() -> None:
 
     counts = {"ok": 0, "skipped": 0, "missing": 0, "failed": 0}
     completed = 0
+    flagged_merge: list[Path] = []
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
@@ -1277,12 +1326,18 @@ def main() -> None:
             image_path = futures[future]
             completed += 1
             try:
-                status = future.result()
+                status, merge_flag = future.result()
             except Exception as exc:  # noqa: BLE001
                 status = "failed"
+                merge_flag = False
                 _log(f"Warning: exception for {image_path.name}: {exc}")
 
             counts[status] += 1
+            if merge_flag:
+                slug = model_slug(args.model)
+                flagged_merge.append(
+                    image_path.parent / f"{image_path.stem}_{slug}.txt"
+                )
 
             if not args.quiet:
                 slug = model_slug(args.model)
@@ -1290,7 +1345,8 @@ def main() -> None:
                 if status == "skipped":
                     _log(f"[{completed:04d}/{total}] Skipped (exists): {out_name}")
                 elif status == "ok":
-                    _log(f"[{completed:04d}/{total}] Done:    {out_name}")
+                    suffix = " [merged-columns?]" if merge_flag else ""
+                    _log(f"[{completed:04d}/{total}] Done:    {out_name}{suffix}")
                 elif status == "missing":
                     _log(
                         f"[{completed:04d}/{total}] Missing: Surya JSON (or hOCR) "
@@ -1308,6 +1364,17 @@ def main() -> None:
         if counts["failed"]:
             parts.append(f"{counts['failed']} failed")
         print(f"\nDone. {total} image(s): {', '.join(parts)}.", file=sys.stderr)
+
+    if flagged_merge and not args.quiet:
+        pct = len(flagged_merge) / max(counts["ok"], 1) * 100
+        print(
+            f"\n⚠  {len(flagged_merge)} page(s) ({pct:.0f}% of aligned) may have "
+            f"merged columns (Surya:Gemini line ratio {_MERGE_RATIO_THRESHOLD}–{_MERGE_RATIO_MAX}).\n"
+            "Re-run Gemini OCR on these before extracting entries:",
+            file=sys.stderr,
+        )
+        for p in sorted(flagged_merge):
+            print(f"  {p}", file=sys.stderr)
 
 
 if __name__ == "__main__":
