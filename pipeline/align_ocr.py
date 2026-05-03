@@ -103,9 +103,10 @@ def _get_natural_dims(canvas_id: str) -> tuple[int, int]:
 
     Parses the IIIF Image API service base from *canvas_id* (a URL of the form
     ``https://host/prefix/identifier/region/size/rotation/quality.fmt``), then
-    fetches ``{service_base}/info.json``.  Results are cached via lru_cache.
-    Returns (0, 0) on any error.
+    fetches ``{service_base}/info.json``.  Retries once on failure.  Results
+    are cached via lru_cache.  Returns (0, 0) on any error.
     """
+    import time as _time
     parts = urlparse(canvas_id)
     path_parts = parts.path.split("/")
     # IIIF Image API path: /{prefix}/{identifier}/{region}/…
@@ -114,15 +115,20 @@ def _get_natural_dims(canvas_id: str) -> tuple[int, int]:
         return 0, 0
     service_base = f"{parts.scheme}://{parts.netloc}" + "/".join(path_parts[:4])
     info_url = f"{service_base}/info.json"
-    try:
-        with urllib.request.urlopen(info_url, timeout=15) as resp:
-            info = json.loads(resp.read())
-        w = int(info.get("width") or 0)
-        h = int(info.get("height") or 0)
-    except Exception as exc:
-        _log(f"  Warning: could not fetch {info_url}: {exc}")
-        w, h = 0, 0
-    return w, h
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(info_url, timeout=15) as resp:
+                info = json.loads(resp.read())
+            w = int(info.get("width") or 0)
+            h = int(info.get("height") or 0)
+            return w, h
+        except Exception as exc:
+            if attempt == 0:
+                _log(f"  Warning: could not fetch {info_url} (attempt 1): {exc} — retrying")
+                _time.sleep(2)
+            else:
+                _log(f"  Warning: could not fetch {info_url} (attempt 2): {exc} — giving up")
+    return 0, 0
 
 # ---------------------------------------------------------------------------
 # Tunable alignment parameters
@@ -990,11 +996,13 @@ def _build_line_aligned_lines(
             entry["surya_confidence"] = sc
         result_lines.append(entry)
 
-    # Any Gemini line not matched by a Surya line is unmatched
+    # Any Gemini line not matched by a Surya line is unmatched.
+    # Drop short fragments (≤8 chars) — these are typically edge-bleed noise
+    # from adjacent pages that cause NER to hallucinate entries.
     unmatched_gemini = [
         gemini_lines[gi]
         for gi in range(len(gemini_lines))
-        if gi not in matched_gi
+        if gi not in matched_gi and len(gemini_lines[gi].strip()) > 8
     ]
 
     # ── Remaining-column passes ───────────────────────────────────────────
@@ -1046,7 +1054,7 @@ def _build_line_aligned_lines(
         unmatched_gemini = [
             rem_gemini[gi2]
             for gi2 in range(len(rem_gemini))
-            if gi2 not in rem_matched_gi
+            if gi2 not in rem_matched_gi and len(rem_gemini[gi2].strip()) > 8
         ]
 
         if not any_matched:
@@ -1123,10 +1131,20 @@ def align_image(
         # Fetch natural image dimensions so canvas_fragment outputs native pixel
         # coords (Mirador maps xywh directly to image pixel space).
         nat_w, nat_h = (0, 0)
+        coords_from_fallback = False
         if canvas_uri:
             nat_w, nat_h = _get_natural_dims(canvas_uri)
         if not nat_w:
             nat_w, nat_h = canvas_w, canvas_h
+            coords_from_fallback = True
+            if canvas_w and canvas_w == canvas_h:
+                _log(
+                    f"  *** WARNING: {image_path.name}: info.json fetch failed after retries."
+                    f" Falling back to manifest canvas size ({canvas_w}x{canvas_h}), which is"
+                    f" SQUARE — almost certainly a placeholder. Bounding-box coordinates will"
+                    f" be in the wrong space. Re-run --align-ocr --force once the network is"
+                    f" stable, or run pipeline/rescale_canvas_fragments.py to fix in place."
+                )
 
         # For split images (_left / _right), read the sidecar to get the
         # x_offset that maps split-image coordinates back to full-spread
@@ -1202,6 +1220,7 @@ def align_image(
             "canvas_uri": canvas_uri or None,
             "canvas_width": nat_w or None,
             "canvas_height": nat_h or None,
+            "coords_from_fallback": coords_from_fallback or None,
             "surya_median_confidence": round(surya_median_conf, 4) if surya_median_conf is not None else None,
             "needs_review": needs_review,
             "possible_column_merge": possible_column_merge,

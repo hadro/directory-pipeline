@@ -43,6 +43,7 @@ Usage
 import argparse
 import json
 import sys
+import time
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
@@ -108,14 +109,19 @@ def _get_natural_dims(canvas_id: str) -> tuple[int, int]:
     if service_base in _info_cache:
         return _info_cache[service_base]
     info_url = f"{service_base}/info.json"
-    try:
-        with urllib.request.urlopen(info_url, timeout=15) as resp:
-            info = json.loads(resp.read())
-        w = int(info.get("width") or 0)
-        h = int(info.get("height") or 0)
-    except Exception as exc:
-        print(f"  Warning: could not fetch {info_url}: {exc}", file=sys.stderr)
-        w, h = 0, 0
+    w, h = 0, 0
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(info_url, timeout=15) as resp:
+                info = json.loads(resp.read())
+            w = int(info.get("width") or 0)
+            h = int(info.get("height") or 0)
+            break
+        except Exception as exc:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+            else:
+                print(f"  Warning: could not fetch {info_url}: {exc}", file=sys.stderr)
     _info_cache[service_base] = (w, h)
     return w, h
 
@@ -238,20 +244,29 @@ def export_boxes(
         print(f"  SKIP {entries_path.name}: {exc}", file=sys.stderr)
         return 0, None, 0, 0
 
-    # Canvas dimensions from sibling *_aligned.json
-    aligned_path = Path(str(entries_path).replace("_entries.json", "_aligned.json"))
+    # Canvas dimensions from sibling *_aligned.json.
+    # align_ocr.py already fetches info.json and stores the real image dimensions
+    # there, so canvas_width/canvas_height == the natural image dimensions.
+    # The entries model slug differs from the alignment model slug, so glob for
+    # any *_aligned.json sharing the same page stem (e.g. "0013_5212871").
+    page_stem = entries_path.name.split("_entries.json")[0]
+    page_stem = "_".join(page_stem.split("_")[:2])  # keep only "NNNN_imageid"
+    aligned_candidates = sorted(entries_path.parent.glob(f"{page_stem}_*_aligned.json"))
     canvas_w, canvas_h = 0, 0
-    if aligned_path.exists():
+    for aligned_path in aligned_candidates:
         try:
             aligned = json.loads(aligned_path.read_text(encoding="utf-8"))
             canvas_w = int(aligned.get("canvas_width") or 0)
             canvas_h = int(aligned.get("canvas_height") or 0)
+            if canvas_w and canvas_h:
+                break
         except Exception:
             pass
 
-    # Natural image dimensions are fetched lazily from the IIIF image service
-    # when the first canvas_fragment is encountered.
-    nat_w, nat_h = 0, 0
+    # Natural image dimensions — use cached values from the aligned JSON when
+    # available (avoids an info.json round-trip); fall back to fetching only
+    # when the aligned JSON is absent or has no dimensions recorded.
+    nat_w, nat_h = canvas_w, canvas_h
 
     def _to_natural_coords(x: int, y: int, w: int, h: int) -> tuple[int, int, int, int]:
         """Convert non-uniform canvas pixel coords to natural image pixel coords.
@@ -296,7 +311,8 @@ def export_boxes(
 
         if first_canvas_id is None:
             first_canvas_id = canvas_id
-            nat_w, nat_h = _get_natural_dims(canvas_id)
+            if not (nat_w and nat_h):
+                nat_w, nat_h = _get_natural_dims(canvas_id)
 
         x, y, w, h = _to_natural_coords(x, y, w, h)
         if w <= 0 or h <= 0:

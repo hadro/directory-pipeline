@@ -379,8 +379,9 @@ def _page_text_from_aligned(aligned: dict) -> str:
         for ln in aligned.get("lines", [])
         if ln.get("gemini_text", "").strip()
     ]
-    # Append any lines the aligner couldn't match to Tesseract (still good text)
-    lines += [_normalize_line(t) for t in aligned.get("unmatched_gemini", []) if t.strip()]
+    # Append unmatched lines, skipping short fragments (≤8 chars are typically
+    # edge-bleed noise from adjacent pages that cause NER hallucinations).
+    lines += [_normalize_line(t) for t in aligned.get("unmatched_gemini", []) if len(t.strip()) > 8]
     return "\n".join(lines)
 
 
@@ -475,6 +476,7 @@ def _is_edge_bleed(canvas_fragment: str, canvas_width: int,
     return x < edge_px or (x + w) > (canvas_width - edge_px)
 
 
+
 # ---------------------------------------------------------------------------
 # Per-page processing helpers
 # ---------------------------------------------------------------------------
@@ -484,11 +486,20 @@ def _load_cached_result(
     prior_context: dict,
     force: bool,
     dry_run: bool,
+    source_path: "Path | None" = None,
 ) -> "dict | None":
     """Return cached per-page result from *out_path*, or None if the cache
-    should be bypassed (force/dry_run), is absent, or is corrupt."""
+    should be bypassed (force/dry_run), is absent, or is corrupt.
+
+    If *source_path* is given (the aligned JSON the cache was built from),
+    the cache is also invalidated when the source is newer — so re-aligning
+    a page automatically triggers a fresh NER run.
+    """
     if force or dry_run or not out_path.exists() or out_path.stat().st_size == 0:
         return None
+    if source_path and source_path.exists():
+        if source_path.stat().st_mtime > out_path.stat().st_mtime:
+            return None
     try:
         data = json.loads(out_path.read_text(encoding="utf-8"))
         return {
@@ -593,7 +604,8 @@ def process_page(
     stem = aligned_path.name[: -len(suffix)]
     out_path = aligned_path.parent / f"{stem}_{slug}_entries.json"
 
-    if cached := _load_cached_result(out_path, prior_context, force, dry_run):
+    if cached := _load_cached_result(out_path, prior_context, force, dry_run,
+                                      source_path=aligned_path):
         return cached
 
     # Load aligned JSON

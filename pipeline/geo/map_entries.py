@@ -251,8 +251,11 @@ def _prepare_entries(
             "lon":      round(lon, 6),
         }
 
+        cf = row.get("canvas_fragment", "")
+        if cf:
+            entry["cf"] = cf
+
         if service_map is not None:
-            cf = row.get("canvas_fragment", "")
             thumb = _iiif_region_url(cf, service_map) if cf else ""
             if thumb:
                 entry["thumb"] = thumb
@@ -460,6 +463,7 @@ const CAT_COLORS     = {cat_colors_json};
 const CAT_LABELS     = {cat_labels_json};
 const TOTAL_ENTRIES  = ALL_ENTRIES.length;
 const YEAR_LABEL     = {year_label_json};
+const EXPLORER_URL   = {explorer_url_json};
 
 const map = L.map('map').setView([38.5, -96.0], 5);
 L.tileLayer(
@@ -571,7 +575,8 @@ function updateMap() {{
       (e.address ? `<div class="popup-addr">${{esc(e.address)}}</div>` : '') +
       `<div class="popup-addr">${{esc(e.city)}}, ${{esc(e.state)}}</div>` +
       `<div class="popup-cat">${{esc(CAT_LABELS[e.category] || e.category)}}</div>` +
-      `<div class="popup-page">${{esc(e.page)}}</div>`,
+      `<div class="popup-page">${{esc(e.page)}}</div>` +
+      (EXPLORER_URL && e.cf ? `<div class="popup-page"><a href="${{EXPLORER_URL}}?cf=${{encodeURIComponent(e.cf)}}" style="color:#1a6ebd;">View in explorer →</a></div>` : ''),
       {{ maxWidth: 300 }}
     );
 
@@ -719,6 +724,7 @@ def build_html(
         cat_colors_json    = safe_json(cat_colors),
         cat_labels_json    = safe_json(cat_labels),
         year_label_json    = safe_json(title_year),
+        explorer_url_json  = safe_json(explorer_url),
         map_title          = title_year,
         homepage_link_html = homepage_link_html,
         explorer_link_html = explorer_link_html,

@@ -288,6 +288,8 @@ def _classify_fields(rows: list[dict]) -> list[dict]:
         elif cardinality <= _FACET_MAX_CARDINALITY and fill_rate >= _FACET_MIN_FILL:
             field_type = "facet"
             top_values = [[v, c] for v, c in counts.most_common(_FACET_TOP_N)]
+            if "year" in col.lower() or "date" in col.lower():
+                top_values.sort(key=lambda x: x[0])
         else:
             field_type = "search"
             top_values = []
@@ -350,13 +352,18 @@ a {{ color: #1a6ebd; }}
 /* ── Main panel ── */
 #main {{ flex: 1; display: flex; flex-direction: column; overflow: hidden; }}
 #toolbar {{ padding: 10px 16px; border-bottom: 1px solid #ddd; background: #fff; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
-#search {{ flex: 1; min-width: 180px; padding: 6px 10px; border: 1px solid #767676; border-radius: 4px; font-size: 13px; }}
+#search-wrap {{ flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 3px; }}
+#search {{ width: 100%; padding: 6px 10px; border: 1px solid #767676; border-radius: 4px; font-size: 13px; }}
+#search-scope-label {{ font-size: 11px; color: #888; line-height: 1.2; }}
 #count-label {{ font-size: 12px; color: #666; white-space: nowrap; }}
 #clear-filters-btn {{ display: none; padding: 4px 10px; background: #fff; border: 1px solid #c66; border-radius: 4px; cursor: pointer; font-size: 12px; color: #b33; white-space: nowrap; }}
 #clear-filters-btn:hover {{ background: #fff0f0; border-color: #a44; }}
 #clear-filters-btn:focus-visible {{ outline: 2px solid #1a6ebd; outline-offset: 2px; }}
 #export-btn {{ padding: 5px 12px; background: #1a6ebd; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; }}
 #export-btn:hover {{ background: #155a9e; }}
+#random-btn {{ padding: 5px 12px; background: #fff; border: 1px solid #767676; border-radius: 4px; cursor: pointer; font-size: 12px; color: #595959; white-space: nowrap; }}
+#random-btn:hover {{ border-color: #1a6ebd; color: #1a6ebd; }}
+#random-btn:focus-visible {{ outline: 2px solid #1a6ebd; outline-offset: 2px; }}
 #meta-strip {{ margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; flex-shrink: 0; }}
 .meta-chip {{ font-size: 11px; background: #f0f0ee; border: 1px solid #ddd; border-radius: 10px; padding: 2px 8px; color: #555; white-space: nowrap; }}
 .meta-link {{ color: #1a6ebd; text-decoration: none; }}
@@ -394,8 +401,15 @@ td.source-cell {{ text-align: center; }}
 #no-results p {{ margin: 6px 0 0; font-size: 12px; }}
 #no-results button {{ margin-top: 14px; padding: 5px 14px; background: #1a6ebd; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }}
 #no-results button:hover {{ background: #155a9e; }}
-.table-end-sentinel td {{ text-align: center; color: #aaa; font-size: 12px; padding: 14px; border-top: 1px solid #ddd; }}
+.table-end-sentinel td {{ text-align: center; color: #595959; font-size: 12px; padding: 14px; border-top: 1px solid #ddd; }}
 mark {{ background: #ffe066; color: inherit; padding: 0 1px; border-radius: 2px; }}
+.detail-col {{ text-align: center; width: 28px; padding: 4px; }}
+.detail-col-head {{ width: 28px; padding: 4px; text-align: center; }}
+.detail-btn {{ background: none; border: none; cursor: pointer; font-size: 13px; color: #aaa; padding: 2px 4px; border-radius: 3px; }}
+.detail-btn:hover, tbody tr:hover .detail-btn {{ color: #1a6ebd; background: #eef3fb; }}
+tbody tr.selected .detail-btn {{ color: #1a6ebd; }}
+.skip-link {{ position: absolute; top: -40px; left: 0; background: #1a6ebd; color: #fff; padding: 6px 12px; z-index: 1000; text-decoration: none; font-size: 13px; border-radius: 0 0 4px 0; }}
+.skip-link:focus {{ top: 0; }}
 
 /* ── Detail panel ── */
 #detail {{ width: 380px; min-width: 300px; max-width: 440px; background: #fff; border-left: 1px solid #ddd; overflow-y: auto; display: none; }}
@@ -468,6 +482,7 @@ mark {{ background: #ffe066; color: inherit; padding: 0 1px; border-radius: 2px;
 </style>
 </head>
 <body>
+<a href="#search" class="skip-link">Skip to search</a>
 <div id="app">
 
 <!-- Sidebar -->
@@ -502,12 +517,16 @@ mark {{ background: #ffe066; color: inherit; padding: 0 1px; border-radius: 2px;
   </div>
   <div id="toolbar">
     <button id="filter-btn" style="display:none" aria-label="Open filters" aria-expanded="false" aria-controls="sidebar">&#9776; Filters</button>
-    <input id="search" type="search" placeholder="Search all fields (name, address, city…)" autocomplete="off" aria-label="Search all fields">
+    <div id="search-wrap">
+      <input id="search" type="search" placeholder="Search all fields (name, address, city…)" autocomplete="off" aria-label="Search all fields">
+      <small id="search-scope-label">Searches name, address, city, and all other fields</small>
+    </div>
     <span id="count-label" aria-live="polite" aria-atomic="true"></span>
     <button id="clear-filters-btn" aria-label="Clear all filters">\u00d7 Clear filters</button>
     <div id="meta-strip"></div>
     <button id="charts-toggle" aria-expanded="true" aria-controls="charts-row">Hide summary ▴</button>
     <button id="export-btn">Export CSV</button>
+    <button id="random-btn" title="Open a random entry from the current results">Random entry</button>
   </div>
   <div id="charts-row"></div>
   <div id="content">
@@ -552,6 +571,8 @@ let ALL_ENTRIES = ALL_INITIAL_ENTRIES;
 const FIELD_LABELS = {{
   "is_new_firm": "New listing",
   "is new firm": "New listing",
+  "volume_year": "Year",
+  "canvas_fragment": "Source",
 }};
 const VALUE_LABELS = {{
   "True": "Yes",
@@ -567,6 +588,8 @@ let searchQuery = "";
 let sortCol = null;
 let sortDir = 1;  // 1 = asc, -1 = desc
 let selectedIdx = null;
+let _detailOpener = null;
+let _pushNextHistory = false;  // set to true before renderAll() to push a history entry
 let colFilters = {{}};  // fieldName → filter string
 const showAllFacets = new Set();  // field names with expanded value list
 try {{ const _s = sessionStorage.getItem('showAllFacets'); if (_s) JSON.parse(_s).forEach(n => showAllFacets.add(n)); }} catch(e) {{}}
@@ -742,6 +765,7 @@ function renderTableBody() {{
     if (isSelected) tr.classList.add("selected");
     tr.setAttribute("tabindex", "0");
     tr.setAttribute("aria-selected", isSelected ? "true" : "false");
+    tr.dataset.idx = ALL_ENTRIES.indexOf(row);
     const q = searchQuery.trim().toLowerCase();
     displayFields.forEach(f => {{
       const td = document.createElement("td");
@@ -766,6 +790,7 @@ function renderTableBody() {{
     tr.appendChild(tdSrc);
     const rowHandler = () => {{
       selectedIdx = ALL_ENTRIES.indexOf(row);
+      _detailOpener = tr;
       showDetail(row);
       renderTableBody();
     }};
@@ -773,6 +798,16 @@ function renderTableBody() {{
     tr.addEventListener("keydown", e => {{
       if (e.key === "Enter" || e.key === " ") {{ e.preventDefault(); rowHandler(); }}
     }});
+    const tdDetail = document.createElement("td");
+    tdDetail.className = "detail-col";
+    const detailBtn = document.createElement("button");
+    detailBtn.className = "detail-btn";
+    detailBtn.setAttribute("aria-label", "Open entry details");
+    detailBtn.setAttribute("tabindex", "-1");
+    detailBtn.textContent = "▸";
+    detailBtn.addEventListener("click", e => {{ e.stopPropagation(); rowHandler(); }});
+    tdDetail.appendChild(detailBtn);
+    tr.appendChild(tdDetail);
     tbody.appendChild(tr);
   }});
 
@@ -836,6 +871,10 @@ function renderTableHead() {{
   const thSrc = document.createElement("th");
   thSrc.textContent = "Source";
   tr.appendChild(thSrc);
+  const thDetail = document.createElement("th");
+  thDetail.className = "detail-col-head";
+  thDetail.setAttribute("aria-label", "Open details");
+  tr.appendChild(thDetail);
   head.appendChild(tr);
 
   // Filter row — inputs call renderTableBody only, preserving focus
@@ -850,7 +889,11 @@ function renderTableHead() {{
       const opt0 = document.createElement("option");
       opt0.value = ""; opt0.textContent = "(all)";
       sel.appendChild(opt0);
-      f.top_values.forEach(([val]) => {{
+      // Only show values present in the current filtered result set
+      const presentVals = new Set(getFiltered().map(r => r[f.name] || "").filter(Boolean));
+      if (colFilters[f.name] && !presentVals.has(colFilters[f.name])) colFilters[f.name] = "";
+      const visibleVals = f.top_values.filter(([val]) => presentVals.has(val));
+      visibleVals.forEach(([val]) => {{
         const opt = document.createElement("option");
         opt.value = val; opt.textContent = val || "(empty)";
         if (colFilters[f.name] === val) opt.selected = true;
@@ -869,6 +912,7 @@ function renderTableHead() {{
     filterRow.appendChild(fth);
   }});
   filterRow.appendChild(document.createElement("th"));  // Source column
+  filterRow.appendChild(document.createElement("th"));  // Details column
   head.appendChild(filterRow);
 }}
 
@@ -1031,12 +1075,18 @@ function showDetail(row) {{
   }} else {{
     src.innerHTML = "";
   }}
+  document.getElementById("detail-close").focus();
 }}
 
 document.getElementById("detail-close").addEventListener("click", () => {{
   document.getElementById("detail").classList.remove("open");
+  const prevIdx = selectedIdx;
   selectedIdx = null;
   renderTable();
+  if (prevIdx !== null) {{
+    const prevRow = document.querySelector('#table-body tr[data-idx="' + prevIdx + '"]');
+    if (prevRow) prevRow.focus();
+  }}
 }});
 
 // ── Render: facet sidebar ──────────────────────────────────────────────────
@@ -1071,6 +1121,7 @@ function renderFacetSidebar() {{
       clr.textContent = "clear";
       clr.setAttribute("aria-label", `Clear ${{f.name.replace(/_/g, " ")}} filter`);
       clr.addEventListener("click", () => {{
+        _pushNextHistory = true;
         facetState[f.name].clear();
         renderAll();
       }});
@@ -1087,6 +1138,7 @@ function renderFacetSidebar() {{
       cb.type = "checkbox";
       cb.checked = facetState[f.name].has(val);
       cb.addEventListener("change", () => {{
+        _pushNextHistory = true;
         if (cb.checked) facetState[f.name].add(val);
         else facetState[f.name].delete(val);
         renderAll();
@@ -1229,6 +1281,7 @@ document.getElementById("export-btn").addEventListener("click", () => {{
 
 // ── Clear all filters (empty-state button) ─────────────────────────────────
 document.getElementById("clear-all-btn").addEventListener("click", () => {{
+  _pushNextHistory = true;
   Object.values(facetState).forEach(s => s.clear());
   colFilters = {{}};
   sortCol = null;
@@ -1275,7 +1328,10 @@ document.getElementById("search").addEventListener("input", e => {{
 
 // ── Sync filter UI: URL hash + clear-filters button visibility ───────────
 function syncFilterUI() {{
-  try {{ history.replaceState(null, "", stateToHash()); }} catch(e) {{}}
+  try {{
+    if (_pushNextHistory) {{ history.pushState(null, "", stateToHash()); _pushNextHistory = false; }}
+    else history.replaceState(null, "", stateToHash());
+  }} catch(e) {{}}
   const anyActive = !!searchQuery ||
     Object.values(colFilters).some(v => v) ||
     Object.values(facetState).some(s => s.size > 0);
@@ -1283,6 +1339,7 @@ function syncFilterUI() {{
 }}
 
 document.getElementById("clear-filters-btn").addEventListener("click", () => {{
+  _pushNextHistory = true;
   Object.values(facetState).forEach(s => s.clear());
   colFilters = {{}};
   sortCol = null;
@@ -1385,6 +1442,44 @@ if (window.innerWidth <= 640) {{
   _ctBtn.textContent = "Show summary \u25be";
   _ctBtn.setAttribute("aria-expanded", "false");
 }}
+
+// \u2500\u2500 Random entry \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+document.getElementById("random-btn").addEventListener("click", () => {{
+  const pool = getSorted(getFiltered());
+  if (!pool.length) return;
+  const r = pool[Math.floor(Math.random() * pool.length)];
+  selectedIdx = ALL_ENTRIES.indexOf(r);
+  _detailOpener = null;
+  showDetail(r);
+  renderTableBody();
+}});
+
+// \u2500\u2500 Back/forward navigation via popstate \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+window.addEventListener("popstate", function () {{
+  // Reset all filter state to empty before re-reading URL
+  Object.values(facetState).forEach(s => s.clear());
+  colFilters = {{}};
+  sortCol = null;
+  sortDir = 1;
+  searchQuery = "";
+  const searchEl = document.getElementById("search");
+  if (searchEl) searchEl.value = "";
+  showAllFacets.clear();
+  // Re-apply filters from new URL hash
+  applyHashState();
+  renderAll();  // closes detail panel
+  // Re-open detail if ?cf= is present in the new URL
+  const cf = new URLSearchParams(location.search).get("cf");
+  if (cf) {{
+    const match = ALL_ENTRIES.find(r => r.canvas_fragment === cf);
+    if (match) {{
+      selectedIdx = ALL_ENTRIES.indexOf(match);
+      showDetail(match);
+      renderTableBody();
+    }}
+  }}
+}});
+
 applyHashState();
 renderAll();
 </script>

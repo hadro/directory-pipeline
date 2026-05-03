@@ -79,7 +79,7 @@ def patch_item_dir(item_dir: Path, aligned_model_slug: str, dry_run: bool = Fals
             data = json.loads(cache_path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if data.get("mode") != "text-only":
+        if data.get("mode") not in ("text-only", "aligned", "aligned-patched"):
             skipped += 1
             continue
 
