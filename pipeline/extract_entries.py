@@ -55,7 +55,7 @@ from dotenv import load_dotenv
 from google import genai
 
 load_dotenv()
-from google.genai.types import GenerateContentConfig, HttpOptions, Part
+from google.genai.types import GenerateContentConfig, HttpOptions, Part, ThinkingConfig
 
 DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
 # Fallback used when the primary model appears to have hit its output token limit.
@@ -247,6 +247,7 @@ def _call_gemini(
                     system_instruction=system_prompt,
                     temperature=0.0,
                     max_output_tokens=65536,
+                    thinking_config=ThinkingConfig(thinking_budget=0),
                     http_options=HttpOptions(extra_body={"service_tier": service_tier}) if service_tier else None,
                 ),
                 contents=parts,
