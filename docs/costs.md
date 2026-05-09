@@ -35,6 +35,8 @@ A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens f
 
 With `--flex`, halve all API figures above (prompt generation excluded — too few calls to matter).
 
+**`--mode multimodal` for `--extract-entries`:** adds ~258 input tokens per page (one image tile at ≤768 px). At `gemini-3.1-flash-lite-preview` standard rates that is roughly **+$0.0001/page** — effectively negligible. The increase is more noticeable with higher-capability models (e.g. `gemini-2.5-flash` at $0.30/1M input: ~+$0.00008/page). Multimodal is particularly effective for materials with mid-page geographic or section heading changes, where the visual layout context significantly improves extraction accuracy. See the [README](../README.md#multimodal-extraction) for when to enable it.
+
 **Optional higher-capability models for `--extract-entries`:**
 
 | Model | Input | Output | Per page (NER only) | 3,600 pages | 3,600 pages + `--flex` |

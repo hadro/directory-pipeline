@@ -363,6 +363,21 @@ model's output token limit automatically fall back to `gemini-2.5-flash` (higher
 output limit), and then to partial JSON recovery if needed. Previously failed pages
 (where a `*_entries_error.txt` sidecar exists) are auto-retried without `--force`.
 
+**`--mode multimodal`** sends the page image alongside the OCR text on every call.
+This is worth enabling for materials where geographic or thematic section headings
+appear mid-page, multi-column layouts are common, or any collection where state
+or category context shifts frequently within a page — cases where a visual read of
+the layout resolves ambiguity that OCR text alone cannot. The cost increase is small:
+each page image is resized to ≤768 px (one tile, ~258 input tokens), adding roughly
+$0.001–$0.002 per page at standard rates. The default text-only mode is adequate for
+straightforward single-column materials.
+
+**`--review-suspicious`** adds a targeted second-pass API call on pages where the
+primary extraction produced entries with isolated geographic context changes, blank
+name fields, or probable section headings mis-extracted as entries. The review call
+always sends the page image regardless of `--mode`, so it gets visual context even on
+text-only runs. Fires on roughly 5–15% of pages in practice.
+
 #### `pipeline/geo/geocode_entries.py` — Geocoding
 Reads an `entries_{model}.csv` (or an images directory containing one) and resolves
 each entry to geographic coordinates:

@@ -80,9 +80,24 @@ export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geo
 |---|---|
 | Add spatial bounding boxes to every row | `--surya-ocr --align-ocr` [→ details](#precision-upgrade) |
 | Interactively fix unmatched lines | `--review-alignment` |
+| Improve geographic accuracy on complex materials | `--extract-entries --mode multimodal` [→ details](#multimodal-extraction) |
 | Geocode entries and build a map | `--geocode --map` |
 | Full pipeline with page scoping + alignment review | `--guided` |
 | Export W3C/IIIF annotations | `pipeline/iiif/export_annotations.py` |
+
+### Multimodal extraction
+
+By default `--extract-entries` sends the OCR text to Gemini. Adding `--mode multimodal` also sends the page image, which lets the model see section headers, column boundaries, and layout cues that are often lost after OCR normalization:
+
+```bash
+python main.py URL --extract-entries --mode multimodal
+```
+
+This is most valuable for materials where geographic or thematic section headings fall mid-page (the model can see the heading visually rather than relying on text order), multi-column layouts where reading order is ambiguous, or any collection where state/category context shifts frequently within a page. In testing on Green Book volumes it eliminated mid-page geographic attribution errors entirely, compared to text-only mode.
+
+The cost increase is modest — each page image is resized to ≤768 px and counts as one tile (~258 input tokens). At standard rates that adds roughly $0.001–$0.002 per page on top of the base NER cost. See [docs/costs.md](docs/costs.md) for a full breakdown.
+
+---
 
 ### Precision upgrade
 
