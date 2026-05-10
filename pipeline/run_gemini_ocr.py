@@ -35,7 +35,19 @@ load_dotenv()
 from google.genai.types import FinishReason, GenerateContentConfig, HttpOptions, MediaResolution, Part, ThinkingConfig
 
 DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
+FALLBACK_MODEL = "gemini-3-flash-preview"   # escalation target when primary exhausts
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
+
+# Bare-minimum prompt used as a last resort before model escalation.
+# Deliberately short — complex prompts can themselves trigger recitation on hard pages.
+_SIMPLE_FALLBACK_PROMPT = (
+    "Transcribe all text on this page exactly as it appears. "
+    "Return plain text only. No commentary, no formatting."
+)
+
+# Written to the .txt file when every strategy fails, so downstream stages
+# can detect and report the gap rather than silently treating it as blank.
+_OCR_FAILED_PLACEHOLDER = "[OCR FAILED: page could not be transcribed after all retries]"
 
 # Keywords in the OCR prompt that indicate handwriting → high resolution recommended
 _HANDWRITING_KEYWORDS = ("handwrit", "manuscript", "cursive")
@@ -224,6 +236,7 @@ def process_image(
     system_prompt: str,
     media_resolution: "MediaResolution | None" = None,
     service_tier: str | None = None,
+    fallback_model: str | None = None,
 ) -> tuple[str, bool | None]:
     """
     OCR one image via Gemini. Returns (status, success) where status is one of
@@ -278,13 +291,53 @@ def process_image(
                 _log(f"  temperature={temp} still problematic ({retry_issue}): {image_path.name}")
                 best_text = retry_text  # imperfect but non-empty; keep as fallback
         else:
-            # All temperatures exhausted without a clean result
+            # All temperature retries exhausted without a clean result.
             if best_text:
                 text = best_text
-            # Last resort: collapse any surviving dot-leader runaways before saving
             if is_leader_issue:
                 text = _clean_output(text)
-            _log(f"  All retries exhausted — keeping best available output: {image_path.name}")
+
+            # Only attempt deeper fallbacks when we still have no usable text.
+            if not text or _output_issue(text):
+                # Strategy 1: simple prompt — complex prompts can themselves
+                # trigger recitation on visually dense pages.
+                for temp in (0.3, 0.7):
+                    _log(f"  Trying simple fallback prompt at temperature={temp}: {image_path.name}")
+                    r = _call_gemini(
+                        client, img_bytes, image_path.name, model,
+                        _SIMPLE_FALLBACK_PROMPT, media_resolution, temperature=temp,
+                    )
+                    simple_text = r.text or ""
+                    if simple_text and not _output_issue(simple_text):
+                        text = simple_text
+                        _log(f"  Simple prompt succeeded at temperature={temp}: {image_path.name}")
+                        break
+                    if simple_text and len(simple_text) > len(text):
+                        text = simple_text  # imperfect but longer — keep as new best
+
+            if not text or _output_issue(text):
+                # Strategy 2: model escalation — larger model handles layout
+                # complexity that causes recitation in smaller models.
+                esc_model = fallback_model
+                if esc_model and esc_model != model:
+                    _log(f"  Escalating to {esc_model}: {image_path.name}")
+                    r = _call_gemini(
+                        client, img_bytes, image_path.name, esc_model,
+                        _SIMPLE_FALLBACK_PROMPT, media_resolution, temperature=0.0,
+                    )
+                    esc_text = r.text or ""
+                    if esc_text and not _output_issue(esc_text):
+                        text = esc_text
+                        _log(f"  Model escalation succeeded ({esc_model}): {image_path.name}")
+                    elif esc_text:
+                        text = esc_text
+                        _log(f"  Model escalation: imperfect output ({esc_model}): {image_path.name}")
+
+            if text:
+                _log(f"  All retries exhausted — keeping best available output: {image_path.name}")
+            else:
+                text = _OCR_FAILED_PLACEHOLDER
+                _log(f"  All retries exhausted — no output recovered; writing placeholder: {image_path.name}")
 
     txt_path.write_text(text, encoding="utf-8")
     return "ok", True
@@ -346,6 +399,16 @@ def main() -> None:
         help=(
             "Use Flex inference (service_tier='flex'): ~50%% cheaper, "
             "1–15 min latency per request, best-effort availability."
+        ),
+    )
+    parser.add_argument(
+        "--fallback-model",
+        default=FALLBACK_MODEL,
+        metavar="MODEL",
+        help=(
+            f"Model to escalate to when the primary model exhausts all retries "
+            f"with no usable output (default: {FALLBACK_MODEL}). "
+            "Pass an empty string to disable escalation."
         ),
     )
     parser.add_argument(
@@ -439,9 +502,13 @@ def main() -> None:
     counts = {"ok": 0, "skipped": 0, "failed": 0}
     completed = 0
 
+    fallback_model = args.fallback_model.strip() or None
+    if fallback_model and not args.quiet:
+        print(f"Fallback model (on exhaustion): {fallback_model}", file=sys.stderr)
+
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(process_image, client, img, args.model, system_prompt, media_resolution, service_tier): img
+            executor.submit(process_image, client, img, args.model, system_prompt, media_resolution, service_tier, fallback_model): img
             for img in images
         }
         for future in as_completed(futures):
