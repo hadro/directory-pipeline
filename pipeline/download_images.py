@@ -301,6 +301,7 @@ def iter_canvas_images(manifest: dict, width: int) -> list[tuple[str, str, int |
     request.  effective_width == 0 means the 'full' (native) size parameter will
     be used in the URL.
     """
+    iiif_version = iiif_utils.manifest_version(manifest)
     result = []
     for c in iiif_utils.iter_canvases(manifest):
         if width == 0:
@@ -310,7 +311,7 @@ def iter_canvas_images(manifest: dict, width: int) -> list[tuple[str, str, int |
             # declared width.  Either caps the request at native resolution.
             native = c["max_width"] or (c["canvas_width"] if c["canvas_width"] > 0 else None)
             effective_width = min(width, native) if native else width
-        result.append((c["image_id"], iiif_utils.image_url(c["service_id"], effective_width), c["max_width"], effective_width))
+        result.append((c["image_id"], iiif_utils.image_url(c["service_id"], effective_width, iiif_version), c["max_width"], effective_width))
     return result
 
 
