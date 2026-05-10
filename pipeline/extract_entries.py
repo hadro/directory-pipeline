@@ -60,7 +60,7 @@ from google.genai.types import GenerateContentConfig, HttpOptions, Part, Thinkin
 DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
 # Fallback used when the primary model appears to have hit its output token limit.
 # Lite models cap output at ~8 k tokens; the fallback handles dense pages with 100+ entries.
-FALLBACK_MODEL = "gemini-3-flash"
+FALLBACK_MODEL = "gemini-3-flash-preview"
 NER_PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ner_prompt.md"
 
 
@@ -570,6 +570,181 @@ def _run_ner_call(
 
 
 # ---------------------------------------------------------------------------
+# Suspicious-entry review
+# ---------------------------------------------------------------------------
+
+def _flag_suspicious(entries: list[dict]) -> list[tuple[int, str]]:
+    """Return (index, reason) pairs for entries that warrant a second look.
+
+    Three signals:
+    1. Isolated state run — a run of 1–2 consecutive entries whose geographic
+       context field differs from both neighbouring runs, which are longer.
+       Catches NER drift without firing on legitimate state transitions (which
+       appear as large blocks at page boundaries).
+    2. Empty name — every common name field is blank or None.
+    3. Probable heading — short all-caps string with no address field, likely
+       a section header that the NER mistook for an establishment.
+    """
+    def _state(e: dict) -> str | None:
+        return e.get("location_primary") or e.get("state")
+
+    def _name(e: dict) -> str:
+        for k in ("name", "establishment_name", "firm_name", "business_name"):
+            v = e.get(k)
+            if v and str(v).strip():
+                return str(v).strip()
+        return ""
+
+    flags: dict[int, list[str]] = {}
+
+    # Signal 1: isolated state runs
+    if entries:
+        runs: list[list] = []  # [state, start_idx, end_idx]
+        for i, e in enumerate(entries):
+            s = _state(e)
+            if runs and runs[-1][0] == s:
+                runs[-1][2] = i
+            else:
+                runs.append([s, i, i])
+
+        for j, (state, start, end) in enumerate(runs):
+            if state is None:
+                continue
+            run_len = end - start + 1
+            if run_len > 2:
+                continue
+            prev = runs[j - 1] if j > 0 else None
+            nxt = runs[j + 1] if j < len(runs) - 1 else None
+            # Require both neighbours — don't flag legitimate transitions at page edges
+            if prev is None or nxt is None:
+                continue
+            if prev[0] == state or nxt[0] == state:
+                continue
+            # At least one neighbour must be a substantial block
+            if (prev[2] - prev[1] + 1) <= 2 and (nxt[2] - nxt[1] + 1) <= 2:
+                continue
+            reason = f"location '{state}' isolated amid '{prev[0]}'/'{nxt[0]}' entries"
+            for idx in range(start, end + 1):
+                flags.setdefault(idx, []).append(reason)
+
+    # Signal 2: empty name
+    for i, e in enumerate(entries):
+        if not _name(e):
+            flags.setdefault(i, []).append("name field is empty")
+
+    # Signal 3: probable heading
+    for i, e in enumerate(entries):
+        n = _name(e)
+        address = str(e.get("address") or "").strip()
+        if (n and n == n.upper() and len(n.split()) <= 4
+                and not any(c.isdigit() for c in n) and not address):
+            flags.setdefault(i, []).append(f"possible heading: '{n}' (all-caps, no address)")
+
+    return [(idx, "; ".join(reasons)) for idx, reasons in sorted(flags.items())]
+
+
+def _build_review_message(
+    page_text: str,
+    entries: list[dict],
+    suspicious: list[tuple[int, str]],
+) -> str:
+    """Build the targeted re-check user message."""
+    lines = [
+        "## Review request\n",
+        f"{len(suspicious)} entr{'y' if len(suspicious) == 1 else 'ies'} from this "
+        "page were flagged for verification. Review the page text and image, then "
+        "confirm or correct each flagged entry.\n",
+    ]
+    for idx, reason in suspicious:
+        entry = entries[idx]
+        core = {k: v for k, v in entry.items()
+                if k not in ("canvas_fragment", "image", "review_note")}
+        lines.append(f"[Entry {idx}] {reason}")
+        lines.append(json.dumps(core, ensure_ascii=False))
+        lines.append("")
+
+    lines += [
+        "Return JSON with a 'reviews' list. For each flagged entry include its index plus:",
+        '  "correct": true               — entry is correct as extracted',
+        "  corrected field key/value pairs — only the fields that need changing",
+        '  "not_an_entry": true           — this is a heading or non-listing item\n',
+        'Example: {"reviews": [{"index": 0, "correct": true}, '
+        '{"index": 3, "location_primary": "NEW YORK"}, '
+        '{"index": 7, "not_an_entry": true}]}\n',
+        "## Page text",
+        page_text,
+    ]
+    return "\n".join(lines)
+
+
+def _run_review_call(
+    client: genai.Client,
+    page_name: str,
+    model: str,
+    system_prompt: str,
+    review_msg: str,
+    image_path: "Path | None",
+    service_tier: "str | None" = None,
+) -> "list[dict] | None":
+    """Single-shot re-check call for suspicious entries.
+
+    Always sends the image when available — even if the primary call was
+    text-only — so the model has visual context for layout-dependent
+    judgements (heading vs. entry, column breaks, etc.).
+    Returns the 'reviews' list, or None on any failure.
+    """
+    try:
+        raw = _call_gemini(client, model, system_prompt, review_msg, image_path, service_tier)
+    except Exception as exc:
+        _log(f"    [{page_name}] review call failed: {exc}")
+        return None
+    result = _parse_json_response(raw)
+    if result is None:
+        _log(f"    [{page_name}] review response unparseable — skipping")
+        return None
+    reviews = result.get("reviews")
+    return reviews if isinstance(reviews, list) else None
+
+
+def _apply_review_corrections(
+    entries: list[dict],
+    reviews: list[dict],
+    suspicious: list[tuple[int, str]],
+) -> int:
+    """Merge model corrections into entries in-place; return count of changes.
+
+    Adds 'review_note' to every flagged entry:
+      "verified"              — model confirmed the entry is correct
+      "corrected: f1, f2"    — model updated these fields
+      "flagged: not_an_entry" — model says this is a heading / non-listing
+    """
+    flagged = {idx for idx, _ in suspicious}
+    corrected = 0
+    for review in reviews:
+        idx = review.get("index")
+        if not isinstance(idx, int) or idx < 0 or idx >= len(entries):
+            continue
+        if idx not in flagged:
+            continue
+        entry = entries[idx]
+        if review.get("not_an_entry"):
+            entry["review_note"] = "flagged: not_an_entry"
+            corrected += 1
+        elif review.get("correct"):
+            entry["review_note"] = "verified"
+        else:
+            changed = [k for k in review if k != "index"]
+            for k in changed:
+                entry[k] = review[k]
+            if changed:
+                entry["review_note"] = "corrected: " + ", ".join(changed)
+                corrected += 1
+            else:
+                entry["review_note"] = "verified"
+    return corrected
+
+
+# ---------------------------------------------------------------------------
 # Per-page processing
 # ---------------------------------------------------------------------------
 
@@ -585,12 +760,15 @@ def process_page(
     aligned_model: str | None = None,
     fallback_model: str | None = FALLBACK_MODEL,
     service_tier: str | None = None,
+    review_suspicious: bool = False,
 ) -> dict:
     """
     Extract entries from one aligned JSON page.
 
     aligned_model: if set, the model whose slug appears in aligned_path's name.
     The output file is always tagged with the NER model slug.
+    review_suspicious: if True, flag potentially mis-extracted entries after the
+    primary NER call and make a targeted re-check call using the page image.
 
     Returns:
       {
@@ -653,6 +831,26 @@ def process_page(
         for key, val in prior_context.items():
             if key not in entry and val:
                 entry[key] = val
+
+    # Optional second-pass review of suspicious entries.
+    # Always tries multimodal (fetches image even for text-only primary calls)
+    # so the model has visual context for layout-dependent decisions.
+    if review_suspicious and entries:
+        suspicious = _flag_suspicious(entries)
+        if suspicious:
+            review_img = image_path or _img_path_from_aligned(aligned_path, aligned_slug)
+            review_msg = _build_review_message(page_text, entries, suspicious)
+            reviews = _run_review_call(
+                client, aligned_path.name, model, system_prompt,
+                review_msg, review_img, service_tier,
+            )
+            if reviews:
+                n_corrected = _apply_review_corrections(entries, reviews, suspicious)
+                if n_corrected:
+                    _log(
+                        f"    [{aligned_path.name}] reviewed {len(suspicious)} suspicious"
+                        f" → {n_corrected} corrected"
+                    )
 
     # Link canvas fragments from the aligned JSON.
     # Try known text fields first, then every non-trivial string field in order until
@@ -720,6 +918,7 @@ def process_page_txt(
     aligned_model: str | None = None,
     fallback_model: str | None = FALLBACK_MODEL,
     service_tier: str | None = None,
+    review_suspicious: bool = False,
 ) -> dict:
     """Extract entries from one raw Gemini .txt page (no alignment data).
 
@@ -779,6 +978,27 @@ def process_page_txt(
     entries = result.get("entries", [])
     new_context = result.get("page_context") or prior_context
 
+    if review_suspicious and entries:
+        suspicious = _flag_suspicious(entries)
+        if suspicious:
+            # For txt-path pages, look for a sibling .jpg even in text-only mode
+            review_img = image_path or (
+                txt_path.parent / f"{stem}.jpg"
+                if (txt_path.parent / f"{stem}.jpg").exists() else None
+            )
+            review_msg = _build_review_message(page_text, entries, suspicious)
+            reviews = _run_review_call(
+                client, txt_path.name, model, system_prompt,
+                review_msg, review_img, service_tier,
+            )
+            if reviews:
+                n_corrected = _apply_review_corrections(entries, reviews, suspicious)
+                if n_corrected:
+                    _log(
+                        f"    [{txt_path.name}] reviewed {len(suspicious)} suspicious"
+                        f" → {n_corrected} corrected"
+                    )
+
     # No alignment data — canvas_fragment is always the bare canvas URI
     for entry in entries:
         entry["canvas_fragment"] = canvas_uri
@@ -813,6 +1033,7 @@ def process_item(
     aligned_model: str | None = None,
     fallback_model: str | None = FALLBACK_MODEL,
     service_tier: str | None = None,
+    review_suspicious: bool = False,
 ) -> list[dict]:
     """
     Process all aligned JSON pages in an item directory in page order.
@@ -877,6 +1098,7 @@ def process_item(
                 client, txt_path, canvas_uri, model, system_prompt,
                 context, mode, force, dry_run, aligned_model,
                 fallback_model=fallback_model, service_tier=service_tier,
+                review_suspicious=review_suspicious,
             )
             status = result["status"]
             n = len(result["entries"])
@@ -918,6 +1140,7 @@ def process_item(
             client, aligned_path, model, system_prompt,
             context, mode, page_force, dry_run, aligned_model,
             fallback_model=fallback_model, service_tier=service_tier,
+            review_suspicious=review_suspicious,
         )
         status = result["status"]
         n = len(result["entries"])
@@ -1041,6 +1264,16 @@ def main() -> None:
             "1–15 min latency per request, best-effort availability."
         ),
     )
+    parser.add_argument(
+        "--review-suspicious",
+        action="store_true",
+        help=(
+            "After each page's primary NER call, flag entries with isolated "
+            "geographic context, empty names, or probable headings, then make "
+            "a targeted re-check call using the page image. Adds one extra API "
+            "call per flagged page (typically 5–15%% of pages)."
+        ),
+    )
     args = parser.parse_args()
 
     # API key
@@ -1135,11 +1368,16 @@ def main() -> None:
     if service_tier and not args.quiet:
         print("Flex inference enabled (service_tier='flex')", file=sys.stderr)
 
+    review_suspicious = args.review_suspicious
+    if review_suspicious and not args.quiet:
+        print("Suspicious-entry review enabled (--review-suspicious)", file=sys.stderr)
+
     print(
         f"\nExtracting entries: {len(item_dirs)} item dir(s), model={args.model}"
         + (f" (aligned by {aligned_model})" if aligned_model else "")
         + (f", fallback={fallback_model}" if fallback_model and fallback_model != args.model else "")
         + f", mode={args.mode}"
+        + (" +review" if review_suspicious else "")
         + (" [DRY RUN]" if args.dry_run else ""),
         file=sys.stderr,
     )
@@ -1158,6 +1396,7 @@ def main() -> None:
             client, item_dir, args.model, item_prompt,
             args.mode, args.force, args.dry_run, args.quiet, aligned_model,
             fallback_model=fallback_model, service_tier=service_tier,
+            review_suspicious=review_suspicious,
         )
         if not args.dry_run:
             csv_path = item_dir / f"entries_{slug}.csv"

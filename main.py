@@ -598,6 +598,8 @@ def build_stage_args(
                 a += ["--force"]
             if getattr(parsed, "flex", False):
                 a += ["--flex"]
+            if getattr(parsed, "mode", None):
+                a += ["--mode", parsed.mode]
             runs.append(a)
         return runs
 
@@ -942,6 +944,17 @@ def main() -> None:
         default=[],
         metavar="MODEL",
         help="Two or more Gemini models for --compare-ocr",
+    )
+    opts.add_argument(
+        "--mode",
+        choices=["text-only", "multimodal"],
+        default=None,
+        help=(
+            "Extraction mode for --extract-entries: 'text-only' sends corrected OCR text; "
+            "'multimodal' also sends the page image for layout context. "
+            "Multimodal improves accuracy on materials with mid-page geographic headings "
+            "or ambiguous column layouts (default: text-only)."
+        ),
     )
     opts.add_argument(
         "--flex",
