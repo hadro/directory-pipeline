@@ -155,17 +155,19 @@ def iter_canvases(manifest: dict) -> Iterator[dict]:
         yield from _iter_v3(manifest)
 
 
-def image_url(service_id: str, width: int) -> str:
+def image_url(service_id: str, width: int, iiif_version: int = 2) -> str:
     """
     Construct a IIIF Image API download URL for the requested pixel width.
     Works for both Image API v2 and v3.
 
     Pass width=0 to request native/maximum resolution without upscaling.
-    Uses 'full' as the size parameter — valid in IIIF Image API v2 ('full' = native size)
-    and widely supported in v3. ('max' is preferred in v3 but returns HTTP 400 on many
-    v2 servers including the LOC tile server.)
+    For v2 servers (LOC, NYPL) 'full' is the native-size keyword; 'max' returns HTTP 400.
+    For v3 servers (Internet Archive) 'max' is required; 'full' returns HTTP 400.
     """
-    size = "full" if width == 0 else f"{width},"
+    if width == 0:
+        size = "max" if iiif_version >= 3 else "full"
+    else:
+        size = f"{width},"
     return f"{service_id}/full/{size}/0/default.jpg"
 
 
