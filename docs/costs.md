@@ -39,11 +39,11 @@ A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens f
 
 **Optional higher-capability models for `--extract-entries`:**
 
-| Model | Input | Output | Per page (NER only) | 3,600 pages | 3,600 pages + `--flex` |
+| Model | Input | Output | Per page (NER only) | 1,900 pages | 1,900 pages + `--flex` |
 |---|---|---|---|---|---|
-| `gemini-3.1-flash-lite-preview` (default) | $0.25/1M | $1.50/1M | ~$0.0055 | ~$20 | ~$10 |
-| `gemini-3-flash-preview` | $0.50/1M | $3.00/1M | ~$0.011 | ~$40 | ~$20 |
-| `gemini-3.1-pro-preview` | $2.00/1M | $12.00/1M | ~$0.045 | ~$160 | ~$80 |
+| `gemini-3.1-flash-lite-preview` (default) | $0.25/1M | $1.50/1M | ~$0.0055 | ~$10.50 | ~$5.25 |
+| `gemini-3-flash-preview` | $0.50/1M | $3.00/1M | ~$0.011 | ~$21 | ~$10.50 |
+| `gemini-3.1-pro-preview` | $2.00/1M | $12.00/1M | ~$0.045 | ~$85 | ~$42.50 |
 
 **Free tier:** The Gemini API free tier (no billing required) covers both models at no charge, subject to rate limits of 15 requests/minute and ~1,500 requests/day. A single 100-page volume (~200 API calls total) fits comfortably within a single day's free quota, though the 15 RPM cap means the API stages take ~15–20 minutes rather than a few minutes. For a full multi-volume corpus you will either need billing enabled or spread the run across several days.
 
