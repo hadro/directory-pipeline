@@ -95,7 +95,7 @@ python main.py URL --extract-entries --mode multimodal
 
 This is most valuable for materials where geographic or thematic section headings fall mid-page (the model can see the heading visually rather than relying on text order), multi-column layouts where reading order is ambiguous, or any collection where state/category context shifts frequently within a page. In testing on Green Book volumes it eliminated mid-page geographic attribution errors entirely, compared to text-only mode.
 
-The cost increase is modest — each page image is resized to ≤768 px and counts as one tile (~258 input tokens). At standard rates that adds roughly $0.001–$0.002 per page on top of the base NER cost. See [docs/costs.md](docs/costs.md) for a full breakdown.
+The cost increase is negligible — each page image is resized to ≤768 px and counts as one tile (~258 input tokens), adding roughly $0.0001 per page at standard rates. See [docs/costs.md](docs/costs.md) for a full breakdown.
 
 ---
 
@@ -114,7 +114,7 @@ python main.py URL --review-alignment     # optional: fix unmatched lines intera
 
 ## Costs
 
-A single 100-page volume costs roughly **$0.60 in Gemini API charges** with a paid account (less with `--flex`), but can run within the free tier's daily quota (~15–20 minutes at 15 RPM). See [docs/costs.md](docs/costs.md) for a full breakdown including platform costs (Surya OCR on Mac, Colab, and GPU).
+A single ~80-page volume costs roughly **$0.70 in Gemini API charges** at standard rates, or **~$0.35 with `--flex`**, and can run within the free tier's daily quota (~15–20 minutes at 15 RPM). See [docs/costs.md](docs/costs.md) for a full breakdown including platform costs (Surya OCR on Mac, Colab, and GPU).
 
 ---
 

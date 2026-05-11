@@ -25,15 +25,15 @@ A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens f
 
 `--generate-prompts` makes 2 Gemini calls with 4–8 sample images each — a one-time per-volume cost of roughly **$0.02–$0.10 total**.
 
-**Rough collection estimates (standard rates, no `--flex`):**
+**Rough collection estimates:**
 
-| Collection | Pages | Prompt generation | OCR | NER | Total |
-|---|---|---|---|---|---|
-| One Green Book volume | ~100 pages | ~$0.05 (one-time) | ~$0.31 | ~$0.55 | ~$0.86 |
-| Full Green Books corpus (23 volumes) | ~3,600 pages | ~$0.05/volume | ~$11 | ~$20 | ~$31 |
-| Large city directory (500+ pages) | 500 pages | ~$0.05 (one-time) | ~$1.55 | ~$2.75 | ~$4.30 |
+| Collection | Pages | Prompt gen | OCR | NER | Total (standard) | Total (`--flex`) |
+|---|---|---|---|---|---|---|
+| One Green Book volume | ~80 pages | ~$0.05 (one-time) | ~$0.25 | ~$0.45 | ~$0.70 | ~$0.35 |
+| Full Green Books corpus (23 volumes) | ~1,900 pages | ~$0.05/volume | ~$5.90 | ~$10.50 | ~$16 | ~$8 |
+| Large city directory (500+ pages) | 500 pages | ~$0.05 (one-time) | ~$1.55 | ~$2.75 | ~$4.30 | ~$2.15 |
 
-With `--flex`, halve all API figures above (prompt generation excluded — too few calls to matter).
+`--flex` cuts OCR and NER costs by ~50% (prompt generation excluded — too few calls to matter). Observed cost for NER-only across all 23 Green Book volumes with `--flex` and `gemini-3.1-flash-lite-preview`: **~$5**.
 
 **`--mode multimodal` for `--extract-entries`:** adds ~258 input tokens per page (one image tile at ≤768 px). At `gemini-3.1-flash-lite-preview` standard rates that is roughly **+$0.0001/page** — effectively negligible. The increase is more noticeable with higher-capability models (e.g. `gemini-2.5-flash` at $0.30/1M input: ~+$0.00008/page). Multimodal is particularly effective for materials with mid-page geographic or section heading changes, where the visual layout context significantly improves extraction accuracy. See the [README](../README.md#multimodal-extraction) for when to enable it.
 
