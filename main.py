@@ -250,7 +250,9 @@ def build_stage_args(
     shows the command it would run.
     """
     csv_path = Path("output") / slug / f"{slug}.csv"
-    output_dir = Path("output") / slug
+    # When source is an existing local directory deeper than output/{slug},
+    # use it directly so stages operate on the specific volume, not the whole collection.
+    output_dir = Path(source) if Path(source).is_dir() else Path("output") / slug
 
     def _require_images() -> bool:
         if dry_run:
