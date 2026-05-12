@@ -16,7 +16,7 @@ Usage
     python run_gemini_ocr.py output/travelguide --model gemini-2.5-flash
     python run_gemini_ocr.py output/travelguide --quiet
     python run_gemini_ocr.py output/travelguide --flex                      # ~50% cheaper, 1-15 min/req
-    python run_gemini_ocr.py output/travelguide --model gemini-3.1-flash-lite-preview --flex
+    python run_gemini_ocr.py output/travelguide --model gemini-3.1-flash-lite --flex
 """
 
 import argparse
@@ -34,7 +34,7 @@ from google import genai
 load_dotenv()
 from google.genai.types import FinishReason, GenerateContentConfig, HttpOptions, MediaResolution, Part, ThinkingConfig
 
-DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
 FALLBACK_MODEL = "gemini-3-flash-preview"   # escalation target when primary exhausts
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
 

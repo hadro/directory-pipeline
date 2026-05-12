@@ -57,7 +57,7 @@ from google import genai
 load_dotenv()
 from google.genai.types import GenerateContentConfig, HttpOptions, Part, ThinkingConfig
 
-DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
 # Fallback used when the primary model appears to have hit its output token limit.
 # Lite models cap output at ~8 k tokens; the fallback handles dense pages with 100+ entries.
 FALLBACK_MODEL = "gemini-3-flash-preview"

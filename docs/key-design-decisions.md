@@ -52,7 +52,7 @@ Book-style fields (`city`, `state`, `category`, `canvas_fragment`) and degrade
 gracefully when those fields are absent.
 
 **Fallback model for dense pages, with partial JSON recovery.** `extract_entries.py`
-defaults to `gemini-3.1-flash-lite-preview` (fast and cheap) but escalates to
+defaults to `gemini-3.1-flash-lite` (fast and cheap) but escalates to
 `gemini-2.5-flash` for pages that hit the output token limit. If the fallback also
 produces malformed JSON, `_recover_partial_json()` salvages every complete entry that
 appears before the truncation point rather than discarding the page entirely. An

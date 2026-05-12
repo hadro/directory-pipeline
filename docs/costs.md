@@ -11,17 +11,17 @@ Two cost categories: **API charges** (variable; applies on any platform) and **p
 | Stage | Model (default) | Input (standard) | Output (standard) |
 |---|---|---|---|
 | `--gemini-ocr` | `gemini-2.5-flash` | $0.30 / 1M tokens | $2.50 / 1M tokens |
-| `--gemini-ocr` (budget option) | `gemini-3.1-flash-lite-preview` | $0.25 / 1M tokens | $1.50 / 1M tokens |
-| `--extract-entries` | `gemini-3.1-flash-lite-preview` | $0.25 / 1M tokens | $1.50 / 1M tokens |
+| `--gemini-ocr` (budget option) | `gemini-3.1-flash-lite` | $0.25 / 1M tokens | $1.50 / 1M tokens |
+| `--extract-entries` | `gemini-3.1-flash-lite` | $0.25 / 1M tokens | $1.50 / 1M tokens |
 | fallback (dense pages) | `gemini-2.5-flash` | $0.30 / 1M tokens | $2.50 / 1M tokens |
 
-**Flex inference (`--flex`):** Add `--flex` to `--gemini-ocr` or `--extract-entries` for approximately **50% off** the standard rates above, with 1–15 minute latency per request and best-effort availability. Flex works well for bulk runs where real-time throughput is not needed. Combine with `gemini-3.1-flash-lite-preview` for the lowest possible cost:
+**Flex inference (`--flex`):** Add `--flex` to `--gemini-ocr` or `--extract-entries` for approximately **50% off** the standard rates above, with 1–15 minute latency per request and best-effort availability. Flex works well for bulk runs where real-time throughput is not needed. Combine with `gemini-3.1-flash-lite` for the lowest possible cost:
 
 ```bash
-python main.py URL --gemini-ocr --ocr-model gemini-3.1-flash-lite-preview --flex
+python main.py URL --gemini-ocr --ocr-model gemini-3.1-flash-lite --flex
 ```
 
-A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens for OCR (`gemini-2.5-flash`, approx. $0.0031/page standard, $0.0016/page with `--flex`), and another approx. 10,000 input / 2,000 output tokens for entry extraction (`gemini-3.1-flash-lite-preview`, approx. $0.0055/page standard, $0.0028/page with `--flex`) — about **$0.0086 per page** combined at standard rates, or **$0.0043/page** with `--flex`. Dense pages that exceed the output token limit automatically retry with `gemini-2.5-flash`, but this affects fewer than 5% of pages in practice.
+A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens for OCR (`gemini-2.5-flash`, approx. $0.0031/page standard, $0.0016/page with `--flex`), and another approx. 10,000 input / 2,000 output tokens for entry extraction (`gemini-3.1-flash-lite`, approx. $0.0055/page standard, $0.0028/page with `--flex`) — about **$0.0086 per page** combined at standard rates, or **$0.0043/page** with `--flex`. Dense pages that exceed the output token limit automatically retry with `gemini-2.5-flash`, but this affects fewer than 5% of pages in practice.
 
 `--generate-prompts` makes 2 Gemini calls with 4–8 sample images each — a one-time per-volume cost of roughly **$0.02–$0.10 total**.
 
@@ -33,15 +33,15 @@ A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens f
 | Full Green Books corpus (23 volumes) | 1,900 pages | $0.05/volume | $5.90 | $10.50 | $16 | $8 |
 | Large city directory (500+ pages) | 500 pages | $0.05 (one-time) | $1.55 | $2.75 | $4.30 | $2.15 |
 
-`--flex` cuts OCR and NER costs by approximately 50% (prompt generation excluded — too few calls to matter). Observed cost for NER-only across all 23 Green Book volumes with `--flex` and `gemini-3.1-flash-lite-preview`: **$5**.
+`--flex` cuts OCR and NER costs by approximately 50% (prompt generation excluded — too few calls to matter). Observed cost for NER-only across all 23 Green Book volumes with `--flex` and `gemini-3.1-flash-lite`: **$5**.
 
-**`--mode multimodal` for `--extract-entries`:** adds approx. 258 input tokens per page (one image tile at ≤768 px). At `gemini-3.1-flash-lite-preview` standard rates that is roughly **+$0.0001/page** — effectively negligible. The increase is more noticeable with higher-capability models (e.g. `gemini-2.5-flash` at $0.30/1M input: approx. +$0.00008/page). Multimodal is particularly effective for materials with mid-page geographic or section heading changes, where the visual layout context significantly improves extraction accuracy. See the [README](../README.md#multimodal-extraction) for when to enable it.
+**`--mode multimodal` for `--extract-entries`:** adds approx. 258 input tokens per page (one image tile at ≤768 px). At `gemini-3.1-flash-lite` standard rates that is roughly **+$0.0001/page** — effectively negligible. The increase is more noticeable with higher-capability models (e.g. `gemini-2.5-flash` at $0.30/1M input: approx. +$0.00008/page). Multimodal is particularly effective for materials with mid-page geographic or section heading changes, where the visual layout context significantly improves extraction accuracy. See the [README](../README.md#multimodal-extraction) for when to enable it.
 
 **Optional higher-capability models for `--extract-entries`:**
 
 | Model | Input | Output | Per page (NER only) | 1,900 pages | 1,900 pages + `--flex` |
 |---|---|---|---|---|---|
-| `gemini-3.1-flash-lite-preview` (default) | $0.25/1M | $1.50/1M | $0.0055 | $10.50 | $5.25 |
+| `gemini-3.1-flash-lite` (default) | $0.25/1M | $1.50/1M | $0.0055 | $10.50 | $5.25 |
 | `gemini-3-flash-preview` | $0.50/1M | $3.00/1M | $0.011 | $21 | $10.50 |
 | `gemini-3.1-pro-preview` | $2.00/1M | $12.00/1M | $0.045 | $85 | $42.50 |
 

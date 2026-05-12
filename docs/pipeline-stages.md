@@ -220,7 +220,7 @@ marks to avoid repeating city names or categories.
 **Flex inference (`--flex`).** Pass `--flex` to use Gemini's Flex inference tier
 (`service_tier="flex"`): approximately 50% cheaper than standard pricing, with
 1–15 minute latency per request and best-effort availability. Recommended for large
-bulk runs. Combine with `--ocr-model gemini-3.1-flash-lite-preview` for the lowest
+bulk runs. Combine with `--ocr-model gemini-3.1-flash-lite` for the lowest
 cost option.
 
 #### `analysis/compare_ocr.py` — Model comparison
@@ -358,7 +358,7 @@ other document types the fields will match that volume's NER prompt.
 
 Outputs a per-page `*_entries.json` sidecar and an aggregate `entries_{model}.csv`.
 
-By default uses `gemini-3.1-flash-lite-preview` (fast and cheap). Dense pages that exceed the
+By default uses `gemini-3.1-flash-lite` (fast and cheap). Dense pages that exceed the
 model's output token limit automatically fall back to `gemini-2.5-flash` (higher
 output limit), and then to partial JSON recovery if needed. Previously failed pages
 (where a `*_entries_error.txt` sidecar exists) are auto-retried without `--force`.

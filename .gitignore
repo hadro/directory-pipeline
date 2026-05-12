@@ -1,5 +1,6 @@
 # Downloaded data and local files
 output/*
+analysis/data/
 ideas_and_questions.md
 old/*
 colab.sh

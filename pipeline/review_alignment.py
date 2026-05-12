@@ -11,7 +11,7 @@ Opens a local web UI where you can:
 Usage
 -----
     uv run review_alignment.py output/
-    uv run review_alignment.py output/ --model gemini-3.1-flash-lite-preview --port 5001
+    uv run review_alignment.py output/ --model gemini-3.1-flash-lite --port 5001
 
 Then open http://localhost:5000 in your browser.
 """
@@ -38,7 +38,7 @@ PROJECT_ROOT: Path = Path(__file__).parent.parent
 
 # Set at startup
 OUTPUT_ROOT: Path = Path("output")
-MODEL: str = "gemini-3.1-flash-lite-preview"
+MODEL: str = "gemini-3.1-flash-lite"
 
 # Surya models – pre-loaded at startup (see main())
 _det = None
@@ -1404,7 +1404,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--model", "-m",
-        default="gemini-3.1-flash-lite-preview",
+        default="gemini-3.1-flash-lite",
         help="Gemini model name used in aligned JSON filenames (default: gemini-2.0-flash)",
     )
     parser.add_argument(
