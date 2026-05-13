@@ -17,6 +17,7 @@ command line:
   --ia-csv          sources/ia_collection_csv.py    → output/{slug}/{slug}.csv  (Internet Archive only)
   --iiif-csv        sources/iiif_manifest_csv.py    → output/{slug}/{slug}.csv  (any IIIF manifest or collection)
   --download        pipeline/download_images.py       → output/{slug}/
+  --convert-pdfs    pipeline/pdf_to_images.py         → output/{pdf_stem}/*.jpg (one per page)
   --detect-spreads  pipeline/detect_spreads.py        (double-page spread detection)
   --split-spreads   pipeline/split_spreads.py         (split spreads into left/right pages)
   --surya-detect    pipeline/surya_detect.py          (Surya neural column detection → columns_report.csv)
@@ -115,6 +116,7 @@ PIPELINE: list[tuple[str, str, str]] = [
     ("ia_csv",          "sources/ia_collection_csv.py",        "--ia-csv"),
     ("iiif_csv",        "sources/iiif_manifest_csv.py",        "--iiif-csv"),
     ("download",        "pipeline/download_images.py",         "--download"),
+    ("convert_pdfs",    "pipeline/pdf_to_images.py",           "--convert-pdfs"),
     ("detect_spreads",  "pipeline/detect_spreads.py",          "--detect-spreads"),
     ("split_spreads",   "pipeline/split_spreads.py",           "--split-spreads"),
     ("select_pages",    "pipeline/select_pages.py",     "--select-pages"),
@@ -260,7 +262,7 @@ def build_stage_args(
         if not output_dir.exists():
             print(
                 f"    Skipping: images directory not found ({output_dir}). "
-                "Run --download first.",
+                "Run --download or --convert-pdfs first.",
                 file=sys.stderr,
             )
             return False
@@ -354,6 +356,14 @@ def build_stage_args(
         a = [str(actual_csv), "--resume"]
         if parsed.width is not None:
             a += ["--width", str(parsed.width)]
+        return a
+    
+    if stage == "convert_pdfs":
+        a = [str(source)]
+        if getattr(parsed, "dpi", None) is not None:
+            a += ["--dpi", str(parsed.dpi)]
+        if getattr(parsed, "quiet", False):
+            a += ["--quiet"]
         return a
 
     if stage == "tesseract":
@@ -704,6 +714,16 @@ def main() -> None:
         help="Download IIIF images to output/{slug}/",
     )
     stages.add_argument(
+        "--convert-pdfs",
+        dest="convert_pdfs",
+        action="store_true",
+        help=(
+            "Convert PDFs to images and save to output/{pdf_stem}/. "
+            "An alternative to --download (and other preliminary steps) for PDF sources. "
+            "Detects PDFs in the source list."
+        ),
+    )
+    stages.add_argument(
         "--surya-detect",
         dest="surya_detect",
         action="store_true",
@@ -723,14 +743,14 @@ def main() -> None:
         "--tesseract",
         dest="tesseract",
         action="store_true",
-        help="Run Tesseract OCR on downloaded images (legacy; prefer --surya-ocr)",
+        help="Run Tesseract OCR on images (legacy; prefer --surya-ocr)",
     )
     stages.add_argument(
         "--surya-ocr",
         dest="surya_ocr",
         action="store_true",
         help=(
-            "Run Surya OCR on downloaded images, producing line-level bboxes "
+            "Run Surya OCR on images, producing line-level bboxes "
             "(*_surya.json) used by --align-ocr. Requires surya-ocr."
         ),
     )
@@ -738,14 +758,14 @@ def main() -> None:
         "--gemini-ocr",
         dest="gemini_ocr",
         action="store_true",
-        help="Run Gemini OCR on downloaded images (see --ocr-model)",
+        help="Run Gemini OCR on images (see --ocr-model)",
     )
     stages.add_argument(
         "--chandra-ocr",
         dest="chandra_ocr",
         action="store_true",
         help=(
-            "Run Chandra OCR on downloaded images (local 5B model, no API key needed). "
+            "Run Chandra OCR on images (local 5B model, no API key needed). "
             "Requires: pip install chandra-ocr[hf]. Use --chandra-method to select backend."
         ),
     )
@@ -774,7 +794,7 @@ def main() -> None:
         "--detect-spreads",
         dest="detect_spreads",
         action="store_true",
-        help="Detect double-page spreads in downloaded images",
+        help="Detect double-page spreads in images",
     )
     stages.add_argument(
         "--split-spreads",
@@ -1043,7 +1063,8 @@ def main() -> None:
         type=int,
         default=None,
         metavar="N",
-        help="Image DPI hint for --tesseract (300 or 400 typical for archival scans).",
+        help="Specify Image DPI for --convert-pdfs (default 200), "
+        "also Image DPI hint for --tesseract (300 or 400 typical for archival scans).",
     )
     opts.add_argument(
         "--dict",
