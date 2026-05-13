@@ -3,6 +3,7 @@
 Turn a public digital archive URL into a structured, browsable CSV — no manual transcription, no custom code per collection type.
 
 Give it a URL from the [Library of Congress](https://www.loc.gov/collections/), [Internet Archive](https://archive.org/), [NYPL Digital Collections](https://digitalcollections.nypl.org/), or any institution that publishes a public IIIF manifest. It downloads the scans, OCRs them, and extracts entries into a structured CSV. With the enrichment steps, every row links back to the exact location in the original scan.
+Alternatively, it can can process PDFs, either locally or online.
 
 Built for digitized historical directories — city directories, gazetteers, trade directories — but works on just about any historical document with regularl entry-like structure.
 
@@ -29,6 +30,13 @@ python main.py https://archive.org/details/ldpd_11290437_000/ --extract
 ```bash
 python main.py https://archive.org/details/ldpd_11290437_001/ --extract \
   --ner-prompt output/ldpd_11290437_000/ner_prompt.md
+```
+
+Alternatively, point the tool at a PDF or directory of PDFs, using `--convert-pdfs` instead of `--download`:
+```bash
+python main.py pdfs/ --convert-pdfs
+python main.py output/1900-01/ --select-pages
+python main.py output/1900-01/ --generate-prompts
 ```
 
 Requires `GEMINI_API_KEY`. Can run on the [free tier](#costs) — no billing required for collections up to ~150 pages. Add `--flex` to any `--gemini-ocr` run for ~50% cheaper API calls (1–15 min latency per request, best-effort availability).

@@ -63,6 +63,25 @@ LoC item JSON API (`?fo=json`) to build a synthetic IIIF manifest, then download
 images from `tile.loc.gov`. The requested download width is capped at the native
 image resolution to avoid upscaling artifacts from the tile pyramid.
 
+#### `pipeline/pdf_to_images.py` — Convert PDFs to images
+Converts PDFs to JPEG images using `pdf2image`. This is an alternative input mode 
+to `download_images.py` for processing locally stored PDFs or PDFs from non-IIIF sources.
+Two input modes:
+- **Directory mode** (default): processes all PDFs in a directory, outputting to
+  `output/{pdf_stem}/{page:04d}.jpg`.
+- **Single PDF mode** (`--pdf path/to/file.pdf`): processes a single PDF, outputting
+  to `output/{pdf_stem}/{page:04d}.jpg`.
+Requires the Poppler utility `pdftoppm` installed locally and available on the PATH, or 
+set the `poppler_path` variable in `pdf_to_images.py` to the path of the 
+Poppler `bin` directory.
+```bash
+python pipeline/pdf_to_images.py path/to/file.pdf
+python pipeline/pdf_to_images.py path/to/pdfs/
+python pipeline/pdf_to_images.py path/to/pdfs/ --output-dir path/to/output/
+python pipeline/pdf_to_images.py path/to/pdfs/ --output-dir path/to/output/ --dpi 300
+python main.py path/to/file.pdf --convert-pdfs
+```
+
 #### `pipeline/detect_spreads.py` — Spread detection
 Analyzes each image to determine whether it contains two facing pages (a spread
 captured in a single microfilm frame) vs. a single page. Uses pixel-projection
