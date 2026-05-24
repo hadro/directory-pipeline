@@ -61,6 +61,13 @@ DEFAULT_MODEL = "gemini-3.1-flash-lite"
 # Fallback used when the primary model appears to have hit its output token limit.
 # Lite models cap output at ~8 k tokens; the fallback handles dense pages with 100+ entries.
 FALLBACK_MODEL = "gemini-3-flash-preview"
+
+# Sparse-page thresholds: pages below BOTH limits are skipped before the NER call.
+# A blank or nearly-blank page passes enough ghost/bleed text to trigger hallucinations.
+# "Both" (AND) logic keeps short-but-real single-entry pages from being silently dropped.
+MIN_OCR_CHARS = 100       # characters in the assembled page text
+MIN_ALIGNED_LINES = 3     # lines in the aligned JSON (process_page path)
+MIN_SURYA_BBOXES = 5      # Surya bbox detections (process_page_txt path)
 NER_PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ner_prompt.md"
 
 
@@ -797,6 +804,18 @@ def process_page(
     if not page_text.strip():
         return {"entries": [], "page_context": prior_context, "status": "empty"}
 
+    # Sparse-page guard: skip NER when both the aligned line count and the OCR
+    # character count are below their thresholds. Blank/missing pages often leak
+    # enough ghost text from the backing page to fool the model into hallucinating
+    # entries; requiring BOTH signals to fail keeps legitimate short pages safe.
+    n_lines = len(aligned.get("lines", []))
+    if n_lines < MIN_ALIGNED_LINES and len(page_text) < MIN_OCR_CHARS:
+        _log(
+            f"    [{aligned_path.name}] sparse page ({n_lines} aligned lines, "
+            f"{len(page_text)} chars) — skipping NER"
+        )
+        return {"entries": [], "page_context": prior_context, "status": "sparse_page"}
+
     if dry_run:
         return {
             "entries": [],
@@ -946,6 +965,24 @@ def process_page_txt(
     page_text = "\n".join(_normalize_line(ln) for ln in raw.splitlines() if ln.strip())
     if not page_text.strip():
         return {"entries": [], "page_context": prior_context, "status": "empty"}
+
+    # Sparse-page guard: cross-check OCR text length against Surya bbox count.
+    # Both must be below threshold to skip — preserving legitimate short pages.
+    if len(page_text) < MIN_OCR_CHARS:
+        surya_path = txt_path.parent / f"{stem}_surya.json"
+        surya_count = 0
+        if surya_path.exists():
+            try:
+                surya_data = json.loads(surya_path.read_text(encoding="utf-8"))
+                surya_count = len(surya_data.get("bboxes", surya_data.get("lines", [])))
+            except Exception:
+                pass
+        if surya_count < MIN_SURYA_BBOXES:
+            _log(
+                f"    [{txt_path.name}] sparse page ({surya_count} surya bboxes, "
+                f"{len(page_text)} chars) — skipping NER"
+            )
+            return {"entries": [], "page_context": prior_context, "status": "sparse_page"}
 
     if dry_run:
         return {
