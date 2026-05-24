@@ -365,7 +365,7 @@ def main() -> None:
         "image_path", "item_id", "filename",
         "double_page", "confidence", "reason",
         "aspect_ratio", "gutter_score", "consistency",
-        "microform_prior",
+        "microform_prior", "gutter_col",
     ]
 
     counts = {"double": 0, "single": 0, "low_conf": 0, "error": 0}
@@ -399,6 +399,7 @@ def main() -> None:
                 "item_id": item_id,
                 "filename": img_path.name,
                 **result,
+                "gutter_col": "",
             })
 
             if result["double_page"]:

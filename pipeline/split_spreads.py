@@ -171,9 +171,14 @@ def split_image(
     dry_run: bool = False,
     quiet: bool = False,
     force: bool = False,
+    gutter_col_override: int | None = None,
 ) -> dict | None:
     """
     Split one double-page image at its detected gutter column.
+
+    If gutter_col_override is provided, auto-detection is skipped and that
+    column is used directly — useful for correcting mis-detected gutters by
+    editing the gutter_col field in spreads_report.csv and re-running with --force.
 
     Returns the sidecar dict on success, None on failure.
     Skips (returns existing sidecar dict) if split files already exist,
@@ -219,7 +224,12 @@ def split_image(
         return None
 
     orig_w, orig_h = img.size  # PIL: (width, height)
-    gutter_col = _find_gutter_col(arr_gray)
+    if gutter_col_override is not None:
+        gutter_col = gutter_col_override
+        if not quiet:
+            print(f"  Using manual gutter_col={gutter_col} for {image_path.name}", file=sys.stderr)
+    else:
+        gutter_col = _find_gutter_col(arr_gray)
 
     # Guard: gutter must be inside the image with at least a few px of margin
     margin = 8
@@ -352,7 +362,9 @@ def main() -> None:
             counts["error"] += 1
             continue
 
-        result = split_image(image_path, dry_run=args.dry_run, quiet=args.quiet, force=args.force)
+        raw_override = row.get("gutter_col", "").strip()
+        gutter_override = int(raw_override) if raw_override.isdigit() else None
+        result = split_image(image_path, dry_run=args.dry_run, quiet=args.quiet, force=args.force, gutter_col_override=gutter_override)
         if result is None:
             counts["error"] += 1
         elif result.get("skipped"):
