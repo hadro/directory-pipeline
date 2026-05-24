@@ -1134,6 +1134,28 @@ def align_image(
         coords_from_fallback = False
         if canvas_uri:
             nat_w, nat_h = _get_natural_dims(canvas_uri)
+        # Sanity-check: some NYPL images return a square placeholder (e.g.
+        # 2560×2560) from info.json even though the actual image is portrait or
+        # landscape.  Detect this by comparing the info.json aspect ratio to the
+        # downloaded image's aspect ratio.  If info.json returned a nearly-square
+        # result but the downloaded image is clearly non-square (ratio differs by
+        # more than 15 %), treat it as a bad response and fall back to downloaded
+        # image dimensions so coordinates land in the right place.
+        if nat_w and nat_h and img_w and img_h:
+            nat_ratio = nat_w / nat_h
+            img_ratio = img_w / img_h
+            _is_square = abs(nat_ratio - 1.0) < 0.02          # info.json ≈ square
+            _img_non_square = abs(img_ratio - 1.0) > 0.15     # downloaded image is not
+            if _is_square and _img_non_square:
+                _log(
+                    f"  *** WARNING: {image_path.name}: info.json returned a square"
+                    f" ({nat_w}x{nat_h}) but the downloaded image is non-square"
+                    f" ({img_w}x{img_h}, ratio={img_ratio:.3f}). This is likely a"
+                    f" server-side placeholder. Falling back to downloaded image"
+                    f" dimensions for canvas coordinates."
+                )
+                nat_w, nat_h = img_w, img_h
+                coords_from_fallback = True
         if not nat_w:
             nat_w, nat_h = canvas_w, canvas_h
             coords_from_fallback = True
