@@ -281,6 +281,15 @@ def fetch_manifest(
         with _urllib_request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
 
+    # Ensure every painting annotation carries motivation:"painting".
+    # Some providers (e.g. NYPL) omit this required IIIF Presentation 3 field,
+    # which causes strict viewers (Clover/Hyperion) to reject the annotation.
+    for canvas in data.get("items", []):
+        for ap in canvas.get("items", []):
+            for ann in ap.get("items", []):
+                if ann.get("type") == "Annotation" and not ann.get("motivation"):
+                    ann["motivation"] = "painting"
+
     if cache_path:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         with open(cache_path, "w", encoding="utf-8") as f:
