@@ -412,11 +412,11 @@ tbody tr.selected .detail-btn {{ color: #1a6ebd; }}
 .skip-link:focus {{ top: 0; }}
 
 /* ── Detail panel ── */
-#detail {{ width: 380px; min-width: 300px; max-width: 440px; background: #fff; border-left: 1px solid #ddd; overflow-y: auto; display: none; }}
+#detail {{ width: 560px; min-width: 480px; max-width: 640px; background: #fff; border-left: 1px solid #ddd; overflow-y: auto; display: none; }}
 #detail.open {{ display: block; }}
 #detail-inner {{ padding: 14px; }}
 #detail-inner h2 {{ margin: 0 0 10px; font-size: 14px; font-weight: 700; line-height: 1.3; }}
-#detail-thumb {{ width: 100%; aspect-ratio: 4/3; object-fit: contain; background: #f5f5f5; border-radius: 4px; margin-bottom: 10px; display: block; border: 1px solid #ddd; }}
+#detail-thumb {{ width: 100%; min-height: 80px; object-fit: contain; background: #f5f5f5; border-radius: 4px; margin-bottom: 10px; display: block; border: 1px solid #ddd; }}
 .detail-fields {{ display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 12px; }}
 .df-key {{ color: #666; font-weight: 600; white-space: nowrap; }}
 .df-val {{ word-break: break-word; }}
@@ -1003,7 +1003,7 @@ function thumbUrl(row) {{
     if (xywh.length !== 4 || xywh[2] <= 0 || xywh[3] <= 0) return "";
     const [cw, ch] = [svc[1], svc[2]];
     if (!cw || !ch) return "";
-    const padV = Math.max(xywh[3], 60), tw = 400;
+    const padV = Math.max(xywh[3], 60), tw = 800;
     // Ensure the crop is at least 600px wide so narrow Surya detections
     // (e.g. short names in classified directories) show enough context.
     const minW = 600;
