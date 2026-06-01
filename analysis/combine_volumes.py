@@ -54,6 +54,7 @@ UNIFIED_COLUMNS = [
     "flag_header_row",
     "flag_duplicate",
     "flag_unanchored",
+    "flag_hallucinated",
 ]
 
 # ---------------------------------------------------------------------------
@@ -113,6 +114,7 @@ DEFAULT_MAPPING = {
     "flag_header_row":      "flag_header_row",
     "flag_duplicate":       "flag_duplicate",
     "flag_unanchored":      "flag_unanchored",
+    "flag_hallucinated":    "flag_hallucinated",
 }
 
 # Volumes with bespoke handling keyed by UUID
@@ -280,6 +282,13 @@ def combine(collection_dir: Path, output_path: Path) -> None:
                 mapping = build_mapping(volume_id, reader.fieldnames or [])
                 count = 0
                 for row in reader:
+                    if row.get("flag_unanchored") == "1":
+                        continue
+                    if row.get("flag_hallucinated") == "1":
+                        continue
+                    cf = row.get("canvas_fragment", "")
+                    if cf and "#xywh=" not in cf:
+                        continue
                     out_row = transform_row(row, volume_id, mapping)
                     out_row["volume_id"] = volume_id
                     out_row["volume_title"] = title

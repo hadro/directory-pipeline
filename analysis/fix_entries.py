@@ -519,6 +519,67 @@ def flag_name_eq_address(name: str, address: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 5b. Hallucination detection — same-page field repetition
+# ---------------------------------------------------------------------------
+
+# Values injected by NER when a field is absent; these repeat legitimately.
+_NER_PLACEHOLDER_VALUES: frozenset[str] = frozenset({
+    "n/a", "na", "none", "unknown", "not specified", "not available",
+    "rates on request", "on request",
+})
+
+# Fields that carry proprietor/manager info across the various volume schemas.
+# Each schema uses different column names; we check all of them.
+# Phone and rates are excluded — shared exchange codes and standard rate tiers
+# produce too many false positives across legitimate chain/facility entries.
+_OWNER_FIELDS: tuple[str, ...] = (
+    "proprietor",         # Green Book + most volumes
+    "manager_proprietor", # Travelguide 1954, 1956
+    "manager_owner",      # Travelguide 1953, 1955, 1957
+    "personnel",          # Travelguide 1952 (and similar)
+)
+_OWNER_FIELD_MIN_LEN: int = 5  # skip placeholder / single-word values
+
+
+def find_hallucinated_pages(
+    rows: list[dict],
+    repetition_threshold: int = 4,
+) -> set[int]:
+    """Return indices of entries on pages where hallucination is likely.
+
+    If *repetition_threshold* or more entries on the same page share an
+    identical proprietor value, every entry on that page is flagged.
+    Hallucinated entries repeat the same proprietor many times on a single
+    page because the model anchors on one real entry and invents name
+    variations around it.  A legitimate manager at 3 locations on the same
+    page is plausible; 4+ is the ghost-text hallucination pattern.
+    """
+    from collections import defaultdict
+
+    # Group row indices by source image
+    image_groups: dict[str, list[int]] = defaultdict(list)
+    for i, row in enumerate(rows):
+        img = (row.get("image") or "").strip()
+        if img:
+            image_groups[img].append(i)
+
+    flagged: set[int] = set()
+    for img, indices in image_groups.items():
+        for field in _OWNER_FIELDS:
+            value_counts: dict[str, int] = defaultdict(int)
+            for idx in indices:
+                val = (rows[idx].get(field) or "").strip()
+                if (val and len(val) >= _OWNER_FIELD_MIN_LEN
+                        and val.lower() not in _NER_PLACEHOLDER_VALUES):
+                    value_counts[val] += 1
+            if any(cnt >= repetition_threshold for cnt in value_counts.values()):
+                flagged.update(indices)
+                break  # one field hit is enough to flag the whole page
+
+    return flagged
+
+
+# ---------------------------------------------------------------------------
 # 6. Deduplication
 # ---------------------------------------------------------------------------
 
@@ -654,6 +715,7 @@ def process_csv(
         "flag_header_row": 0,
         "flag_duplicate": 0,
         "flag_unanchored": 0,
+        "flag_hallucinated": 0,
     }
 
     # ── Apply transformations ────────────────────────────────────────────────
@@ -740,11 +802,22 @@ def process_csv(
             flag_unanchored += 1
     stats["flag_unanchored"] = flag_unanchored
 
+    # ── Hallucinated pages (same-page field repetition) ───────────────────────
+    # If 3+ entries on the same page share an identical proprietor, phone, or
+    # rates value, the model likely anchored on one real entry and invented
+    # variations — the ghost-text failure mode that the unanchored filter misses.
+    hallucinated_indices = find_hallucinated_pages(rows)
+    for row in rows:
+        row["flag_hallucinated"] = ""
+    for idx in hallucinated_indices:
+        rows[idx]["flag_hallucinated"] = "1"
+    stats["flag_hallucinated"] = len(hallucinated_indices)
+
     # ── Write output ─────────────────────────────────────────────────────────
     out_fieldnames = fieldnames + [
         f for f in ("flag_state_invalid", "flag_state_eq_city",
                     "flag_name_address", "flag_header_row",
-                    "flag_duplicate", "flag_unanchored")
+                    "flag_duplicate", "flag_unanchored", "flag_hallucinated")
         if f not in fieldnames
     ]
 
@@ -775,6 +848,8 @@ def _print_stats(path: Path, stats: dict) -> None:
           f"({100*stats['flag_header_row']/max(total,1):.1f}%)")
     print(f"  flag_duplicate:    {stats['flag_duplicate']:>5}  "
           f"({100*stats['flag_duplicate']/max(total,1):.1f}%)")
+    print(f"  flag_hallucinated: {stats['flag_hallucinated']:>5}  "
+          f"({100*stats['flag_hallucinated']/max(total,1):.1f}%)")
 
 
 # ---------------------------------------------------------------------------
@@ -848,6 +923,7 @@ def main() -> None:
         "inferred_categories": 0, "state_corrections": 0,
         "flag_state_invalid": 0, "flag_state_eq_city": 0,
         "flag_name_address": 0, "flag_header_row": 0, "flag_duplicate": 0,
+        "flag_hallucinated": 0,
     }
 
     for src in paths:
