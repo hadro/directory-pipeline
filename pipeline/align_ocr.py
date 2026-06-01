@@ -97,31 +97,21 @@ BBOX_RE = re.compile(r"bbox\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)")
 # IIIF image-service helpers
 # ---------------------------------------------------------------------------
 
-@functools.lru_cache(maxsize=256)
-def _get_natural_dims(canvas_id: str) -> tuple[int, int]:
-    """Return (width, height) of the natural image by fetching info.json.
+@functools.lru_cache(maxsize=64)
+def _fetch_info_json(info_url: str) -> tuple[int, int]:
+    """Fetch a IIIF info.json and return (width, height). Cached by URL.
 
-    Parses the IIIF Image API service base from *canvas_id* (a URL of the form
-    ``https://host/prefix/identifier/region/size/rotation/quality.fmt``), then
-    fetches ``{service_base}/info.json``.  Retries once on failure.  Results
-    are cached via lru_cache.  Returns (0, 0) on any error.
+    Cached by info_url so manifests that use a shared identifier as their
+    canvas namespace (e.g. Tulsa Library 1922, where every canvas_id starts
+    with the same manifest ID) only hit the network once regardless of how
+    many canvases reference it.
     """
     import time as _time
-    parts = urlparse(canvas_id)
-    path_parts = parts.path.split("/")
-    # IIIF Image API path: /{prefix}/{identifier}/{region}/…
-    # Service base = scheme + host + first 4 path segments (index 0–3, where 0 is "")
-    if len(path_parts) < 5:
-        return 0, 0
-    service_base = f"{parts.scheme}://{parts.netloc}" + "/".join(path_parts[:4])
-    info_url = f"{service_base}/info.json"
     for attempt in range(2):
         try:
             with urllib.request.urlopen(info_url, timeout=15) as resp:
                 info = json.loads(resp.read())
-            w = int(info.get("width") or 0)
-            h = int(info.get("height") or 0)
-            return w, h
+            return int(info.get("width") or 0), int(info.get("height") or 0)
         except Exception as exc:
             if attempt == 0:
                 _log(f"  Warning: could not fetch {info_url} (attempt 1): {exc} — retrying")
@@ -129,6 +119,25 @@ def _get_natural_dims(canvas_id: str) -> tuple[int, int]:
             else:
                 _log(f"  Warning: could not fetch {info_url} (attempt 2): {exc} — giving up")
     return 0, 0
+
+
+@functools.lru_cache(maxsize=256)
+def _get_natural_dims(canvas_id: str) -> tuple[int, int]:
+    """Return (width, height) of the natural image by fetching info.json.
+
+    Parses the IIIF Image API service base from *canvas_id* (a URL of the form
+    ``https://host/prefix/identifier/region/size/rotation/quality.fmt``), then
+    delegates to _fetch_info_json which is cached by URL.  Returns (0, 0) on
+    any error.
+    """
+    parts = urlparse(canvas_id)
+    path_parts = parts.path.split("/")
+    # IIIF Image API path: /{prefix}/{identifier}/{region}/…
+    # Service base = scheme + host + first 4 path segments (index 0–3, where 0 is "")
+    if len(path_parts) < 5:
+        return 0, 0
+    service_base = f"{parts.scheme}://{parts.netloc}" + "/".join(path_parts[:4])
+    return _fetch_info_json(f"{service_base}/info.json")
 
 # ---------------------------------------------------------------------------
 # Tunable alignment parameters
@@ -303,6 +312,34 @@ def parse_surya(
     return page_bbox, lines, median_conf
 
 
+def _expand_multiline_surya_lines(lines: list[dict]) -> list[dict]:
+    """Split Surya lines whose text contains embedded newlines into individual entries.
+
+    Surya sometimes groups a tall region of adjacent directory entries into a
+    single detection with newline-separated text.  Since NW alignment is 1-to-1
+    at line granularity, only one Gemini line gets a bbox while the rest become
+    unmatched.  Splitting the region bbox proportionally by sub-line count gives
+    each Gemini line a valid candidate to align against.
+    """
+    result: list[dict] = []
+    for ln in lines:
+        text = ln.get("text", "")
+        sub_texts = [t.strip() for t in text.split("\n") if t.strip()]
+        if len(sub_texts) <= 1:
+            result.append(ln)
+            continue
+        x1, y1, x2, y2 = ln["bbox"]
+        h_per = (y2 - y1) / len(sub_texts)
+        conf = ln.get("surya_confidence", 1.0)
+        for i, sub_text in enumerate(sub_texts):
+            result.append({
+                "bbox": [x1, round(y1 + i * h_per), x2, round(y1 + (i + 1) * h_per)],
+                "text": sub_text,
+                "surya_confidence": conf,
+            })
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Reading-order correction
 # ---------------------------------------------------------------------------
@@ -396,6 +433,13 @@ def sort_by_reading_order(lines: list[dict], page_width: int) -> list[dict]:
     (< 10% of lines in the inter-cluster zone) prevents this from running
     on pages with dense centered advertisement content that straddles both
     column margins — splitting that content across columns would confuse NW.
+
+    Ad strip handling: Gemini marks advertisement blocks with
+    ``=== ADVERTISEMENT ===`` delimiters, and those lines are excluded from
+    the NW anchor set (see ``_find_anchors``).  Reordering Surya bboxes for
+    ad strips is not attempted here — the thresholds needed to detect genuine
+    vertical-margin strips reliably are too close to normal wrapped-line tails
+    that appear in the same x zone.
     """
     if not lines or page_width <= 0:
         return lines
@@ -685,6 +729,7 @@ def _median(values: list[float]) -> float:
 def _find_anchors(
     ocr_line_texts: list[str],
     gemini_lines: list[str],
+    non_anchor_gem_indices: "set[int] | None" = None,
 ) -> list[tuple[int, int]]:
     """
     Find (ocr_line_idx, gem_line_idx) anchor pairs where a Gemini line is a
@@ -698,12 +743,17 @@ def _find_anchors(
     cost to reach the real CHERAW OCR line at a later sequence position.
 
     ocr_line_texts: raw (un-normalised) text strings, one per OCR line.
+    non_anchor_gem_indices: optional set of Gemini line indices that must not
+        become anchors (e.g. lines inside ``=== ADVERTISEMENT ===`` blocks).
+        Those lines are still included in the NW pass — they just cannot pin
+        the alignment.
 
     Returns pairs in monotonically increasing order on both axes.  Each
     OCR line and each Gemini line appears in at most one anchor.
     """
     tess_line_texts = [_normalize(t) for t in ocr_line_texts]
     gem_norms = [_normalize(g) for g in gemini_lines]
+    _non_anchor = non_anchor_gem_indices or set()
 
     # Lines whose normalised text appears more than once in the Gemini sequence
     # are ambiguous anchors: we cannot tell which Gemini occurrence corresponds
@@ -717,6 +767,8 @@ def _find_anchors(
 
     for gi, gnorm in enumerate(gem_norms):
         if len(gnorm) < _ANCHOR_MIN_LEN:
+            continue
+        if gi in _non_anchor:  # inside an advertisement block — skip
             continue
         if gem_counts[gnorm] > 1:  # repeated line — skip to avoid mis-anchoring
             continue
@@ -927,6 +979,7 @@ def _build_line_aligned_lines(
     sorted_surya_lines: list[dict],
     gemini_lines: list[str],
     fragment_fn,
+    non_anchor_gem_indices: "set[int] | None" = None,
 ) -> tuple[list[dict], list[str]]:
     """
     Align Gemini text to Surya line bboxes using anchored Needleman-Wunsch
@@ -946,7 +999,7 @@ def _build_line_aligned_lines(
         return [], list(gemini_lines)
 
     surya_texts = [ln["text"] for ln in sorted_surya_lines]
-    anchors = _find_anchors(surya_texts, gemini_lines)
+    anchors = _find_anchors(surya_texts, gemini_lines, non_anchor_gem_indices)
 
     def _nw_lines(s_start: int, s_end: int, g_start: int, g_end: int):
         """NW over line-index slices; return pairs with absolute indices."""
@@ -1107,21 +1160,37 @@ def align_image(
             page_bbox, lines, surya_median_conf = parse_surya(
                 surya_path, min_confidence=min_surya_confidence
             )
+            lines = _expand_multiline_surya_lines(lines)
         else:
             page_bbox, lines = parse_hocr(hocr_path)
 
         img_w, img_h = page_bbox[2], page_bbox[3]
         page_w = img_w - page_bbox[0]
 
-        lines = sort_by_reading_order(lines, page_w)
         lines = filter_short_lines(lines)
         lines = filter_margin_lines(lines, img_w)
+        lines = sort_by_reading_order(lines, page_w)
 
         # Gemini text ---------------------------------------------------------
+        # Parse line-by-line, filtering delimiter markers but tracking which
+        # content lines fall inside advertisement blocks.  Ad-block lines are
+        # excluded from anchor selection (they often contain repeated text such
+        # as city/state footers that would create false anchors) but are still
+        # included in the NW pass so Surya ad bboxes can be consumed as gaps.
         gemini_text = gemini_txt.read_text(encoding="utf-8")
-        gemini_lines = [
-            ln for ln in (ln.strip() for ln in gemini_text.splitlines()) if ln
-        ]
+        gemini_lines: list[str] = []
+        gemini_ad_indices: set[int] = set()
+        _in_ad = False
+        for _raw_ln in gemini_text.splitlines():
+            _ln = _raw_ln.strip()
+            if not _ln:
+                continue
+            if re.match(r"^=== .+ ===$", _ln):
+                _in_ad = _ln.startswith("=== ADVERTISEMENT")
+                continue
+            if _in_ad:
+                gemini_ad_indices.add(len(gemini_lines))
+            gemini_lines.append(_ln)
 
         # IIIF canvas info ----------------------------------------------------
         image_id = _extract_image_id(image_path.name)
@@ -1215,7 +1284,7 @@ def align_image(
         # NW alignment --------------------------------------------------------
         if use_surya:
             result_lines, unmatched_gemini = _build_line_aligned_lines(
-                lines, gemini_lines, fragment
+                lines, gemini_lines, fragment, gemini_ad_indices
             )
         else:
             result_lines, unmatched_gemini = _build_word_aligned_lines(
