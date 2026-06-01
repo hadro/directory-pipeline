@@ -36,6 +36,12 @@ Usage
     # Use a specific model:
     python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \\
         --selection selection.txt --model gemini-3-flash-preview
+
+    # Multi-section volume (city directory with alphabetical/street/business sections):
+    python pipeline/generate_prompt.py output/tulsa_1921/ \\
+        --sections output/tulsa_1921/sections.txt
+    # Generates ocr_prompt_alphabetical.md, ner_prompt_alphabetical.md, etc.
+    # plus ocr_prompt.md / ner_prompt.md as fallbacks from all sampled pages.
 """
 
 import argparse
@@ -255,6 +261,32 @@ def _save(text: str, path: Path, quiet: bool) -> None:
         print(f"  Saved → {path}", file=sys.stderr)
 
 
+def _sample_section_pages(
+    section: dict,
+    all_files: list[str],
+    item_dir: Path,
+    n: int = 3,
+) -> list[str]:
+    """Pick n representative filenames spread evenly through a section's page range.
+
+    Only returns pages that actually exist on disk.
+    """
+    indices = section["page_indices"]
+    if not indices:
+        return []
+    if len(indices) <= n:
+        candidates = indices
+    else:
+        step = (len(indices) - 1) / (n - 1) if n > 1 else 0
+        candidates = [indices[round(i * step)] for i in range(n)]
+    result = []
+    for idx in candidates:
+        fname = Path(all_files[idx]).name
+        if (item_dir / fname).exists():
+            result.append(fname)
+    return result
+
+
 def _detect_two_columns(image_paths: list[Path]) -> bool:
     """Return True if the majority of sample pages appear to be two-column layout.
 
@@ -298,7 +330,7 @@ def main() -> None:
         help="Slug directory (output/{slug}/) or item directory containing the selected images",
     )
 
-    sel_group = parser.add_mutually_exclusive_group(required=True)
+    sel_group = parser.add_mutually_exclusive_group(required=False)
     sel_group.add_argument(
         "--selection", "-s",
         metavar="FILE",
@@ -309,6 +341,17 @@ def main() -> None:
         nargs="+",
         metavar="FILENAME",
         help="Explicit list of image filenames to use as samples",
+    )
+    parser.add_argument(
+        "--sections",
+        metavar="PATH",
+        help=(
+            "Path to sections.txt marking structural section boundaries. "
+            "When provided, auto-samples pages per section and generates "
+            "per-section prompt files (ocr_prompt_{label}.md, ner_prompt_{label}.md) "
+            "plus fallback ocr_prompt.md / ner_prompt.md from all sampled pages. "
+            "--selection / --pages are optional when this flag is used."
+        ),
     )
 
     parser.add_argument(
@@ -390,6 +433,240 @@ def main() -> None:
         print(f"Error: not a directory: {root}", file=sys.stderr)
         sys.exit(1)
 
+    # Validate that at least one image source is supplied
+    if not args.sections and not args.selection and not args.pages:
+        parser.error("one of --selection, --pages, or --sections is required")
+
+    # =========================================================================
+    # SECTIONS MODE — auto-sample per section and generate per-section prompts
+    # =========================================================================
+    if args.sections:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent.parent))
+        from utils.section_utils import load_sections
+
+        sections_path = Path(args.sections)
+        if not sections_path.exists():
+            print(f"Error: sections file not found: {sections_path}", file=sys.stderr)
+            sys.exit(1)
+
+        # Discover images using the same logic as run_gemini_ocr.py:
+        # include _left/_right splits in place of the original spread file.
+        _all_jpgs = sorted(
+            p for p in root.rglob("*.jpg")
+            if not p.stem.endswith("_viz")
+        )
+        all_imgs: list[Path] = []
+        for _p in _all_jpgs:
+            if _p.stem.endswith("_left") or _p.stem.endswith("_right"):
+                all_imgs.append(_p)
+                continue
+            _left = _p.with_name(f"{_p.stem}_left.jpg")
+            _right = _p.with_name(f"{_p.stem}_right.jpg")
+            if _left.exists() and _right.exists():
+                continue
+            all_imgs.append(_p)
+        if not all_imgs:
+            print(f"Error: no .jpg images found under {root}", file=sys.stderr)
+            sys.exit(1)
+
+        # item_dir = the directory that actually contains the images
+        item_dir = all_imgs[0].parent
+        slug_dir = root if root == item_dir else item_dir.parent
+
+        all_file_names = [p.name for p in all_imgs]
+
+        try:
+            sections = load_sections(sections_path, all_file_names)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        if not sections:
+            print("Error: sections.txt is empty or contains no valid entries.", file=sys.stderr)
+            sys.exit(1)
+
+        if not args.quiet:
+            print(f"Found {len(sections)} section(s): {', '.join(s['label'] for s in sections)}", file=sys.stderr)
+
+        # --- Set up Gemini client + NER template ----------------------------
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            print("Error: GEMINI_API_KEY is not set.", file=sys.stderr)
+            sys.exit(1)
+        from google import genai
+        client = genai.Client(api_key=api_key)
+
+        ner_template_path = Path(args.ner_template)
+        if not ner_template_path.exists():
+            print(f"Error: NER template not found: {ner_template_path}", file=sys.stderr)
+            sys.exit(1)
+        ner_template_text = ner_template_path.read_text(encoding="utf-8")
+
+        # --- Use manually selected pages if available, else auto-sample --------
+        # Check for selection.txt (explicit flag takes priority, then auto-discover)
+        manually_selected: list[str] = []
+        if args.selection:
+            sel_path = Path(args.selection)
+            if sel_path.exists():
+                manually_selected = _load_selection(sel_path)
+                if not args.quiet:
+                    print(f"Using manually selected pages from {sel_path}", file=sys.stderr)
+        else:
+            for candidate in (slug_dir / "selection.txt", item_dir / "selection.txt"):
+                if candidate.exists():
+                    manually_selected = _load_selection(candidate)
+                    if not args.quiet:
+                        print(f"Using manually selected pages from {candidate}", file=sys.stderr)
+                    break
+
+        # Build a set-of-indices for each section so we can group manual selections
+        section_index_sets = {
+            sec["label"]: set(sec["page_indices"]) for sec in sections
+        }
+        file_index = {n: i for i, n in enumerate(all_file_names)}
+
+        def _pages_for_section(sec: dict) -> list[str]:
+            """Return pages for this section: manually selected if available, else auto-sampled."""
+            if manually_selected:
+                in_section = [
+                    n for n in manually_selected
+                    if file_index.get(n, -1) in section_index_sets[sec["label"]]
+                ]
+                if in_section:
+                    return in_section
+            return _sample_section_pages(sec, all_file_names, item_dir, n=3)
+
+        all_sampled_names: list[str] = []
+
+        # --- Per-section prompt generation ----------------------------------
+        for sec in sections:
+            label = sec["label"]
+            sec_names = _pages_for_section(sec)
+            if not sec_names:
+                print(f"  Warning: no images found for section '{label}', skipping.", file=sys.stderr)
+                continue
+
+            all_sampled_names.extend(sec_names)
+
+            ocr_sec_out = slug_dir / f"ocr_prompt_{label}.md"
+            ner_sec_out = slug_dir / f"ner_prompt_{label}.md"
+
+            if not args.force and not args.print_only:
+                sec_ocr_needed = not args.ner_only and not ocr_sec_out.exists()
+                sec_ner_needed = not args.ocr_only and not ner_sec_out.exists()
+                if not sec_ocr_needed and not sec_ner_needed:
+                    if not args.quiet:
+                        print(
+                            f"  [{label}] prompts already exist, skipping. Use --force to regenerate.",
+                            file=sys.stderr,
+                        )
+                    continue
+
+            if not args.quiet:
+                print(
+                    f"\n[{label}] Sampling {len(sec_names)} page(s): {', '.join(sec_names)}",
+                    file=sys.stderr,
+                )
+
+            try:
+                sec_parts = _load_images(item_dir, sec_names, args.quiet)
+            except FileNotFoundError as e:
+                print(f"  Error loading images for section '{label}': {e}", file=sys.stderr)
+                continue
+
+            # OCR prompt for this section
+            if not args.ner_only:
+                if not args.quiet:
+                    print(f"  [{label}] Generating OCR prompt…", file=sys.stderr)
+                try:
+                    ocr_meta = _OCR_META_PROMPT.format(n=len(sec_names))
+                    if args.expand_dittos:
+                        ocr_meta = ocr_meta.rstrip() + _DITTO_INSTRUCTION
+                    if _detect_two_columns([item_dir / n for n in sec_names]):
+                        ocr_meta = ocr_meta.rstrip() + _COLUMN_INJECTION
+                    ocr_text = _call_gemini(client, args.model, ocr_meta, sec_parts, args.quiet)
+                except Exception as exc:
+                    print(f"  Error generating OCR prompt for '{label}': {exc}", file=sys.stderr)
+                    continue
+                if ocr_text and not args.print_only:
+                    _save(ocr_text, ocr_sec_out, args.quiet)
+                elif args.print_only:
+                    print(f"=== OCR PROMPT [{label}] ===\n{ocr_text}\n")
+
+            # NER prompt for this section
+            if not args.ocr_only:
+                if not args.quiet:
+                    print(f"  [{label}] Generating NER prompt…", file=sys.stderr)
+                try:
+                    ner_meta = _NER_META_PROMPT.format(
+                        n=len(sec_names),
+                        ner_template=ner_template_text,
+                    )
+                    ner_text = _call_gemini(client, args.model, ner_meta, sec_parts, args.quiet)
+                except Exception as exc:
+                    print(f"  Error generating NER prompt for '{label}': {exc}", file=sys.stderr)
+                    continue
+                if ner_text and not args.print_only:
+                    _save(ner_text, ner_sec_out, args.quiet)
+                elif args.print_only:
+                    print(f"=== NER PROMPT [{label}] ===\n{ner_text}\n")
+
+        # --- Fallback all-pages prompts from combined samples ----------------
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        combined_names = [n for n in all_sampled_names if not (n in seen or seen.add(n))]
+
+        if combined_names:
+            ocr_out = Path(args.ocr_out) if args.ocr_out else slug_dir / "ocr_prompt.md"
+            ner_out = Path(args.ner_out) if args.ner_out else slug_dir / "ner_prompt.md"
+            fallback_needed = (
+                args.force
+                or args.print_only
+                or (not args.ner_only and not ocr_out.exists())
+                or (not args.ocr_only and not ner_out.exists())
+            )
+            if fallback_needed:
+                if not args.quiet:
+                    print(
+                        f"\nGenerating fallback prompts from {len(combined_names)} combined sample(s)…",
+                        file=sys.stderr,
+                    )
+                try:
+                    combined_parts = _load_images(item_dir, combined_names, args.quiet)
+                except FileNotFoundError as e:
+                    print(f"Error loading combined images: {e}", file=sys.stderr)
+                    sys.exit(1)
+
+                if not args.ner_only:
+                    ocr_meta = _OCR_META_PROMPT.format(n=len(combined_names))
+                    if args.expand_dittos:
+                        ocr_meta = ocr_meta.rstrip() + _DITTO_INSTRUCTION
+                    if _detect_two_columns([item_dir / n for n in combined_names]):
+                        ocr_meta = ocr_meta.rstrip() + _COLUMN_INJECTION
+                    try:
+                        ocr_text = _call_gemini(client, args.model, ocr_meta, combined_parts, args.quiet)
+                        if ocr_text and not args.print_only:
+                            _save(ocr_text, ocr_out, args.quiet)
+                    except Exception as exc:
+                        print(f"Error generating fallback OCR prompt: {exc}", file=sys.stderr)
+
+                if not args.ocr_only:
+                    ner_meta = _NER_META_PROMPT.format(
+                        n=len(combined_names), ner_template=ner_template_text
+                    )
+                    try:
+                        ner_text = _call_gemini(client, args.model, ner_meta, combined_parts, args.quiet)
+                        if ner_text and not args.print_only:
+                            _save(ner_text, ner_out, args.quiet)
+                    except Exception as exc:
+                        print(f"Error generating fallback NER prompt: {exc}", file=sys.stderr)
+
+        return  # sections mode is complete
+
+    # =========================================================================
+    # STANDARD MODE — single selection or explicit page list
+    # =========================================================================
     if args.selection:
         sel_path = Path(args.selection)
         if not sel_path.exists():

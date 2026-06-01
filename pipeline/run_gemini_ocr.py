@@ -31,6 +31,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 load_dotenv()
 from google.genai.types import FinishReason, GenerateContentConfig, HttpOptions, MediaResolution, Part, ThinkingConfig
 
@@ -412,6 +414,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--sections",
+        metavar="PATH",
+        help=(
+            "Path to sections.txt marking section boundaries. "
+            "When provided, each page is OCR'd with the prompt for its section "
+            "(ocr_prompt_{label}.md) falling back to ocr_prompt.md if not found."
+        ),
+    )
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="Suppress per-file progress output",
@@ -490,6 +501,53 @@ def main() -> None:
 
     service_tier = "flex" if args.flex else None
 
+    # --- Per-page prompt mapping (sections mode) ----------------------------
+    img_prompts: dict[Path, str] = {}
+    if args.sections:
+        from utils.section_utils import load_sections, prompt_for_page
+
+        sections_path = Path(args.sections)
+        if not sections_path.exists():
+            print(f"Error: sections file not found: {sections_path}", file=sys.stderr)
+            sys.exit(1)
+        all_names = [p.name for p in images]
+        try:
+            sections = load_sections(sections_path, all_names)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        # Resolve slug_dir — where section-specific prompt files live
+        root = output_root.resolve()
+        slug_dir = root
+        for candidate in (root, root.parent):
+            if (candidate / "ocr_prompt.md").exists() or any(candidate.glob("ocr_prompt_*.md")):
+                slug_dir = candidate
+                break
+
+        prompt_cache: dict[str, str] = {}
+        for img in images:
+            ppath = prompt_for_page(img.name, sections, all_names, slug_dir, "ocr_prompt")
+            key = str(ppath)
+            if key not in prompt_cache:
+                if ppath.exists():
+                    text = ppath.read_text(encoding="utf-8")
+                else:
+                    text = system_prompt  # fall through to generic
+                if args.expand_dittos:
+                    text = text.rstrip() + _DITTO_INSTRUCTION
+                prompt_cache[key] = text
+            img_prompts[img] = prompt_cache[key]
+
+        if not args.quiet:
+            unique_prompts = len(set(img_prompts.values()))
+            print(
+                f"Sections mode: {len(sections)} section(s), {unique_prompts} distinct prompt(s)",
+                file=sys.stderr,
+            )
+    else:
+        img_prompts = {img: system_prompt for img in images}
+
     total = len(images)
     if not args.quiet:
         tier_note = " [flex inference]" if service_tier else ""
@@ -508,7 +566,7 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(process_image, client, img, args.model, system_prompt, media_resolution, service_tier, fallback_model): img
+            executor.submit(process_image, client, img, args.model, img_prompts[img], media_resolution, service_tier, fallback_model): img
             for img in images
         }
         for future in as_completed(futures):

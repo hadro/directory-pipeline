@@ -30,6 +30,9 @@ import time
 import webbrowser
 from pathlib import Path
 
+# Add project root to path so utils can be imported
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 # ---------------------------------------------------------------------------
 # Image discovery helpers
 # ---------------------------------------------------------------------------
@@ -716,6 +719,53 @@ def generate_html(
 # Main
 # ---------------------------------------------------------------------------
 
+def _seed_selection_from_sections(
+    sections_path: Path,
+    item_dir: Path,
+    images: list[Path],
+    selection_path: Path,
+    n_per_section: int = 3,
+) -> None:
+    """Write an initial selection.txt with sample pages from each section.
+
+    Only called when sections.txt exists and selection.txt does not yet exist.
+    Samples n_per_section pages spread evenly through each section's range.
+    """
+    from utils.section_utils import load_sections
+
+    all_names = [p.name for p in images]
+    try:
+        sections = load_sections(sections_path, all_names)
+    except ValueError as e:
+        print(f"  Warning: could not parse sections.txt: {e}", file=sys.stderr)
+        return
+    if not sections:
+        return
+
+    selected: list[str] = []
+    for sec in sections:
+        indices = sec["page_indices"]
+        if not indices:
+            continue
+        if len(indices) <= n_per_section:
+            picks = indices
+        else:
+            step = (len(indices) - 1) / (n_per_section - 1) if n_per_section > 1 else 0
+            picks = [indices[round(i * step)] for i in range(n_per_section)]
+        for idx in picks:
+            fname = all_names[idx]
+            if (item_dir / fname).exists() and fname not in selected:
+                selected.append(fname)
+
+    if selected:
+        selection_path.write_text("\n".join(selected) + "\n", encoding="utf-8")
+        print(
+            f"  Auto-seeded selection.txt with {len(selected)} pages "
+            f"from {len(sections)} section(s): {', '.join(s['label'] for s in sections)}",
+            file=sys.stderr,
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate a browser-based page-selector (two-tab: sample + scope).",
@@ -731,6 +781,16 @@ def main() -> None:
         action="store_true",
         help="Generate the HTML but do not open it in a browser",
     )
+    parser.add_argument(
+        "--sections",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Path to sections.txt. When provided (or when sections.txt is found "
+            "automatically in output_dir), seeds selection.txt with representative "
+            "pages from each section if selection.txt does not already exist."
+        ),
+    )
     args = parser.parse_args()
 
     root = Path(args.output_dir).resolve()
@@ -743,8 +803,25 @@ def main() -> None:
         print(f"Error: no source .jpg images found under {root}", file=sys.stderr)
         sys.exit(1)
 
+    # Detect sections.txt automatically if not explicitly supplied
+    sections_path: Path | None = None
+    if args.sections:
+        sections_path = Path(args.sections)
+        if not sections_path.exists():
+            print(f"Warning: --sections file not found: {sections_path}", file=sys.stderr)
+            sections_path = None
+    else:
+        candidate = root / "sections.txt"
+        if candidate.exists():
+            sections_path = candidate
+
     for item_dir in item_dirs:
         images = _source_images(item_dir)
+
+        # Auto-seed selection.txt from section samples when sections.txt is present
+        selection_path = item_dir / "selection.txt"
+        if sections_path and not selection_path.exists():
+            _seed_selection_from_sections(sections_path, item_dir, images, selection_path)
 
         if args.no_open:
             out_path = generate_html(item_dir, images)

@@ -254,6 +254,26 @@ def build_stage_args(
     # use it directly so stages operate on the specific volume, not the whole collection.
     output_dir = Path(source) if Path(source).is_dir() else Path("output") / slug
 
+    def _resolve_sections() -> str | None:
+        """Return an absolute path for --sections, or None if not provided.
+
+        Resolution order for a relative path:
+          1. As-is (relative to CWD — e.g. output/tulsa_1921/sections.txt)
+          2. Relative to output_dir (e.g. sections.txt → output/tulsa_1921/sections.txt)
+        """
+        raw = getattr(parsed, "sections", None)
+        if not raw:
+            return None
+        p = Path(raw)
+        if p.is_absolute():
+            return str(p)
+        if p.exists():
+            return str(p.resolve())
+        candidate = output_dir / p
+        if candidate.exists():
+            return str(candidate.resolve())
+        return str(p.resolve())  # let the tool produce the "not found" error
+
     def _require_images() -> bool:
         if dry_run:
             return True
@@ -399,6 +419,8 @@ def build_stage_args(
                 a += ["--prompt-file", parsed.ocr_prompt]
             if getattr(parsed, "flex", False):
                 a += ["--flex"]
+            if _resolve_sections():
+                a += ["--sections", _resolve_sections()]
             runs.append(a)
         return runs  # list[list[str]] — one run per model
 
@@ -527,16 +549,24 @@ def build_stage_args(
         a = [str(output_dir)]
         if getattr(parsed, "no_open", False):
             a += ["--no-open"]
+        if _resolve_sections():
+            a += ["--sections", _resolve_sections()]
         return a
 
     if stage == "generate_prompts":
         if not _require_images():
             return None
         selection = getattr(parsed, "selection", None)
-        def _make_prompt_args(item_dir: Path, sel_path: Path) -> list[str]:
-            a = [str(item_dir), "--selection", str(sel_path),
-                 "--ocr-out", str(item_dir / "ocr_prompt.md"),
-                 "--ner-out", str(item_dir / "ner_prompt.md")]
+        sections = _resolve_sections()
+
+        def _make_prompt_args(item_dir: Path, sel_path: Path | None) -> list[str]:
+            if sections:
+                # Sections mode: no --selection needed; --sections drives sampling
+                a = [str(output_dir), "--sections", sections]
+            else:
+                a = [str(item_dir), "--selection", str(sel_path),
+                     "--ocr-out", str(item_dir / "ocr_prompt.md"),
+                     "--ner-out", str(item_dir / "ner_prompt.md")]
             if getattr(parsed, "prompt_model", None):
                 a += ["--model", parsed.prompt_model]
             if getattr(parsed, "ocr_only", False):
@@ -546,6 +576,10 @@ def build_stage_args(
             if getattr(parsed, "expand_dittos", False):
                 a += ["--expand-dittos"]
             return a
+
+        if sections:
+            # Sections mode bypasses the selection.txt requirement
+            return [_make_prompt_args(output_dir, None)]
 
         if selection:
             # Explicit --selection: single run, prompts go next to the selection file
@@ -602,6 +636,8 @@ def build_stage_args(
                 a += ["--flex"]
             if getattr(parsed, "mode", None):
                 a += ["--mode", parsed.mode]
+            if _resolve_sections():
+                a += ["--sections", _resolve_sections()]
             runs.append(a)
         return runs
 
@@ -1102,6 +1138,18 @@ def main() -> None:
         help=(
             "For --generate-prompts: path to selection.txt produced by --select-pages. "
             "If omitted, automatically looks for selection.txt in output/{slug}/."
+        ),
+    )
+    opts.add_argument(
+        "--sections",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Path to sections.txt marking structural section boundaries in a volume "
+            "(e.g. alphabetical / street / business). When provided, passed to "
+            "--select-pages (seeds selection), --generate-prompts (per-section prompts), "
+            "--gemini-ocr (per-page prompt routing), and --extract-entries "
+            "(context reset + per-page prompt routing at each boundary)."
         ),
     )
     opts.add_argument(

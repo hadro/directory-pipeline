@@ -54,6 +54,8 @@ from PIL import Image
 from dotenv import load_dotenv
 from google import genai
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 load_dotenv()
 from google.genai.types import GenerateContentConfig, HttpOptions, Part, ThinkingConfig
 
@@ -1071,6 +1073,9 @@ def process_item(
     fallback_model: str | None = FALLBACK_MODEL,
     service_tier: str | None = None,
     review_suspicious: bool = False,
+    sections: list | None = None,
+    all_files: list[str] | None = None,
+    slug_dir: Path | None = None,
 ) -> list[dict]:
     """
     Process all aligned JSON pages in an item directory in page order.
@@ -1131,8 +1136,21 @@ def process_item(
             _log(f"  {item_dir.name}: {len(txt_files)} page(s) [text-only fallback], model={model}")
         for i, txt_path in enumerate(txt_files):
             canvas_uri = _stem_to_canvas.get(txt_path.stem[: -len(txt_suffix)], "")
+            page_prompt = system_prompt
+            if sections and all_files:
+                from utils.section_utils import is_section_boundary, prompt_for_page
+                stem = txt_path.stem[: -len(f"_{aligned_slug}")]
+                img_name = f"{stem}.jpg"
+                if is_section_boundary(img_name, sections, all_files):
+                    context = {}
+                    if not quiet:
+                        _log(f"    [section boundary] {img_name} — context reset")
+                if slug_dir:
+                    ppath = prompt_for_page(img_name, sections, all_files, slug_dir, "ner_prompt")
+                    if ppath.exists():
+                        page_prompt = ppath.read_text(encoding="utf-8")
             result = process_page_txt(
-                client, txt_path, canvas_uri, model, system_prompt,
+                client, txt_path, canvas_uri, model, page_prompt,
                 context, mode, force, dry_run, aligned_model,
                 fallback_model=fallback_model, service_tier=service_tier,
                 review_suspicious=review_suspicious,
@@ -1173,8 +1191,21 @@ def process_item(
             _log(f"    [{aligned_path.name}] prior parse-error file detected — forcing retry")
             page_force = True
 
+        page_prompt = system_prompt
+        if sections and all_files:
+            from utils.section_utils import is_section_boundary, prompt_for_page
+            img_name = f"{stem}.jpg"
+            if is_section_boundary(img_name, sections, all_files):
+                context = {}
+                if not quiet:
+                    _log(f"    [section boundary] {img_name} — context reset")
+            if slug_dir:
+                ppath = prompt_for_page(img_name, sections, all_files, slug_dir, "ner_prompt")
+                if ppath.exists():
+                    page_prompt = ppath.read_text(encoding="utf-8")
+
         result = process_page(
-            client, aligned_path, model, system_prompt,
+            client, aligned_path, model, page_prompt,
             context, mode, page_force, dry_run, aligned_model,
             fallback_model=fallback_model, service_tier=service_tier,
             review_suspicious=review_suspicious,
@@ -1311,6 +1342,16 @@ def main() -> None:
             "call per flagged page (typically 5–15%% of pages)."
         ),
     )
+    parser.add_argument(
+        "--sections",
+        metavar="PATH",
+        help=(
+            "Path to sections.txt marking structural section boundaries. "
+            "When provided, extraction context is reset at each section boundary "
+            "and the NER prompt switches to the section-specific ner_prompt_{label}.md "
+            "if available, falling back to ner_prompt.md."
+        ),
+    )
     args = parser.parse_args()
 
     # API key
@@ -1409,12 +1450,67 @@ def main() -> None:
     if review_suspicious and not args.quiet:
         print("Suspicious-entry review enabled (--review-suspicious)", file=sys.stderr)
 
+    # --- Sections support ----------------------------------------------------
+    sections = None
+    all_files: list[str] = []
+    sections_slug_dir: Path | None = None
+
+    if args.sections:
+        from utils.section_utils import load_sections
+
+        sections_path = Path(args.sections)
+        if not sections_path.exists():
+            print(f"Error: sections file not found: {sections_path}", file=sys.stderr)
+            sys.exit(1)
+
+        # Build all_files using same logic as run_gemini_ocr.py:
+        # splits (_left/_right) replace the original spread file.
+        _raw_jpgs = sorted(
+            p for item_dir in item_dirs
+            for p in item_dir.glob("*.jpg")
+            if not p.stem.endswith("_viz")
+        )
+        _all_imgs: list[Path] = []
+        for _p in _raw_jpgs:
+            if _p.stem.endswith("_left") or _p.stem.endswith("_right"):
+                _all_imgs.append(_p)
+                continue
+            if (_p.with_name(f"{_p.stem}_left.jpg").exists()
+                    and _p.with_name(f"{_p.stem}_right.jpg").exists()):
+                continue
+            _all_imgs.append(_p)
+        all_files = [p.name for p in _all_imgs]
+
+        try:
+            sections = load_sections(sections_path, all_files)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        # Slug dir: look for ner_prompt_*.md files starting from output_root
+        root = output_root.resolve()
+        for candidate in (root, root.parent):
+            if any(candidate.glob("ner_prompt_*.md")) or (candidate / "ner_prompt.md").exists():
+                sections_slug_dir = candidate
+                break
+        if sections_slug_dir is None:
+            sections_slug_dir = root
+
+        if not args.quiet:
+            print(
+                f"Sections mode: {len(sections)} section(s): "
+                f"{', '.join(s['label'] for s in sections)} "
+                f"(prompts in {sections_slug_dir})",
+                file=sys.stderr,
+            )
+
     print(
         f"\nExtracting entries: {len(item_dirs)} item dir(s), model={args.model}"
         + (f" (aligned by {aligned_model})" if aligned_model else "")
         + (f", fallback={fallback_model}" if fallback_model and fallback_model != args.model else "")
         + f", mode={args.mode}"
         + (" +review" if review_suspicious else "")
+        + (f" +sections({len(sections)})" if sections else "")
         + (" [DRY RUN]" if args.dry_run else ""),
         file=sys.stderr,
     )
@@ -1434,6 +1530,7 @@ def main() -> None:
             args.mode, args.force, args.dry_run, args.quiet, aligned_model,
             fallback_model=fallback_model, service_tier=service_tier,
             review_suspicious=review_suspicious,
+            sections=sections, all_files=all_files or None, slug_dir=sections_slug_dir,
         )
         if not args.dry_run:
             csv_path = item_dir / f"entries_{slug}.csv"
