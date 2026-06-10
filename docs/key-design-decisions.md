@@ -47,7 +47,7 @@ gracefully when those fields are absent.
 
 **Fallback model for dense pages, with partial JSON recovery.** `extract_entries.py`
 defaults to `gemini-3.1-flash-lite` (fast and cheap) but escalates to
-`gemini-2.5-flash` for pages that hit the output token limit. If the fallback also
+`gemini-3-flash-preview` for pages that hit the output token limit. If the fallback also
 produces malformed JSON, `_recover_partial_json()` salvages every complete entry that
 appears before the truncation point rather than discarding the page entirely. An
 `*_entries_error.txt` sidecar is written only when partial recovery also fails.
@@ -87,7 +87,7 @@ output directly consumable by IIIF annotation tools and viewers.
 `"confidence"` field: `"line"` for Surya-aligned output, and `"manual"` for matches
 accepted through the `--review-alignment` UI. Downstream scripts can filter or weight
 by this tier — e.g. `export_entry_boxes.py` inherits whatever confidence level was
-set during alignment, and `visualize_alignment.py` color-codes them
+set during alignment, and `pipeline/visualize_alignment.py` color-codes them
 differently.
 
 **Cross-page NER context persistence.** After each page is processed by

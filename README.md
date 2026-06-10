@@ -14,20 +14,24 @@ Built for digitized historical directories — city directories, gazetteers, tra
 
 ## Quick start
 
-```bash
-# One-time calibration steps for a new collection type — generates OCR and NER prompts that will work for any item with the same entry structure
-python main.py https://archive.org/details/ldpd_11290437_000/ --download
-python main.py https://archive.org/details/ldpd_11290437_000/ --select-pages
-python main.py https://archive.org/details/ldpd_11290437_000/ --generate-prompts
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
-# "--extract" Automated shortcut — produces entries CSV + browsable HTML explorer for any subsequent volumes in the same series
-python main.py https://archive.org/details/ldpd_11290437_000/ --extract
+```bash
+uv sync        # installs dependencies and the `pipeline` command
+
+# One-time calibration for a new collection type — generates OCR and NER
+# prompts that will work for any item with the same entry structure
+pipeline ingest    https://archive.org/details/ldpd_11290437_000/
+pipeline calibrate https://archive.org/details/ldpd_11290437_000/
+
+# Automated run — produces the entries CSV + browsable HTML explorer
+pipeline run       https://archive.org/details/ldpd_11290437_000/
 ```
 
-**Calibrate once, run many.** The first three commands are a one-time step per collection type: `--select-pages` opens a browser UI where you pick 4–10 representative pages; `--generate-prompts` has Gemini analyze them and write tailored OCR and extraction prompts. For any additional volume in the same series, point to the relevant NER prompt, and skip calibration entirely:
+**Calibrate once, run many.** `pipeline calibrate` is a one-time step per collection type: it opens a browser UI where you pick 4–10 representative pages, then has Gemini analyze them and write tailored OCR and extraction prompts. For any additional volume in the same series, point to the first volume's NER prompt and skip calibration entirely:
 
 ```bash
-python main.py https://archive.org/details/ldpd_11290437_001/ --extract \
+pipeline run https://archive.org/details/ldpd_11290437_001/ \
   --ner-prompt output/ldpd_11290437_000/ner_prompt.md
 ```
 
@@ -45,7 +49,7 @@ A CSV where every row is one extracted entry. Field names are driven entirely by
 
 The `canvas_fragment` column is a IIIF URI pointing back to the source scan. With the [precision upgrade](#precision-upgrade), it includes a `#xywh=` bounding box pinpointing the exact line. The data explorer and map use this to link directly to the highlighted entry in the original document.
 
-Alongside the extracted data CSV, `--extract` also generates a self-contained HTML data explorer (shown above). With `--geocode --map` run on materials with address fields, you also get:
+Alongside the extracted data CSV, `pipeline run` also generates a self-contained HTML data explorer (shown above). With geocoding enabled on materials with address fields, you also get:
 
 ![Leaflet map with clustered markers, category filter sidebar, and a popup with IIIF source thumbnail](docs/screenshots/map.png)
 
@@ -75,14 +79,20 @@ uv sync --extra geo      # add geocoding + map generation
 uv sync --all-extras     # everything
 ```
 
-This installs a `pipeline` command (run `pipeline --help` for all subcommands):
+This installs the `pipeline` command (run `pipeline --help` for all subcommands):
 
 ```bash
-pipeline run    <URL>     # automated: download → OCR → extract → explore
-pipeline guided <URL>     # human-in-loop: page selection + alignment review
+pipeline run    <URL>          # automated: download → OCR → extract → explore
+pipeline guided <URL>          # human-in-loop: page selection + alignment review
+pipeline ingest <URL>          # download only
+pipeline calibrate <URL|DIR>   # select sample pages + generate prompts (once per collection type)
+pipeline ocr    <DIR>          # Surya OCR + Gemini OCR + align bboxes
+pipeline extract <DIR>         # NER extraction + explorer
+pipeline review  <DIR>         # interactive alignment review (browser UI)
+pipeline postprocess <DIR>     # fix + combine volumes + rebuild explorer
 ```
 
-The `python main.py <URL> [flags]` form shown throughout this README is the underlying interface and still works for advanced use.
+Each subcommand wraps the underlying `python main.py <URL> [flags]` stage interface — see [docs/pipeline-stages.md](docs/pipeline-stages.md) for the flag-level reference and every artifact each stage produces.
 
 Set your API keys (or copy `.env.template` to `.env`):
 
@@ -95,21 +105,22 @@ export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geo
 
 ## Going further
 
-| Goal | Flags / command |
+| Goal | Command |
 |---|---|
-| Add spatial bounding boxes to every row | `--surya-ocr --align-ocr` [→ details](#precision-upgrade) |
-| Interactively fix unmatched lines | `--review-alignment` |
-| Improve geographic accuracy on complex materials | `--extract-entries --mode multimodal` [→ details](#multimodal-extraction) |
-| Geocode entries and build a map | `--geocode --map` |
-| Full pipeline with page scoping + alignment review | `--guided` |
-| Export W3C/IIIF annotations | `pipeline/iiif/export_annotations.py` |
+| Add spatial bounding boxes to every row | `pipeline ocr output/<vol>/` [→ details](#precision-upgrade) |
+| Interactively fix unmatched lines | `pipeline review output/<vol>/` |
+| Improve geographic accuracy on complex materials | `pipeline extract output/<vol>/ --mode multimodal` [→ details](#multimodal-extraction) |
+| Geocode entries and build a map | `pipeline extract output/<vol>/ --geocode --map` |
+| Full pipeline with page scoping + alignment review | `pipeline guided <URL>` |
+| Clean + merge volumes after extraction | `pipeline postprocess output/<collection>/` |
+| Export W3C/IIIF annotations | `python -m pipeline.iiif.export_annotations` |
 
 ### Multimodal extraction
 
-By default `--extract-entries` sends the OCR text to Gemini. Adding `--mode multimodal` also sends the page image, which lets the model see section headers, column boundaries, and layout cues that are often lost after OCR normalization:
+By default extraction sends the OCR text to Gemini. Adding `--mode multimodal` also sends the page image, which lets the model see section headers, column boundaries, and layout cues that are often lost after OCR normalization:
 
 ```bash
-python main.py URL --extract-entries --mode multimodal
+pipeline extract output/<vol>/ --mode multimodal
 ```
 
 This is most valuable for materials where geographic or thematic section headings fall mid-page (the model can see the heading visually rather than relying on text order), multi-column layouts where reading order is ambiguous, or any collection where state/category context shifts frequently within a page. In testing on Green Book volumes it eliminated mid-page geographic attribution errors entirely, compared to text-only mode.
@@ -120,11 +131,11 @@ The cost increase is negligible — each page image is resized to ≤768 px and 
 
 ### Precision upgrade
 
-The core path (`--download --gemini-ocr --extract-entries`) gives you a canvas URI per row. Adding `--surya-ocr --align-ocr` upgrades every `canvas_fragment` to a `#xywh=` bounding box — the exact line on the page, usable by any IIIF viewer:
+The core `pipeline run` path gives you a canvas URI per row. Adding Surya OCR and alignment upgrades every `canvas_fragment` to a `#xywh=` bounding box — the exact line on the page, usable by any IIIF viewer:
 
 ```bash
-python main.py URL --surya-ocr --align-ocr
-python main.py URL --review-alignment     # optional: fix unmatched lines interactively
+pipeline ocr    output/<vol>/    # Surya bboxes + alignment (requires GPU or Apple Silicon)
+pipeline review output/<vol>/    # optional: fix unmatched lines interactively
 ```
 
 ![NW alignment result drawn on a source page — orange bounding boxes on matched lines, unmatched Gemini lines listed in the margin in red](docs/screenshots/alignment-viz.jpg)
@@ -139,7 +150,7 @@ A single ~80-page volume costs roughly **$0.60 in Gemini API charges** at standa
 
 ## Docs
 
-- [Pipeline stage reference](docs/pipeline-stages.md) — every flag, script, and output file
+- [Pipeline stage reference](docs/pipeline-stages.md) — every flag, script, and output file, including the [artifact naming contract](docs/pipeline-stages.md#artifacts-and-naming-conventions) (what each stage writes/reads, and how models are auto-detected)
 - [Usage examples](docs/usage-examples.md) — full examples by source (LoC, IA, IIIF manifest)
 - [Costs](docs/costs.md) — API and platform cost breakdown
 - [Key design decisions](docs/key-design-decisions.md) — architecture and technical notes

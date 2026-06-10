@@ -53,7 +53,7 @@ Checks:
 
 Report:
 - If no `*_aligned.json` files: "Alignment has not been run. Run:
-  `python main.py output/{slug} --surya-ocr --gemini-ocr --align-ocr`
+  `pipeline ocr output/{slug}`
   then re-extract with `--force`."
 - If `*_aligned.json` exists but `entries_*.json` has `"mode": "text-only"`:
   "Entries were extracted before alignment, or `--aligned-model` was not passed.
@@ -81,7 +81,7 @@ This is the most common complex failure. Run all checks below in order.
 **Check A — aligned files present?**
 - Glob `{output_dir}/*_aligned.json` and `{output_dir}/*/aligned.json`
 - If none: alignment was never run. Fix:
-  `python main.py output/{slug} --surya-ocr --gemini-ocr --align-ocr`
+  `pipeline ocr output/{slug}`
   then re-extract with `--force`
 
 **Check B — aligned model mismatch?**

@@ -31,8 +31,10 @@ skip calibration and go straight to OCR + extraction.
 Ask the user for the IIIF manifest URL or collection URL. Show:
 
 ```bash
-python main.py <URL> --download
+pipeline ingest <URL>
 ```
+
+(equivalent to `python main.py <URL> --download`)
 
 Explain:
 - This fetches all IIIF images to `output/{slug}/` where `{slug}` is auto-derived
@@ -48,8 +50,11 @@ Tell the user to run it and note the output directory path (e.g. `output/green-b
 ## Step 2: Select representative pages
 
 ```bash
-python main.py output/{slug} --select-pages
+pipeline calibrate output/{slug}
 ```
+
+(equivalent to `python main.py output/{slug} --select-pages --generate-prompts` —
+it runs Step 2 and Step 3 in one command, pausing for the browser selection first.)
 
 This opens a browser UI. Walk through each of its two tabs:
 
@@ -69,9 +74,8 @@ prompt generation; the Scope tab prevents junk pages from being processed."
 
 ## Step 3: Generate prompts
 
-```bash
-python main.py output/{slug} --generate-prompts
-```
+(Runs automatically after the browser step when using `pipeline calibrate`; the
+standalone form is `python main.py output/{slug} --generate-prompts`.)
 
 Explain:
 - Sends the selected sample pages to Gemini, which analyzes the layout and generates:
@@ -86,18 +90,18 @@ After calibration, show how to process additional volumes:
 
 ```bash
 # First volume (after calibration above):
-python main.py output/{slug-vol1} --extract \
-  --ner-prompt output/{slug-vol1}/ner_prompt.md
+pipeline run output/{slug-vol1}
 
 # Subsequent volumes — reuse prompts from volume 1:
-python main.py <URL-vol2> --extract \
+pipeline run <URL-vol2> \
   --ner-prompt output/{slug-vol1}/ner_prompt.md
 ```
 
-`--extract` is shorthand for `--download --gemini-ocr --extract-entries --explore`.
+`pipeline run` wraps `python main.py --extract`, shorthand for
+`--download --gemini-ocr --extract-entries --explore`.
 
 For the full precision path (bounding boxes + manual alignment review), use
-`--guided` instead of `--extract`. This adds Surya OCR, NW alignment, and pauses
+`pipeline guided` instead of `pipeline run`. This adds Surya OCR, NW alignment, and pauses
 for interactive review before extracting entries.
 
 Notes:

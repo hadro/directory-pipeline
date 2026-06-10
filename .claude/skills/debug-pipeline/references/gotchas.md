@@ -84,7 +84,7 @@ are. When called on a CSV that lives in a different directory from the images,
 
 **Fix:**
 ```bash
-python pipeline/explore_entries.py output/{slug}/entries_{model}.csv \
+python -m pipeline.explore_entries output/{slug}/entries_{model}.csv \
   --output-dir output/{slug}/
 ```
 

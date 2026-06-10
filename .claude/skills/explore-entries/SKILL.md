@@ -41,12 +41,12 @@ Use Glob to look for the following alongside the CSV (or in the output directory
 
 Base command:
 ```bash
-python pipeline/explore_entries.py output/{slug}/entries_{model}.csv
+python -m pipeline.explore_entries output/{slug}/entries_{model}.csv
 ```
 
 **Add `--output-dir` for thumbnails:** If `manifest.json` exists in `output/{slug}/`:
 ```bash
-python pipeline/explore_entries.py output/{slug}/entries_{model}.csv \
+python -m pipeline.explore_entries output/{slug}/entries_{model}.csv \
   --output-dir output/{slug}/
 ```
 Without `--output-dir`, the explorer has no images. With it, entries that have
@@ -57,7 +57,7 @@ detected — color theming will be applied automatically."
 
 **Translated variant:** If the user wants to explore a translated CSV:
 ```bash
-python pipeline/explore_entries.py output/{slug}/entries_translated.csv \
+python -m pipeline.explore_entries output/{slug}/entries_translated.csv \
   --output-dir output/{slug}/
 ```
 To create a translated CSV first, see the translation workflow (ask about `/pipeline-run`).

@@ -4,6 +4,99 @@ Detailed documentation for each stage in the directory-pipeline. See the [main R
 
 ---
 
+## Artifacts and naming conventions
+
+Every stage communicates with the next through files in the output directory —
+there is no other shared state. The filename patterns below are load-bearing:
+downstream stages *discover* their inputs (and the model that produced them) by
+parsing these names, so renaming files by hand will break auto-detection.
+
+### Data flow
+
+```
+LoC / IA / IIIF URL
+        │  (--loc-csv / --ia-csv / --iiif-csv)
+        ▼
+output/{slug}/{slug}.csv                     collection metadata, one row per item
+        │  (--download)
+        ▼
+output/{slug}/[{item}/]                      one subdir per item (or flat for single items)
+    {page:04d}_{image-id}.jpg  +  manifest.json
+        │                │
+        │ (--surya-ocr)  │ (--gemini-ocr)
+        ▼                ▼
+    {stem}_surya.json    {stem}_{ocr-model}.txt
+        └───────┬────────┘
+                │  (--align-ocr, then optional --review-alignment)
+                ▼
+    {stem}_{ocr-model}_aligned.json          line bboxes + corrected text
+                │  (--extract-entries; falls back to bare .txt if no aligned JSON)
+                ▼
+    entries_{ner-model}.csv                  one row per extracted entry
+        │             │            │
+        │ (--explore) │ (--geocode)│ (postprocess: fix → combine)
+        ▼             ▼            ▼
+    …_explorer.html  entries_{m}_geocoded.csv   entries_{m}_fixed.csv → combined.csv
+                      │  (--map)
+                      ▼
+                     entries_{m}_geocoded.html
+```
+
+`{stem}` is the image filename without extension: `{page:04d}_{image-id}`
+(e.g. `0077_1897BPL%2F…`). Model slugs are the model name with `/` → `_`
+(`utils/models.py: model_slug()`).
+
+### Artifact reference
+
+| File | Written by | Read by |
+|---|---|---|
+| `{slug}.csv` | source-CSV stages | `--download` |
+| `manifest.json` (per item dir) | `--download` | align (canvas URIs/dims), explore, `combine_volumes` |
+| `{page:04d}_{image-id}.jpg` | `--download` | all OCR stages, visualize, multimodal extract |
+| `{stem}_surya.json` / `{stem}_surya.txt` | `--surya-ocr` | align / `compare_ocr` (`"surya"` token) |
+| `{stem}_{ocr-model}.txt` | `--gemini-ocr` | align; extract (fallback when no aligned JSON) |
+| `{stem}_{ocr-model}_aligned.json` | `--align-ocr`; updated by `--review-alignment` (`"confidence": "manual"`) | extract, visualize, `export_annotations`, `export_entry_boxes` |
+| `{stem}_{ner-model}_entries.json` (+ `…_entries_error.txt` on failure) | extract (per-page cache) | extract (resume + CSV assembly) |
+| `extraction_context_{ner-model}.json` | extract (cross-page heading context) | extract (resume) |
+| `entries_{ner-model}.csv` | extract | explore, geocode, map, `fix_entries`, `review_entries` |
+| `entries_{m}_fixed.csv` / `combined.csv` | `pipeline postprocess` (`fix_entries` → `combine_volumes`) | explore |
+| `entries_{m}_geocoded.csv` + `geocache.json` | `--geocode` | `--map` |
+| `entries_{m}_geocoded.html` | `--map` | — (final artifact) |
+| `<csv-stem>_explorer.html` | `--explore` | — (final artifact) |
+| `{stem}_{ocr-model}_viz.jpg` | `--visualize` | — (QA artifact) |
+| `selection.txt` | `--select-pages` browser UI (user downloads it into the volume dir) | `--generate-prompts` |
+| `included_pages.txt` | `--select-pages` page-scoping UI | `--gemini-ocr`, extract (absent = process all pages) |
+| `ocr_prompt.md` / `ner_prompt.md` | `--generate-prompts` | `--gemini-ocr` / extract (see lookup order in `prompts/README.md`) |
+| `sections.txt` | written by hand | `--select-pages`, `--generate-prompts`, `--gemini-ocr`, extract (per-section prompt routing) |
+| `spreads_report.csv` + `{stem}_split.json` | `--detect-spreads` / `--split-spreads` | align (translates bboxes back to full-spread coordinates) |
+| `columns_report.csv` | `--detect-columns` or `--surya-detect` | manual QA |
+| `pipeline_state.json` | `main.py` (after each successful stage) | every downstream script (model auto-detection) |
+
+### Model auto-detection
+
+Scripts that need to know which model produced existing files resolve it in this
+order — which is why `--model` is rarely needed after the first run:
+
+1. explicit `--model` / `--aligned-model` flag
+2. `pipeline_state.json` (`ocr_model` / `ner_model` keys, written by `main.py`)
+3. filename scan (`utils/models.py: discover_ocr_slug()` and per-script variants)
+4. built-in defaults (`utils/models.py`)
+
+`pipeline_state.json` schema:
+
+```json
+{
+  "slug": "ldpd_11290437_000",
+  "source_url": "https://…",
+  "ocr_model": "gemini-3.1-flash-lite",
+  "ner_model": "gemini-3.1-flash-lite",
+  "stages_completed": ["download", "gemini_ocr", "extract_entries"],
+  "last_run": "2026-06-10T14:22:00Z"
+}
+```
+
+---
+
 #### `sources/loc_collection_csv.py` — Export LoC metadata
 Exports items from a Library of Congress collection or single item URL to the
 same CSV schema. No API token required — the LoC JSON API is publicly accessible.
@@ -11,8 +104,8 @@ Paginates collections automatically and derives a readable filename slug from th
 item title.
 
 ```bash
-python sources/loc_collection_csv.py https://www.loc.gov/item/01015253/
-python sources/loc_collection_csv.py https://www.loc.gov/collections/civil-war-maps/
+python -m sources.loc_collection_csv https://www.loc.gov/item/01015253/
+python -m sources.loc_collection_csv https://www.loc.gov/collections/civil-war-maps/
 ```
 
 #### `sources/ia_collection_csv.py` — Export Internet Archive metadata
@@ -21,8 +114,8 @@ IA collections (lists of items) and individual item identifiers. Derives a slug
 from the IA item title and identifier. No authentication required.
 
 ```bash
-python sources/ia_collection_csv.py https://archive.org/details/ldpd_11290437_000/
-python sources/ia_collection_csv.py https://archive.org/details/durstoldyorklibrary
+python -m sources.ia_collection_csv https://archive.org/details/ldpd_11290437_000/
+python -m sources.ia_collection_csv https://archive.org/details/durstoldyorklibrary
 ```
 
 Both source scripts produce the same CSV schema, which feeds into `pipeline/download_images.py`:
@@ -97,8 +190,8 @@ Saves `included_pages.txt`, consumed by `run_gemini_ocr.py` and
 Press Ctrl+C when done. With `--no-open`, files are browser-downloaded instead.
 
 ```bash
-python pipeline/select_pages.py output/the_travelers_guide_e088efa0/
-python pipeline/select_pages.py output/the_travelers_guide_e088efa0/ --no-open
+python -m pipeline.select_pages output/the_travelers_guide_e088efa0/
+python -m pipeline.select_pages output/the_travelers_guide_e088efa0/ --no-open
 ```
 
 #### `pipeline/generate_prompt.py` — Volume-specific prompt generation
@@ -131,20 +224,20 @@ immediate review in addition to saving them.
 
 ```bash
 # Generate both prompts (typical workflow):
-python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
+python -m pipeline.generate_prompt output/the_travelers_guide_e088efa0/ \
     --selection output/the_travelers_guide_e088efa0/selection.txt
 
 # Use the Green Book prompt as a structural reference:
-python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
+python -m pipeline.generate_prompt output/the_travelers_guide_e088efa0/ \
     --selection output/the_travelers_guide_e088efa0/selection.txt \
     --ner-template prompts/examples/ner_prompt_greenbook.md
 
 # OCR prompt only:
-python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
+python -m pipeline.generate_prompt output/the_travelers_guide_e088efa0/ \
     --selection output/the_travelers_guide_e088efa0/selection.txt --ocr-only
 
 # Use explicit page filenames instead of a selection file:
-python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
+python -m pipeline.generate_prompt output/the_travelers_guide_e088efa0/ \
     --pages 0005_58019060.jpg 0012_58019067.jpg 0023_58019078.jpg 0041_58019096.jpg
 ```
 
@@ -197,13 +290,14 @@ instruction to the system prompt, directing the model to interpret `"` ditto mar
 as repeating the value from the line above. Useful for directories that use ditto
 marks to avoid repeating city names or categories.
 
-**Flex inference (`--flex`).** Pass `--flex` to use Gemini's Flex inference tier
-(`service_tier="flex"`): approximately 50% cheaper than standard pricing, with
-1–15 minute latency per request and best-effort availability. Recommended for large
-bulk runs. The `pipeline` CLI enables Flex by default; pass `--no-flex` to disable.
-Combine with `--ocr-model gemini-3.1-flash-lite` for the lowest cost option.
+**Flex inference (`--flex`).** Gemini's Flex inference tier
+(`service_tier="flex"`) is approximately 50% cheaper than standard pricing, with
+1–15 minute latency per request and best-effort availability. It is **on by
+default** for both the `pipeline` CLI and `python main.py`; pass `--no-flex` when
+you need real-time throughput. (Only direct invocation of
+`python -m pipeline.run_gemini_ocr` keeps `--flex` opt-in.)
 
-#### `analysis/compare_ocr.py` — Model comparison
+#### `pipeline/compare_ocr.py` — Model comparison
 Calls multiple models (any mix of Gemini model names and the special token
 `surya`) on each image and produces:
 - `{stem}_comparison.html` — side-by-side panel view of each model's output
@@ -243,7 +337,7 @@ page-number outlier creates a degenerate single-line split.
 ```json
 {
   "image": "0001_58030238.jpg",
-  "model": "gemini-2.0-flash",
+  "model": "gemini-3.1-flash-lite",
   "canvas_uri": "https://...",
   "canvas_width": 3316,
   "canvas_height": 4513,
@@ -275,7 +369,7 @@ declare 2560×2560 square canvases for portrait images). All `bbox` and
 `canvas_fragment` coordinates are in this natural pixel space, which is required
 for IIIF annotation tools and Mirador to place boxes correctly.
 
-#### `analysis/visualize_alignment.py` — Alignment visualization
+#### `pipeline/visualize_alignment.py` — Alignment visualization
 Reads each `*_aligned.json` and draws color-coded bounding boxes on the source
 image, saving `{stem}_{model_slug}_viz.jpg`:
 
@@ -315,10 +409,10 @@ annotation requests are fast.
 
 ```bash
 # Run standalone (recommended for iterative review):
-python pipeline/review_alignment.py output/ --model gemini-2.0-flash
+python -m pipeline.review_alignment output/ --model gemini-3.1-flash-lite
 
 # Or via the pipeline (blocks until Ctrl+C):
-python main.py collections.txt --review-alignment --model gemini-2.0-flash
+python main.py collections.txt --review-alignment --model gemini-3.1-flash-lite
 ```
 
 #### `pipeline/extract_entries.py` — Entry extraction
@@ -372,8 +466,8 @@ the network for new queries. Writes `entries_{model}_geocoded.csv` with added
 `lat`, `lon`, and `geocode_level` (`"address"` | `"city"` | `""`) columns.
 
 ```bash
-GOOGLE_MAPS_API_KEY=... python pipeline/geo/geocode_entries.py \
-    output/green_book_1962_9ab2e8f0/ --model gemini-2.0-flash
+GOOGLE_MAPS_API_KEY=... python -m pipeline.geo.geocode_entries \
+    output/green_book_1962_9ab2e8f0/ --model gemini-3.1-flash-lite
 ```
 
 #### `pipeline/geo/map_entries.py` — Interactive map
@@ -406,10 +500,10 @@ Pass `--manifest-url` to specify the manifest explicitly; if omitted the script
 derives it as `{viewer-url}/manifest.json`.
 
 ```bash
-python pipeline/geo/map_entries.py output/green_book_1940_feb978b0/ --model gemini-2.0-flash
-python pipeline/geo/map_entries.py path/to/entries.csv --output-dir output/
-python pipeline/geo/map_entries.py output/green_book_1947_xxx/ \
-    --model gemini-2.0-flash \
+python -m pipeline.geo.map_entries output/green_book_1940_feb978b0/ --model gemini-3.1-flash-lite
+python -m pipeline.geo.map_entries path/to/entries.csv --output-dir output/
+python -m pipeline.geo.map_entries output/green_book_1947_xxx/ \
+    --model gemini-3.1-flash-lite \
     --viewer-url https://hadro.github.io/green-book-iiif-test \
     --manifest-url https://hadro.github.io/green-book-iiif-test/manifest.json
 ```
@@ -432,10 +526,10 @@ self-contained local files). Add `--base-url` to embed persistent URIs so viewer
 can reload annotations from a known endpoint.
 
 ```bash
-python pipeline/iiif/export_annotations.py output/green_book_1940_feb978b0/uuid/
-python pipeline/iiif/export_annotations.py output/green_book_1940_feb978b0/uuid/ \
-    --base-url https://example.org/annotations --model gemini-2.0-flash
-python pipeline/iiif/export_annotations.py output/green_book_1940_feb978b0/uuid/ \
+python -m pipeline.iiif.export_annotations output/green_book_1940_feb978b0/uuid/
+python -m pipeline.iiif.export_annotations output/green_book_1940_feb978b0/uuid/ \
+    --base-url https://example.org/annotations --model gemini-3.1-flash-lite
+python -m pipeline.iiif.export_annotations output/green_book_1940_feb978b0/uuid/ \
     --no-entries   # line-level transcription only
 ```
 
@@ -469,10 +563,10 @@ With `--update-manifest`, the script also:
    Requires `--base-url`. Original manifest is backed up as `manifest_bak.json`.
 
 ```bash
-python pipeline/iiif/export_entry_boxes.py output/green_book_1947_xxx/uuid/
-python pipeline/iiif/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \
-    --model gemini-2.0-flash
-python pipeline/iiif/export_entry_boxes.py output/green_book_1947_xxx/uuid/ \
+python -m pipeline.iiif.export_entry_boxes output/green_book_1947_xxx/uuid/
+python -m pipeline.iiif.export_entry_boxes output/green_book_1947_xxx/uuid/ \
+    --model gemini-3.1-flash-lite
+python -m pipeline.iiif.export_entry_boxes output/green_book_1947_xxx/uuid/ \
     --base-url https://hadro.github.io/green-book-iiif-test/annotations \
     --update-manifest
 ```
@@ -487,9 +581,9 @@ fields. Outputs a standalone `ranges_{model}.json` that can be loaded by IIIF
 viewers, or merged directly into `manifest.json` with `--update-manifest`.
 
 ```bash
-python pipeline/iiif/build_ranges.py output/green_book_1947_4bea2040/uuid/
-python pipeline/iiif/build_ranges.py output/green_book_1947_4bea2040/uuid/ \
-    --model gemini-2.0-flash --depth 2 --update-manifest \
+python -m pipeline.iiif.build_ranges output/green_book_1947_4bea2040/uuid/
+python -m pipeline.iiif.build_ranges output/green_book_1947_4bea2040/uuid/ \
+    --model gemini-3.1-flash-lite --depth 2 --update-manifest \
     --base-url https://hadro.github.io/green-book-iiif-test
 ```
 
@@ -512,9 +606,9 @@ The explorer auto-introspects the CSV schema, so it works for any document type:
 No geocoding or alignment required; runs directly after `--extract-entries`.
 
 ```bash
-python pipeline/explore_entries.py output/green_book_1947_4bea2040/
-python pipeline/explore_entries.py output/green_book_1947_4bea2040/ --out my_explorer.html
-python pipeline/explore_entries.py output/green_book_1947_4bea2040/uuid/entries_gemini-2.0-flash.csv
+python -m pipeline.explore_entries output/green_book_1947_4bea2040/
+python -m pipeline.explore_entries output/green_book_1947_4bea2040/ --out my_explorer.html
+python -m pipeline.explore_entries output/green_book_1947_4bea2040/uuid/entries_gemini-3.1-flash-lite.csv
 ```
 
 #### `tools/review_ocr.py` — OCR anomaly triage report
@@ -530,7 +624,7 @@ Useful as a fast sanity check before running `--extract-entries` on a new volume
 
 ```bash
 python tools/review_ocr.py output/my-collection/item_dir/
-python tools/review_ocr.py output/my-collection/item_dir/ --model gemini-2.0-flash
+python tools/review_ocr.py output/my-collection/item_dir/ --model gemini-3.1-flash-lite
 python tools/review_ocr.py output/my-collection/item_dir/ --threshold 0.5 --window 3
 ```
 
@@ -544,15 +638,15 @@ pages where a category is absent.
 Entries with no spatial coordinates (`canvas_fragment` has no `#xywh`) are listed
 in the right margin in their category color.
 
-Distinct from `analysis/visualize_alignment.py` (which shows the raw NW alignment
+Distinct from `pipeline/visualize_alignment.py` (which shows the raw NW alignment
 result) — this script shows the final extracted entry footprints.
 
 ```bash
-python analysis/visualize_entries.py output/green_book_1947_4bea2040/uuid/
-python analysis/visualize_entries.py output/green_book_1947_4bea2040/uuid/ \
+python -m analysis.visualize_entries output/green_book_1947_4bea2040/uuid/
+python -m analysis.visualize_entries output/green_book_1947_4bea2040/uuid/ \
     --ner-prompt output/green_book_1947_4bea2040/ner_prompt.md
-python analysis/visualize_entries.py output/green_book_1947_4bea2040/ \
-    --model gemini-2.0-flash --force
+python -m analysis.visualize_entries output/green_book_1947_4bea2040/ \
+    --model gemini-3.1-flash-lite --force
 ```
 
 #### `tools/patch_canvas_fragments.py` — Retroactive bounding box patching
@@ -567,7 +661,7 @@ substring → fuzzy).
 
 ```bash
 python tools/patch_canvas_fragments.py output/my_volume/ \
-    --aligned-model gemini-2.0-flash
+    --aligned-model gemini-3.1-flash-lite
 python tools/patch_canvas_fragments.py output/collection/ \
-    --aligned-model gemini-2.0-flash
+    --aligned-model gemini-3.1-flash-lite
 ```

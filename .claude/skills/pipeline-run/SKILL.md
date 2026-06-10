@@ -51,10 +51,12 @@ Use the detected state and the user's goal to construct the command.
 ### Goal 1: Full pipeline from scratch
 
 ```
-python main.py <URL> --extract
+pipeline run <URL>
 ```
 
-`--extract` is shorthand for `--download --gemini-ocr --extract-entries --explore`.
+(equivalent to `python main.py <URL> --extract`, shorthand for
+`--download --gemini-ocr --extract-entries --explore`; Flex inference is on
+by default — add `--no-flex` for time-sensitive runs).
 If `ner_prompt.md` exists from a prior collection run, append:
 ```
 --ner-prompt output/{prior-slug}/ner_prompt.md
@@ -63,10 +65,10 @@ If `ner_prompt.md` exists from a prior collection run, append:
 ### Goal 2: Full pipeline with precision bounding boxes and manual review
 
 ```
-python main.py <URL> --guided
+pipeline guided <URL>
 ```
 
-`--guided` is shorthand for `--download --select-pages --surya-ocr --gemini-ocr
+(equivalent to `python main.py <URL> --guided`). `--guided` is shorthand for `--download --select-pages --surya-ocr --gemini-ocr
 --align-ocr --review-alignment --extract-entries --geocode --map`. It pauses at
 `--select-pages` (to scope which pages to process) and again at `--review-alignment`
 (to correct unmatched lines) before continuing. Requires GPU or Apple Silicon for Surya.
@@ -80,20 +82,25 @@ If `ner_prompt.md` exists from a prior collection run, append:
 
 Requires Surya (GPU or Apple Silicon). Command:
 ```
-python main.py output/{slug} --surya-ocr --gemini-ocr --align-ocr
+pipeline ocr output/{slug}
 ```
 
-If `*_{model}.txt` files already exist, `--gemini-ocr` can be omitted (output is cached).
+(equivalent to `python main.py output/{slug} --surya-ocr --gemini-ocr --align-ocr`;
+already-completed OCR files are skipped automatically).
 
-After alignment, `--review-alignment` opens a Flask browser UI to manually fix
-unmatched lines.
+After alignment, `pipeline review output/{slug}` opens a Flask browser UI to
+manually fix unmatched lines.
 
 ### Goal 4: Extract or re-extract entries
 
 Base command:
 ```
-python main.py output/{slug} --extract-entries
+pipeline extract output/{slug}
 ```
+
+(equivalent to `python main.py output/{slug} --extract-entries --explore`;
+add `--no-explore` to skip the explorer build). Fine-grained flags below pass
+through unchanged.
 
 Conditional additions:
 - If `*_aligned.json` files exist, detect the OCR model from the filename stem.
@@ -109,7 +116,7 @@ Conditional additions:
 
 Base command:
 ```
-python pipeline/explore_entries.py output/{slug}/entries_{model}.csv
+python -m pipeline.explore_entries output/{slug}/entries_{model}.csv
 ```
 
 If `manifest.json` exists in `output/{slug}/`, append `--output-dir output/{slug}/`
@@ -121,4 +128,4 @@ Show the final command in a code block. Provide a brief explanation of each flag
 used, and describe what output file(s) to expect.
 
 All stages run in fixed order regardless of flag order on the command line.
-See `main.py` lines 111–135 for the full PIPELINE stage list.
+See the `PIPELINE` list near the top of `main.py` for the full stage order, and "Artifacts and naming conventions" in `docs/pipeline-stages.md` for the filename contract.

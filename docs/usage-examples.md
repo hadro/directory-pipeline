@@ -2,6 +2,8 @@
 
 See the [main README](../README.md) for the quick start. This page covers the full workflow in detail, source-specific notes, and advanced options.
 
+Commands below use the `pipeline` CLI installed by `uv sync`. Each subcommand wraps `python main.py` stage flags — see [pipeline-stages.md](pipeline-stages.md) for the flag-level reference.
+
 ---
 
 ## 1. First-time setup: calibrating for a new collection
@@ -10,22 +12,24 @@ Every new collection type needs a one-time calibration step that generates tailo
 
 ```bash
 # Step 1: Download images
-python main.py https://archive.org/details/ldpd_11290437_000/ --download
+pipeline ingest https://archive.org/details/ldpd_11290437_000/
 
-# Step 2: Open the page selector in your browser — pick 4–10 representative pages,
-#         then click "Save" and press Ctrl+C when done.
-python main.py https://archive.org/details/ldpd_11290437_000/ --select-pages
+# Step 2: Calibrate — opens the page selector in your browser (pick 4–10
+#         representative pages, click "Save", press Ctrl+C), then has Gemini
+#         generate tailored OCR + NER prompts from your selection.
+pipeline calibrate https://archive.org/details/ldpd_11290437_000/
 
-# Step 3: Generate tailored prompts (Gemini analyzes your selected pages)
-python main.py https://archive.org/details/ldpd_11290437_000/ --generate-prompts
-
-# Step 4: Run the pipeline — prompts are auto-discovered from the output directory
-python main.py https://archive.org/details/ldpd_11290437_000/ --extract
+# Step 3: Run the pipeline — prompts are auto-discovered from the output directory
+pipeline run https://archive.org/details/ldpd_11290437_000/
 ```
 
-To also include page scoping and the precision bounding-box upgrade, use `--guided` instead of `--extract` in step 4. This will pause at `--select-pages` (to scope which pages to process) and again at `--review-alignment` (to correct unmatched lines) before proceeding.
+To also include page scoping and the precision bounding-box upgrade, use `pipeline guided` instead of `pipeline run` in step 3. This pauses at page selection (to scope which pages to process) and again at alignment review (to correct unmatched lines) before proceeding.
 
-For microfilm or bound-volume scans that contain double-page spreads, run `--detect-spreads --split-spreads` first, before either `--extract` or `--guided`.
+For microfilm or bound-volume scans that contain double-page spreads, add spread handling to the ingest step:
+
+```bash
+pipeline ingest <URL> --detect-spreads --split-spreads
+```
 
 ---
 
@@ -34,11 +38,11 @@ For microfilm or bound-volume scans that contain double-page spreads, run `--det
 After calibrating once, point subsequent volumes to the first volume's NER prompt:
 
 ```bash
-python main.py https://archive.org/details/ldpd_11290437_001/ --extract \
+pipeline run https://archive.org/details/ldpd_11290437_001/ \
   --ner-prompt output/ldpd_11290437_000/ner_prompt.md
 ```
 
-The OCR prompt is auto-discovered from the same directory. If both prompts live in the first volume's output folder, `--extract` will find them automatically without any explicit flags.
+The OCR prompt is auto-discovered from the same directory. If both prompts live in the first volume's output folder, `pipeline run` will find them automatically without any explicit flags.
 
 ---
 
@@ -57,7 +61,7 @@ The pipeline accepts any of these URL forms directly — no preprocessing needed
 To download a single IIIF manifest directly without a CSV:
 
 ```bash
-python pipeline/download_images.py \
+python -m pipeline.download_images \
     --manifest https://example.org/iiif/item/manifest.json \
     --output-dir output/my-item
 ```
@@ -66,32 +70,31 @@ python pipeline/download_images.py \
 
 ## 4. Precision upgrade: bounding boxes per entry
 
-The default `--extract` path gives each entry a canvas URI pointing to its page. Adding Surya OCR and alignment upgrades every `canvas_fragment` to a `#xywh=` bounding box — the exact line on the page.
+The default `pipeline run` path gives each entry a canvas URI pointing to its page. Adding Surya OCR and alignment upgrades every `canvas_fragment` to a `#xywh=` bounding box — the exact line on the page.
 
 ```bash
-# Add to any run:
-python main.py URL --surya-ocr --align-ocr
+# Surya OCR + Gemini OCR + alignment on an already-downloaded volume
+# (already-completed OCR files are skipped automatically)
+pipeline ocr output/ldpd_11290437_000/
 
-# Then optionally review and correct unmatched lines:
-python pipeline/review_alignment.py output/ --model gemini-2.0-flash
+# Then optionally review and correct unmatched lines in a browser UI
+# (the model slug is auto-detected from pipeline_state.json)
+pipeline review output/ldpd_11290437_000/
 ```
 
-`--guided` runs this full path automatically, pausing at the review step.
+`pipeline guided` runs this full path automatically, pausing at the review step.
 
 ---
 
 ## 5. Geocoding and maps
 
 ```bash
-# Geocode entries (Nominatim city-level by default; Google Maps with API key)
-python main.py collections.txt --geocode --model gemini-2.0-flash
-
-# Build the interactive Leaflet map
-python main.py collections.txt --map --model gemini-2.0-flash
+# Geocode entries (Nominatim city-level by default; Google Maps with API key),
+# then build the interactive Leaflet map. The model slug is auto-detected.
+python main.py output/ldpd_11290437_000/ --geocode --map
 
 # Generate map with IIIF Content State deep-links (opens viewer at exact page and region)
-python pipeline/geo/map_entries.py output/green_book_1947_xxx/ \
-    --model gemini-2.0-flash \
+python -m pipeline.geo.map_entries output/green_book_1947_xxx/ \
     --viewer-url https://hadro.github.io/green-book-iiif-test \
     --manifest-url https://hadro.github.io/green-book-iiif-test/manifest.json
 ```
@@ -102,15 +105,15 @@ python pipeline/geo/map_entries.py output/green_book_1947_xxx/ \
 
 ```bash
 # Line-level and entry-level W3C Annotation Pages
-python pipeline/iiif/export_annotations.py \
-    output/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
+python -m pipeline.iiif.export_annotations \
+    output/green_book_1947_xxx/uuid/ --model gemini-3.1-flash-lite
 
 # Colored entry bounding boxes as annotation overlays
-python pipeline/iiif/export_entry_boxes.py \
-    output/green_book_1947_xxx/uuid/ --model gemini-2.0-flash
+python -m pipeline.iiif.export_entry_boxes \
+    output/green_book_1947_xxx/uuid/ --model gemini-3.1-flash-lite
 
 # Export boxes and update the manifest so IIIF viewers load them automatically
-python pipeline/iiif/export_entry_boxes.py \
+python -m pipeline.iiif.export_entry_boxes \
     output/green_book_1947_xxx/uuid/ \
     --base-url https://hadro.github.io/green-book-iiif-test/annotations \
     --update-manifest
@@ -139,7 +142,7 @@ import subprocess
 from google.colab.output import eval_js
 
 PORT   = 5000
-MODEL  = "gemini-2.0-flash"
+MODEL  = "gemini-3.1-flash-lite"
 VOLUME = "/content/output/my_volume"
 
 subprocess.run(["fuser", "-k", f"{PORT}/tcp"], capture_output=True)
@@ -177,12 +180,16 @@ Open the URL printed in Step 1.
 
 ```bash
 # Preview every command the pipeline would run, without executing anything
-python main.py https://archive.org/details/ldpd_11290437_000/ --extract --dry-run
+pipeline run https://archive.org/details/ldpd_11290437_000/ --dry-run
+
+# Disable Flex inference (on by default; ~50% cheaper but 1–15 min/request)
+# when you need real-time throughput
+pipeline run <URL> --no-flex
 
 # Compare two Gemini models on OCR quality before committing to a full run
 python main.py collections.txt --compare-ocr \
-    --models gemini-2.0-flash gemini-2.5-pro
+    --models gemini-3.1-flash-lite gemini-2.0-flash
 
-# Force re-processing of already-completed files
-python main.py collections.txt --align-ocr --model gemini-2.0-flash --force
+# Force re-processing of already-completed OCR + alignment
+pipeline ocr output/ldpd_11290437_000/ --force
 ```

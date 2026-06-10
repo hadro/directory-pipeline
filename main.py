@@ -22,9 +22,9 @@ command line:
   --detect-columns  pipeline/detect_columns.py        (pixel-projection column detection → columns_report.csv)
   --surya-ocr       pipeline/run_surya_ocr.py         (Surya OCR → *_surya.json line bboxes + *_surya.txt)
   --gemini-ocr      pipeline/run_gemini_ocr.py        (Gemini OCR)
-  --compare-ocr     analysis/compare_ocr.py           (side-by-side model comparison; accepts "surya" token)
+  --compare-ocr     pipeline/compare_ocr.py           (side-by-side model comparison; accepts "surya" token)
   --align-ocr       pipeline/align_ocr.py             (NW alignment of Gemini text to Surya bboxes)
-  --visualize       analysis/visualize_alignment.py   (draw alignment boxes on images → *_viz.jpg)
+  --visualize       pipeline/visualize_alignment.py   (draw alignment boxes on images → *_viz.jpg)
   --review-alignment pipeline/review_alignment.py     (interactive UI to correct unmatched entries → *_aligned.json)
   --extract-entries pipeline/extract_entries.py        (extract structured entries from aligned OCR)
   --geocode         pipeline/geo/geocode_entries.py    (geocode entries to lat/lon)
@@ -103,9 +103,9 @@ PIPELINE: list[tuple[str, str, str]] = [
     ("detect_columns",  "pipeline/detect_columns.py",          "--detect-columns"),
     ("surya_ocr",       "pipeline/run_surya_ocr.py",           "--surya-ocr"),
     ("gemini_ocr",      "pipeline/run_gemini_ocr.py",          "--gemini-ocr"),
-    ("compare_ocr",     "analysis/compare_ocr.py",             "--compare-ocr"),
+    ("compare_ocr",     "pipeline/compare_ocr.py",             "--compare-ocr"),
     ("align_ocr",       "pipeline/align_ocr.py",               "--align-ocr"),
-    ("visualize",       "analysis/visualize_alignment.py",     "--visualize"),
+    ("visualize",       "pipeline/visualize_alignment.py",     "--visualize"),
     ("review_alignment","pipeline/review_alignment.py",        "--review-alignment"),
     ("extract_entries", "pipeline/extract_entries.py",         "--extract-entries"),
     ("geocode",         "pipeline/geo/geocode_entries.py",     "--geocode"),
