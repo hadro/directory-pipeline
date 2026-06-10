@@ -48,10 +48,9 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from utils.models import DEFAULT_OCR_MODEL
 from utils import iiif_utils
-from iiif.label_utils import (
+from pipeline.iiif.label_utils import (
     parse_ner_label_fields,
     build_entry_label,
     handle_missing_ner_prompt,
@@ -426,9 +425,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--model", "-m",
-        default="gemini-2.0-flash",
+        default=DEFAULT_OCR_MODEL,
         metavar="MODEL",
-        help="Model slug in the entries filenames (default: gemini-2.0-flash)",
+        help=f"Model slug in the entries filenames (default: {DEFAULT_OCR_MODEL})",
     )
     parser.add_argument(
         "--base-url",

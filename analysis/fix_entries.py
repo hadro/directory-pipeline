@@ -28,8 +28,8 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 from pipeline.state import get_ner_model, get_ocr_model
+from utils.models import DEFAULT_OCR_MODEL
 
 # ---------------------------------------------------------------------------
 # 1. Unicode normalization
@@ -920,7 +920,7 @@ def main() -> None:
             args.model = (
                 get_ner_model(collection_dir)
                 or get_ocr_model(collection_dir)
-                or "gemini-3.1-flash-lite"
+                or DEFAULT_OCR_MODEL
             )
         pattern = f"{args.collection}/*/entries_{args.model}.csv"
         paths = sorted(Path(p) for p in glob.glob(pattern))

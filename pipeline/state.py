@@ -10,7 +10,7 @@ Schema
 {
     "source_url": "https://...",
     "slug": "ldpd_11290437_000",
-    "ocr_model": "gemini-2.0-flash",
+    "ocr_model": "gemini-3.1-flash-lite",
     "ner_model": "gemini-3.1-flash-lite",
     "stages_completed": ["download", "surya_ocr", "gemini_ocr", "align_ocr"],
     "last_run": "2026-05-31T14:22:00Z"

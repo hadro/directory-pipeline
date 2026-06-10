@@ -22,8 +22,8 @@ import random
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from utils import iiif_utils
+from utils.models import DEFAULT_OCR_MODEL
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -810,7 +810,7 @@ def main() -> None:
                 args.model = m.group(1)
                 break
         if args.model is None:
-            args.model = "gemini-2.0-flash"
+            args.model = DEFAULT_OCR_MODEL
         print(f"  Auto-detected entries model slug: {args.model}", file=sys.stderr)
 
     slug     = args.model.replace("/", "_")

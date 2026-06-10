@@ -14,10 +14,11 @@ Two cost categories: **API charges** (variable; applies on any platform) and **p
 | `--extract-entries` | `gemini-3.1-flash-lite` | $0.25 / 1M tokens | $1.50 / 1M tokens |
 | fallback (dense pages) | `gemini-3-flash-preview` | $0.50 / 1M tokens | $3.00 / 1M tokens |
 
-**Flex inference (`--flex`):** Add `--flex` to `--gemini-ocr` or `--extract-entries` for approximately **50% off** the standard rates above, with 1–15 minute latency per request and best-effort availability. Flex works well for bulk runs where real-time throughput is not needed. Combine with `gemini-3.1-flash-lite` for the lowest possible cost:
+**Flex inference (`--flex`):** Flex pricing is approximately **50% off** the standard rates above, with 1–15 minute latency per request and best-effort availability. It is **on by default** for `--gemini-ocr` and `--extract-entries` (both via `pipeline …` and `python main.py …`) — pass `--no-flex` when you need real-time throughput:
 
 ```bash
-python main.py URL --gemini-ocr --ocr-model gemini-3.1-flash-lite --flex
+python main.py URL --gemini-ocr --ocr-model gemini-3.1-flash-lite             # flex by default
+python main.py URL --gemini-ocr --no-flex                                     # standard tier
 ```
 
 A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens for OCR (`gemini-3.1-flash-lite`, approx. $0.0020/page standard, $0.0010/page with `--flex`), and another approx. 10,000 input / 2,000 output tokens for entry extraction (`gemini-3.1-flash-lite`, approx. $0.0055/page standard, $0.0028/page with `--flex`) — about **$0.0075 per page** combined at standard rates, or **$0.0038/page** with `--flex`. Dense pages that exceed the output token limit automatically retry with `gemini-3-flash-preview`, but this affects fewer than 5% of pages in practice.

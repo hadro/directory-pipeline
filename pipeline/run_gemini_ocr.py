@@ -20,24 +20,22 @@ Usage
 """
 
 import argparse
-import os
 import re
 import sys
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from dotenv import load_dotenv
 from google import genai
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 load_dotenv()
-from google.genai.types import FinishReason, GenerateContentConfig, HttpOptions, MediaResolution, Part, ThinkingConfig
+from google.genai.types import FinishReason, GenerateContentConfig, MediaResolution, Part, ThinkingConfig
 
-DEFAULT_MODEL = "gemini-3.1-flash-lite"
-FALLBACK_MODEL = "gemini-3-flash-preview"   # escalation target when primary exhausts
+from utils.gemini import flex_http_options, generate_with_retry, get_client
+from utils.models import DEFAULT_OCR_MODEL, FALLBACK_MODEL, model_slug
+
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
 
 # Bare-minimum prompt used as a last resort before model escalation.
@@ -195,40 +193,20 @@ def _call_gemini(
     service_tier: str | None = None,
 ):
     """Call Gemini with 429-retry and 503-retry logic. Returns the response object."""
-    max_503_retries = 4
-    delay_503 = 30  # seconds; doubles on each 503
-
-    for s503 in range(max_503_retries):
-        try:
-            max_retries = 5
-            delay = 10  # seconds; doubles on each 429
-            for attempt in range(max_retries):
-                try:
-                    return client.models.generate_content(
-                        model=model,
-                        config=GenerateContentConfig(
-                            system_instruction=system_prompt,
-                            temperature=temperature,
-                            media_resolution=media_resolution,
-                            thinking_config=ThinkingConfig(thinking_budget=0),
-                            http_options=HttpOptions(extra_body={"service_tier": service_tier}) if service_tier else None,
-                        ),
-                        contents=[Part.from_bytes(data=img_bytes, mime_type="image/jpeg")],
-                    )
-                except Exception as exc:
-                    if "429" in str(exc) and attempt < max_retries - 1:
-                        _log(f"  Rate limited — retrying {image_name} in {delay}s (attempt {attempt + 1}/{max_retries})")
-                        time.sleep(delay)
-                        delay *= 2
-                    else:
-                        raise
-        except Exception as exc:
-            if "503" in str(exc) and s503 < max_503_retries - 1:
-                _log(f"  Service unavailable — retrying {image_name} in {delay_503}s (attempt {s503 + 1}/{max_503_retries})")
-                time.sleep(delay_503)
-                delay_503 *= 2
-            else:
-                raise
+    return generate_with_retry(
+        client,
+        model=model,
+        config=GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=temperature,
+            media_resolution=media_resolution,
+            thinking_config=ThinkingConfig(thinking_budget=0),
+            http_options=flex_http_options(service_tier),
+        ),
+        contents=[Part.from_bytes(data=img_bytes, mime_type="image/jpeg")],
+        label=image_name,
+        log=_log,
+    )
 
 
 def process_image(
@@ -244,8 +222,7 @@ def process_image(
     OCR one image via Gemini. Returns (status, success) where status is one of
     'skipped', 'ok', 'failed'.
     """
-    model_slug = model.replace("/", "_")
-    txt_path = image_path.parent / f"{image_path.stem}_{model_slug}.txt"
+    txt_path = image_path.parent / f"{image_path.stem}_{model_slug(model)}.txt"
     if txt_path.exists():
         if txt_path.stat().st_size > 0:
             return "skipped", None
@@ -357,8 +334,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--model", "-m",
-        default=DEFAULT_MODEL,
-        help=f"Gemini model name (default: {DEFAULT_MODEL})",
+        default=DEFAULT_OCR_MODEL,
+        help=f"Gemini model name (default: {DEFAULT_OCR_MODEL})",
     )
     parser.add_argument(
         "--workers", "-w",
@@ -428,12 +405,6 @@ def main() -> None:
         help="Suppress per-file progress output",
     )
     args = parser.parse_args()
-
-    # API key
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
-        print("Error: GEMINI_API_KEY environment variable is not set.", file=sys.stderr)
-        sys.exit(1)
 
     # Images root (needed for prompt auto-discovery below)
     output_root = Path(args.output_dir)
@@ -556,7 +527,7 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    client = genai.Client(api_key=api_key)
+    client = get_client()
     counts = {"ok": 0, "skipped": 0, "failed": 0}
     completed = 0
 
@@ -581,8 +552,7 @@ def main() -> None:
             counts[status] += 1
 
             if not args.quiet:
-                model_slug = args.model.replace("/", "_")
-                txt_name = f"{image_path.stem}_{model_slug}.txt"
+                txt_name = f"{image_path.stem}_{model_slug(args.model)}.txt"
                 if status == "skipped":
                     _log(f"[{completed:04d}/{total}] Skipped (exists): {txt_name}")
                 elif status == "ok":

@@ -39,8 +39,8 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from iiif.label_utils import (  # noqa: E402
+from utils.models import DEFAULT_OCR_MODEL
+from pipeline.iiif.label_utils import (  # noqa: E402
     parse_ner_label_fields,
     build_entry_label,
     handle_missing_ner_prompt,
@@ -198,8 +198,8 @@ def main() -> None:
     )
     parser.add_argument("item_dir",
         help="Item directory (or images root) containing *_aligned.json files")
-    parser.add_argument("--model", "-m", default="gemini-2.0-flash", metavar="MODEL",
-        help="Model slug used in aligned JSON filenames (default: gemini-2.0-flash)")
+    parser.add_argument("--model", "-m", default=DEFAULT_OCR_MODEL, metavar="MODEL",
+        help=f"Model slug used in aligned JSON filenames (default: {DEFAULT_OCR_MODEL})")
     parser.add_argument("--base-url", default="", metavar="URL",
         help="Base URL for annotation IDs "
              "(e.g. https://example.org/annotations). "

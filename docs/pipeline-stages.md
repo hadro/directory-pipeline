@@ -122,7 +122,7 @@ appropriate to the document it sees. The only fixed requirement is the JSON resp
 names dynamically from whatever fields the model returns, so **no code changes are needed for new collection types**.
 
 Pass `--ner-template` to specify a reference prompt shown to Gemini as a structural
-example (defaults to `prompts/ner_prompt.md`; use `prompts/ner_prompt_greenbook.md`
+example (defaults to `prompts/ner_prompt.md`; use `prompts/examples/ner_prompt_greenbook.md`
 for a richer directory-style example).
 
 Requires a `selection.txt` file (from `--select-pages`). Pass `--ocr-only` or
@@ -137,7 +137,7 @@ python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
 # Use the Green Book prompt as a structural reference:
 python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
     --selection output/the_travelers_guide_e088efa0/selection.txt \
-    --ner-template prompts/ner_prompt_greenbook.md
+    --ner-template prompts/examples/ner_prompt_greenbook.md
 
 # OCR prompt only:
 python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
@@ -517,7 +517,7 @@ python pipeline/explore_entries.py output/green_book_1947_4bea2040/ --out my_exp
 python pipeline/explore_entries.py output/green_book_1947_4bea2040/uuid/entries_gemini-2.0-flash.csv
 ```
 
-#### `pipeline/review_ocr.py` — OCR anomaly triage report
+#### `tools/review_ocr.py` — OCR anomaly triage report
 Compares each page's line count and average line length to a rolling window of
 neighboring pages and flags pages that deviate significantly. Writes a
 **self-contained HTML report** with per-page thumbnails for quick visual triage.
@@ -529,9 +529,9 @@ whether a flag is a legitimate layout difference or an OCR problem worth investi
 Useful as a fast sanity check before running `--extract-entries` on a new volume.
 
 ```bash
-python pipeline/review_ocr.py output/my-collection/item_dir/
-python pipeline/review_ocr.py output/my-collection/item_dir/ --model gemini-2.0-flash
-python pipeline/review_ocr.py output/my-collection/item_dir/ --threshold 0.5 --window 3
+python tools/review_ocr.py output/my-collection/item_dir/
+python tools/review_ocr.py output/my-collection/item_dir/ --model gemini-2.0-flash
+python tools/review_ocr.py output/my-collection/item_dir/ --threshold 0.5 --window 3
 ```
 
 #### `analysis/visualize_entries.py` — Entry bounding box visualization
@@ -555,7 +555,7 @@ python analysis/visualize_entries.py output/green_book_1947_4bea2040/ \
     --model gemini-2.0-flash --force
 ```
 
-#### `pipeline/patch_canvas_fragments.py` — Retroactive bounding box patching
+#### `tools/patch_canvas_fragments.py` — Retroactive bounding box patching
 Re-runs the canvas fragment matching logic against existing `*_aligned.json` files
 and updates `*_entries.json` sidecars and the volume CSV — **without making any
 Gemini API calls**. Useful when alignment has been improved (e.g. after a
@@ -566,8 +566,8 @@ Uses the same three-strategy matching chain as `extract_entries.py` (exact →
 substring → fuzzy).
 
 ```bash
-python pipeline/patch_canvas_fragments.py output/my_volume/ \
+python tools/patch_canvas_fragments.py output/my_volume/ \
     --aligned-model gemini-2.0-flash
-python pipeline/patch_canvas_fragments.py output/collection/ \
+python tools/patch_canvas_fragments.py output/collection/ \
     --aligned-model gemini-2.0-flash
 ```

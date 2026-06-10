@@ -128,7 +128,7 @@ is a substring of the aligned line, handling Green Book format where a city name
 and several entries share one OCR line, (3) fuzzy match via
 `difflib.get_close_matches()` at cutoff 0.6. Using a cutoff below ~0.5 produces
 false matches on short strings; above 0.7 misses legitimate matches on pages with
-OCR noise. The same three-strategy chain is used in `patch_canvas_fragments.py` for
+OCR noise. The same three-strategy chain is used in `tools/patch_canvas_fragments.py` for
 retroactively adding bounding boxes to existing extraction runs.
 
 **Edge-bleed rejection.** Two-page spread scans include a thin sliver of the facing

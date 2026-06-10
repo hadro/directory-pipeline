@@ -36,9 +36,11 @@ app = Flask(__name__)
 # Project root is one level up from this script (pipeline/)
 PROJECT_ROOT: Path = Path(__file__).parent.parent
 
+from utils.models import DEFAULT_OCR_MODEL
+
 # Set at startup
 OUTPUT_ROOT: Path = Path("output")
-MODEL: str = "gemini-3.1-flash-lite"
+MODEL: str = DEFAULT_OCR_MODEL
 
 # Surya models – pre-loaded at startup (see main())
 _det = None
@@ -1404,7 +1406,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--model", "-m",
-        default="gemini-3.1-flash-lite",
+        default=DEFAULT_OCR_MODEL,
         help="Gemini model name used in aligned JSON filenames (default: gemini-2.0-flash)",
     )
     parser.add_argument(

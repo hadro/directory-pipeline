@@ -80,11 +80,11 @@ load_dotenv()
 
 SCRIPT_DIR = Path(__file__).parent
 
-sys.path.insert(0, str(SCRIPT_DIR))
 from utils.iiif_utils import manifest_item_id as _iiif_manifest_item_id
 from sources.loc_utils import _resource_url_to_item_url, loc_slug
 from sources.ia_utils import _extract_ia_identifier, _fetch_ia_info, _make_ia_slug
 from pipeline.state import write_state, record_stage
+from utils.models import DEFAULT_OCR_MODEL
 
 # ---------------------------------------------------------------------------
 # Pipeline definition — stages always execute in this order.
@@ -168,8 +168,12 @@ def run_stage(
     In dry-run mode, prints the command that would be run without executing it.
     When interactive=True, Ctrl+C is treated as "user finished this stage" rather
     than aborting the whole pipeline (used for select_pages, review_alignment).
+
+    Stages are launched as modules (python -m pipeline.foo) so package imports
+    resolve from the repo root or any installed environment.
     """
-    cmd = [sys.executable, str(SCRIPT_DIR / script)] + stage_args
+    module = script.removesuffix(".py").replace("/", ".")
+    cmd = [sys.executable, "-m", module] + stage_args
     if dry_run:
         print(f"    [dry run] $ {' '.join(str(a) for a in cmd)}", file=sys.stderr)
         return True
@@ -878,12 +882,12 @@ def main() -> None:
     )
     opts.add_argument(
         "--flex",
-        action="store_true",
-        default=False,
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            "Use Gemini Flex inference for --gemini-ocr: ~50%% cheaper, "
-            "1–15 min latency per request. Good for large batches where "
-            "real-time throughput is not required."
+            "Use Gemini Flex inference for --gemini-ocr and --extract-entries: "
+            "~50%% cheaper, 1–15 min latency per request. On by default — "
+            "pass --no-flex for time-sensitive runs."
         ),
     )
     opts.add_argument(
@@ -1207,7 +1211,7 @@ def main() -> None:
         # their .txt files so --gemini-ocr will re-OCR them, then force both
         # --gemini-ocr and --align-ocr to run for this target.
         if getattr(args, "retry_merged", False):
-            _ocr_slug = (args.ocr_model or "gemini-2.0-flash").replace("/", "_")
+            _ocr_slug = (args.ocr_model or DEFAULT_OCR_MODEL).replace("/", "_")
             _flagged: list[Path] = []
             for _json_path in sorted(output_dir.rglob(f"*_{_ocr_slug}_aligned.json")):
                 if uuid and uuid not in _json_path.parts:

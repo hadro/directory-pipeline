@@ -16,7 +16,6 @@ dependencies = [
 
 [project.scripts]
 pipeline = "cli.main:main"
-pipeline-postprocess = "pipeline.postprocess:main"
 
 [tool.uv]
 package = true

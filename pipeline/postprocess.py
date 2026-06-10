@@ -22,9 +22,9 @@ import glob
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pipeline.state import get_ner_model, get_ocr_model
+from utils.models import DEFAULT_OCR_MODEL
 
 
 def _find_model(directory: Path) -> str:
@@ -41,13 +41,13 @@ def _find_model(directory: Path) -> str:
             counts[m.group(1)] += 1
     if counts:
         return counts.most_common(1)[0][0]
-    return "gemini-3.1-flash-lite"
+    return DEFAULT_OCR_MODEL
 
 
 def run_fix(directory: Path, model: str, dry_run: bool = False) -> list[Path]:
     from analysis.fix_entries import process_csv, _print_stats
 
-    pattern = str(directory / "*/entries_" + model + ".csv")
+    pattern = str(directory / f"*/entries_{model}.csv")
     # Try item-level subdirectory pattern first; fall back to top-level.
     paths = sorted(Path(p) for p in glob.glob(pattern))
     if not paths:

@@ -24,10 +24,12 @@ Usage
 import argparse
 import csv
 import difflib
-import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from utils.gemini import get_client
+from utils.models import model_slug
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -48,10 +50,6 @@ _print_lock = threading.Lock()
 def _log(msg: str) -> None:
     with _print_lock:
         print(msg, file=sys.stderr)
-
-
-def model_slug(model: str) -> str:
-    return model.replace("/", "_")
 
 
 def txt_path_for(image_path: Path, model: str) -> Path:
@@ -272,11 +270,6 @@ def main() -> None:
     client = None
     system_prompt = ""
     if gemini_models:
-        api_key = os.environ.get("GEMINI_API_KEY", "")
-        if not api_key:
-            print("Error: GEMINI_API_KEY environment variable is not set.", file=sys.stderr)
-            sys.exit(1)
-
         # Resolve prompt file: explicit flag → output dir → parent dir → default location
         if args.prompt:
             prompt_file = Path(args.prompt)
@@ -296,8 +289,7 @@ def main() -> None:
             )
             sys.exit(1)
         system_prompt = prompt_file.read_text(encoding="utf-8")
-        from google import genai as _genai  # noqa: PLC0415
-        client = _genai.Client(api_key=api_key)
+        client = get_client()
 
     # Media resolution: explicit flag > auto-detect from prompt > None (API default)
     media_resolution = None

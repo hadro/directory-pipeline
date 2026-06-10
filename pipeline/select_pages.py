@@ -31,7 +31,6 @@ import webbrowser
 from pathlib import Path
 
 # Add project root to path so utils can be imported
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # ---------------------------------------------------------------------------
 # Image discovery helpers

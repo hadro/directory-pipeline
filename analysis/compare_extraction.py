@@ -25,16 +25,16 @@ Usage
 import argparse
 import csv
 import json
-import os
 import sys
-import time
 import threading
 from pathlib import Path
 
 from google import genai
 from google.genai.types import GenerateContentConfig, Part
 
-DEFAULT_MODEL = "gemini-2.0-flash"
+from utils.gemini import generate_with_retry, get_client
+from utils.models import DEFAULT_NER_MODEL, model_slug
+
 DEFAULT_PAGES = 10
 NER_PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ner_prompt.md"
 
@@ -44,10 +44,6 @@ _print_lock = threading.Lock()
 def _log(msg: str) -> None:
     with _print_lock:
         print(msg, file=sys.stderr)
-
-
-def model_slug(model: str) -> str:
-    return model.replace("/", "_")
 
 
 # ---------------------------------------------------------------------------
@@ -66,27 +62,17 @@ def _call_gemini(
         parts.append(Part.from_bytes(data=image_path.read_bytes(), mime_type="image/jpeg"))
     parts.append(Part.from_text(text=user_text))
 
-    max_retries = 5
-    delay = 10
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=model,
-                config=GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=0.0,
-                ),
-                contents=parts,
-            )
-            return response.text or ""
-        except Exception as exc:
-            if "429" in str(exc) and attempt < max_retries - 1:
-                _log(f"  Rate limited — retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(delay)
-                delay *= 2
-            else:
-                raise
-    return ""
+    response = generate_with_retry(
+        client,
+        model=model,
+        config=GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=0.0,
+        ),
+        contents=parts,
+        log=_log,
+    )
+    return response.text or ""
 
 
 def _parse_json_response(text: str) -> dict | None:
@@ -501,9 +487,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--model", "-m",
-        default=DEFAULT_MODEL,
+        default=DEFAULT_NER_MODEL,
         metavar="MODEL",
-        help=f"Gemini model to use (default: {DEFAULT_MODEL})",
+        help=f"Gemini model to use (default: {DEFAULT_NER_MODEL})",
     )
     parser.add_argument(
         "--pages", "-n",
@@ -524,11 +510,6 @@ def main() -> None:
         help="Resolve files and show what would be run, without calling the API",
     )
     args = parser.parse_args()
-
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key and not args.dry_run:
-        print("Error: GEMINI_API_KEY environment variable is not set.", file=sys.stderr)
-        sys.exit(1)
 
     prompt_path = Path(args.prompt)
     if not prompt_path.exists():
@@ -555,7 +536,7 @@ def main() -> None:
             _log(f"  {f.name}")
         return
 
-    client = genai.Client(api_key=api_key)
+    client = get_client()
 
     pages: list[dict] = []
     for i, aligned_path in enumerate(aligned_files, 1):

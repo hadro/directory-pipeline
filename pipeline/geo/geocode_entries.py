@@ -40,6 +40,8 @@ from geopy.geocoders import Nominatim, GoogleV3
 load_dotenv()
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
+from utils.models import DEFAULT_OCR_MODEL
+
 # ---------------------------------------------------------------------------
 # Cache
 # ---------------------------------------------------------------------------
@@ -328,9 +330,9 @@ def main() -> None:
         if candidates:
             import re as _re
             m = _re.match(r"entries_(.+)\.csv", candidates[0].name)
-            args.model = m.group(1) if m else "gemini-2.0-flash"
+            args.model = m.group(1) if m else DEFAULT_OCR_MODEL
         else:
-            args.model = "gemini-2.0-flash"
+            args.model = DEFAULT_OCR_MODEL
         print(f"  Auto-detected entries model slug: {args.model}", file=sys.stderr)
 
     slug       = args.model.replace("/", "_")

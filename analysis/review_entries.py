@@ -12,9 +12,7 @@ Usage:
 """
 
 import argparse
-import os
 import sys
-import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,7 +25,8 @@ load_dotenv()
 # Defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL = "gemini-3-flash-preview"
+from utils.gemini import generate_with_retry, get_client
+from utils.models import DEFAULT_PROMPT_MODEL
 
 SYSTEM_PROMPT = """\
 You are a data quality auditor reviewing a CSV of structured records extracted
@@ -78,28 +77,19 @@ def _find_ner_prompt(csv_path: Path) -> Path | None:
 
 
 def _call_gemini(client: genai.Client, model: str, user_text: str) -> str:
-    max_retries = 4
-    delay = 15
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=model,
-                config=GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.2,
-                    max_output_tokens=8192,
-                ),
-                contents=user_text,
-            )
-            return response.text or ""
-        except Exception as exc:
-            if attempt < max_retries - 1:
-                print(f"  API error (attempt {attempt + 1}): {exc} — retrying in {delay}s…",
-                      file=sys.stderr)
-                time.sleep(delay)
-                delay *= 2
-            else:
-                raise
+    response = generate_with_retry(
+        client,
+        model=model,
+        config=GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.2,
+            max_output_tokens=8192,
+        ),
+        contents=user_text,
+        max_retries=4,
+        base_delay=15.0,
+    )
+    return response.text or ""
 
 
 # ---------------------------------------------------------------------------
@@ -119,8 +109,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--model", "-m",
-        default=DEFAULT_MODEL,
-        help=f"Gemini model to use (default: {DEFAULT_MODEL})",
+        default=DEFAULT_PROMPT_MODEL,
+        help=f"Gemini model to use (default: {DEFAULT_PROMPT_MODEL})",
     )
     parser.add_argument(
         "--out", "-o",
@@ -139,11 +129,6 @@ def main() -> None:
     csv_path = Path(args.csv)
     if not csv_path.exists():
         print(f"Error: CSV not found: {csv_path}", file=sys.stderr)
-        sys.exit(1)
-
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
-        print("Error: GEMINI_API_KEY environment variable is not set.", file=sys.stderr)
         sys.exit(1)
 
     # ── Load CSV ──────────────────────────────────────────────────────────────
@@ -182,7 +167,7 @@ def main() -> None:
     )
 
     # ── Call Gemini ───────────────────────────────────────────────────────────
-    client = genai.Client(api_key=api_key)
+    client = get_client()
     print(f"  Sending to {args.model}…", file=sys.stderr)
     report = _call_gemini(client, args.model, user_text)
 

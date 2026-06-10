@@ -45,7 +45,6 @@ Usage
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -53,7 +52,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-_DEFAULT_MODEL = "gemini-3-flash-preview"
+from utils.gemini import get_client
+from utils.models import DEFAULT_PROMPT_MODEL
 
 _DITTO_INSTRUCTION = (
     "\n\n8. **Ditto marks** — This volume uses ditto marks (small raised comma-pairs, "
@@ -356,8 +356,8 @@ def main() -> None:
 
     parser.add_argument(
         "--model", "-m",
-        default=_DEFAULT_MODEL,
-        help=f"Gemini model to use (default: {_DEFAULT_MODEL})",
+        default=DEFAULT_PROMPT_MODEL,
+        help=f"Gemini model to use (default: {DEFAULT_PROMPT_MODEL})",
     )
 
     # Which prompts to generate
@@ -441,8 +441,6 @@ def main() -> None:
     # SECTIONS MODE — auto-sample per section and generate per-section prompts
     # =========================================================================
     if args.sections:
-        import sys as _sys
-        _sys.path.insert(0, str(Path(__file__).parent.parent))
         from utils.section_utils import load_sections
 
         sections_path = Path(args.sections)
@@ -490,12 +488,7 @@ def main() -> None:
             print(f"Found {len(sections)} section(s): {', '.join(s['label'] for s in sections)}", file=sys.stderr)
 
         # --- Set up Gemini client + NER template ----------------------------
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            print("Error: GEMINI_API_KEY is not set.", file=sys.stderr)
-            sys.exit(1)
-        from google import genai
-        client = genai.Client(api_key=api_key)
+        client = get_client()
 
         ner_template_path = Path(args.ner_template)
         if not ner_template_path.exists():
@@ -712,13 +705,7 @@ def main() -> None:
             sys.exit(0)
 
     # --- Set up Gemini client + load images (shared) -------------------------
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        print("Error: GEMINI_API_KEY is not set.", file=sys.stderr)
-        sys.exit(1)
-
-    from google import genai
-    client = genai.Client(api_key=api_key)
+    client = get_client()
 
     if not args.quiet:
         print(f"Loading {len(image_names)} image(s)…", file=sys.stderr)

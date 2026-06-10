@@ -34,7 +34,7 @@ SCRIPT_DIR = Path(__file__).parent
 DB_PATH = SCRIPT_DIR / "pipeline.db"
 OUTPUT_ROOT = SCRIPT_DIR / "output"
 DEFAULT_PORT = 5001
-DEFAULT_MODEL = "gemini-3.1-flash-lite"
+from utils.models import DEFAULT_OCR_MODEL as DEFAULT_MODEL
 
 # Matches the first segment of a UUID (8 hex chars)
 _UUID_RE = re.compile(r"([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)

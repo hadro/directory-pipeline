@@ -42,11 +42,9 @@ import csv
 import difflib
 import io
 import json
-import os
 import re
 import sys
 import threading
-import time
 from pathlib import Path
 
 from PIL import Image
@@ -54,15 +52,12 @@ from PIL import Image
 from dotenv import load_dotenv
 from google import genai
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 load_dotenv()
-from google.genai.types import GenerateContentConfig, HttpOptions, Part, ThinkingConfig
+from google.genai.types import GenerateContentConfig, Part, ThinkingConfig
 
-DEFAULT_MODEL = "gemini-3.1-flash-lite"
-# Fallback used when the primary model appears to have hit its output token limit.
-# Lite models cap output at ~8 k tokens; the fallback handles dense pages with 100+ entries.
-FALLBACK_MODEL = "gemini-3-flash-preview"
+from utils.gemini import flex_http_options, generate_with_retry, get_client
+from utils.models import DEFAULT_NER_MODEL, FALLBACK_MODEL, model_slug
 
 # Sparse-page thresholds: pages below BOTH limits are skipped before the NER call.
 # A blank or nearly-blank page passes enough ghost/bleed text to trigger hallucinations.
@@ -71,26 +66,6 @@ MIN_OCR_CHARS = 100       # characters in the assembled page text
 MIN_ALIGNED_LINES = 3     # lines in the aligned JSON (process_page path)
 MIN_SURYA_BBOXES = 5      # Surya bbox detections (process_page_txt path)
 NER_PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ner_prompt.md"
-
-
-def _discover_ocr_slug(output_root: Path) -> str | None:
-    """Scan *output_root* for Gemini OCR files and return the most-common model slug."""
-    from collections import Counter
-    counts: Counter[str] = Counter()
-    for pattern, regex_str in [
-        ("*_aligned.json", r"^\d{4}_\d+_(.+)_aligned\.json$"),
-        ("*.txt",          r"^\d{4}_\d+_(.+)\.txt$"),
-    ]:
-        rx = re.compile(regex_str)
-        dirs = [output_root] + [d for d in sorted(output_root.iterdir()) if d.is_dir()]
-        for d in dirs:
-            for f in d.glob(pattern):
-                m = rx.match(f.name)
-                if m:
-                    counts[m.group(1)] += 1
-        if counts:
-            return counts.most_common(1)[0][0]
-    return None
 
 
 def _load_scope(output_root: Path) -> "set[str] | None":
@@ -210,10 +185,6 @@ def _log(msg: str) -> None:
         print(msg, file=sys.stderr)
 
 
-def model_slug(model: str) -> str:
-    return model.replace("/", "_")
-
-
 # ---------------------------------------------------------------------------
 # Gemini API
 # ---------------------------------------------------------------------------
@@ -246,31 +217,20 @@ def _call_gemini(
         parts.append(Part.from_bytes(data=_resize_image_bytes(image_path), mime_type="image/jpeg"))
     parts.append(Part.from_text(text=user_text))
 
-    max_retries = 5
-    delay = 10
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=model,
-                config=GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=0.0,
-                    max_output_tokens=65536,
-                    thinking_config=ThinkingConfig(thinking_budget=0),
-                    http_options=HttpOptions(extra_body={"service_tier": service_tier}) if service_tier else None,
-                ),
-                contents=parts,
-            )
-            return response.text or ""
-        except Exception as exc:
-            retryable = ("429" in str(exc) or "503" in str(exc) or "overloaded" in str(exc).lower())
-            if retryable and attempt < max_retries - 1:
-                _log(f"  Transient error ({exc}) — retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(delay)
-                delay *= 2
-            else:
-                raise
-    return ""
+    response = generate_with_retry(
+        client,
+        model=model,
+        config=GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=0.0,
+            max_output_tokens=65536,
+            thinking_config=ThinkingConfig(thinking_budget=0),
+            http_options=flex_http_options(service_tier),
+        ),
+        contents=parts,
+        log=_log,
+    )
+    return response.text or ""
 
 
 def _strip_fence(text: str) -> str:
@@ -1265,9 +1225,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--model", "-m",
-        default=DEFAULT_MODEL,
+        default=DEFAULT_NER_MODEL,
         metavar="MODEL",
-        help=f"Gemini model for NER (default: {DEFAULT_MODEL})",
+        help=f"Gemini model for NER (default: {DEFAULT_NER_MODEL})",
     )
     parser.add_argument(
         "--aligned-model",
@@ -1354,12 +1314,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # API key
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key and not args.dry_run:
-        print("Error: GEMINI_API_KEY environment variable is not set.", file=sys.stderr)
-        sys.exit(1)
-
     aligned_model = args.aligned_model
     slug = model_slug(args.model)
     aligned_slug = model_slug(aligned_model) if aligned_model else slug
@@ -1394,7 +1348,7 @@ def main() -> None:
         print(f"Error: directory not found: {output_root}", file=sys.stderr)
         sys.exit(1)
 
-    client = genai.Client(api_key=api_key) if not args.dry_run else None  # type: ignore[assignment]
+    client = get_client() if not args.dry_run else None  # type: ignore[assignment]
 
     # Discover item directories: either the given dir itself (if it has aligned
     # JSONs or raw txt files directly) or its immediate subdirectories.

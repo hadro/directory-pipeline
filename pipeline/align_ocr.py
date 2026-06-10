@@ -22,7 +22,7 @@ Output JSON
 -----------
   {
     "image": "0001_58030238.jpg",
-    "model": "gemini-2.0-flash",
+    "model": "gemini-3.1-flash-lite",
     "canvas_uri": "https://...",
     "canvas_width": 2048,
     "canvas_height": 3000,
@@ -58,29 +58,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import iiif_utils
+from utils.models import DEFAULT_OCR_MODEL, model_slug, discover_ocr_slug
 from pipeline.state import get_ocr_model
-
-DEFAULT_MODEL = "gemini-2.0-flash"
-
-
-def _discover_ocr_slug(output_root: Path) -> str | None:
-    """Scan *output_root* for Gemini OCR files and return the most-common model slug."""
-    from collections import Counter
-    counts: Counter[str] = Counter()
-    for pattern, regex in [
-        ("*_aligned.json", re.compile(r"_(gemini-[^_]+)_aligned\.json$")),
-        ("*.txt",          re.compile(r"_(gemini-[^_]+)\.txt$")),
-    ]:
-        for candidate in (output_root, *[d for d in sorted(output_root.iterdir()) if d.is_dir()]):
-            for f in candidate.glob(pattern):
-                m = regex.search(f.name)
-                if m:
-                    counts[m.group(1)] += 1
-            if counts:
-                return counts.most_common(1)[0][0]
-    return None
 
 _print_lock = threading.Lock()
 
@@ -175,11 +155,6 @@ def _log(msg: str) -> None:
         print(msg, file=sys.stderr)
 
 
-def model_slug(model: str) -> str:
-    return model.replace("/", "_")
-
-
-# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
 def parse_surya(
@@ -973,7 +948,7 @@ def align_image(
                     f" Falling back to manifest canvas size ({canvas_w}x{canvas_h}), which is"
                     f" SQUARE — almost certainly a placeholder. Bounding-box coordinates will"
                     f" be in the wrong space. Re-run --align-ocr --force once the network is"
-                    f" stable, or run pipeline/rescale_canvas_fragments.py to fix in place."
+                    f" stable, or run tools/rescale_canvas_fragments.py to fix in place."
                 )
 
         # For split images (_left / _right), read the sidecar to get the
@@ -1083,7 +1058,7 @@ def main() -> None:
         metavar="MODEL",
         help=(
             "Gemini model name used to generate the .txt files "
-            f"(default: {DEFAULT_MODEL}, auto-detected from output files if omitted)."
+            f"(default: {DEFAULT_OCR_MODEL}, auto-detected from output files if omitted)."
         ),
     )
     parser.add_argument(
@@ -1124,8 +1099,8 @@ def main() -> None:
     if args.model is None:
         args.model = (
             get_ocr_model(output_root)
-            or _discover_ocr_slug(output_root)
-            or DEFAULT_MODEL
+            or discover_ocr_slug(output_root)
+            or DEFAULT_OCR_MODEL
         )
         if not getattr(args, "quiet", False):
             print(f"  Auto-detected OCR model: {args.model}", file=sys.stderr)

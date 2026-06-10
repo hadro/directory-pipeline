@@ -27,6 +27,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from utils.models import DEFAULT_NER_MODEL, DEFAULT_OCR_MODEL
+
 _ROOT = Path(__file__).parent.parent
 _MAIN = str(_ROOT / "main.py")
 _POSTPROCESS = str(_ROOT / "pipeline" / "postprocess.py")
@@ -52,7 +54,7 @@ def _parser_run() -> argparse.ArgumentParser:
     )
     p.add_argument("source", help="LoC/IA URL, IIIF manifest URL, or pre-built CSV path")
     p.add_argument("--model", "-m", metavar="MODEL", default=None,
-                   help="Gemini model for OCR + NER (default: gemini-2.0-flash for OCR, gemini-3.1-flash-lite for NER)")
+                   help=f"Gemini model for OCR + NER (default: {DEFAULT_OCR_MODEL} for OCR, {DEFAULT_NER_MODEL} for NER)")
     p.add_argument("--ner-prompt", metavar="FILE", default=None,
                    help="Custom NER system prompt (reuse from a prior calibrated volume)")
     p.add_argument("--ocr-prompt", metavar="FILE", default=None,
@@ -79,7 +81,7 @@ def _run(args: argparse.Namespace) -> None:
     if args.ner_prompt:  cmd += ["--ner-prompt", args.ner_prompt]
     if args.ocr_prompt:  cmd += ["--ocr-prompt", args.ocr_prompt]
     if args.mode:        cmd += ["--mode", args.mode]
-    if args.flex:        cmd.append("--flex")
+    if not args.flex:    cmd.append("--no-flex")
     if args.workers:     cmd += ["--workers", str(args.workers)]
     if args.sections:    cmd += ["--sections", args.sections]
     if args.slug:        cmd += ["--slug", args.slug]
@@ -125,7 +127,7 @@ def _guided(args: argparse.Namespace) -> None:
     if args.ocr_prompt:  cmd += ["--ocr-prompt", args.ocr_prompt]
     if args.sections:    cmd += ["--sections", args.sections]
     if args.workers:     cmd += ["--workers", str(args.workers)]
-    if args.flex:        cmd.append("--flex")
+    if not args.flex:    cmd.append("--no-flex")
     if args.slug:        cmd += ["--slug", args.slug]
     if args.dry_run:     cmd.append("--dry-run")
     _exec(cmd)
@@ -215,7 +217,7 @@ def _parser_ocr() -> argparse.ArgumentParser:
     )
     p.add_argument("source", help="Output directory (e.g. output/my_vol/)")
     p.add_argument("--model", "-m", metavar="MODEL", default=None,
-                   help="Gemini model for OCR + alignment (default: gemini-2.0-flash)")
+                   help=f"Gemini model for OCR + alignment (default: {DEFAULT_OCR_MODEL})")
     p.add_argument("--ocr-prompt", metavar="FILE", default=None,
                    help="Custom OCR system prompt file")
     p.add_argument("--sections", metavar="PATH", default=None,
@@ -261,7 +263,7 @@ def _ocr(args: argparse.Namespace) -> None:
     if args.ocr_prompt:             cmd += ["--ocr-prompt", args.ocr_prompt]
     if args.sections:               cmd += ["--sections", args.sections]
     if args.workers:                cmd += ["--workers", str(args.workers)]
-    if args.flex:                   cmd.append("--flex")
+    if not args.flex:               cmd.append("--no-flex")
     if args.high_res:               cmd.append("--high-res")
     if args.expand_dittos:          cmd.append("--expand-dittos")
     if args.force:                  cmd.append("--force")
@@ -284,7 +286,7 @@ def _parser_extract() -> argparse.ArgumentParser:
     )
     p.add_argument("source", help="Output directory (e.g. output/my_vol/)")
     p.add_argument("--model", "-m", metavar="MODEL", default=None,
-                   help="Gemini model for NER (default: gemini-3.1-flash-lite)")
+                   help=f"Gemini model for NER (default: {DEFAULT_NER_MODEL})")
     p.add_argument("--ner-prompt", metavar="FILE", default=None,
                    help="Custom NER system prompt (reuse from a calibrated volume)")
     p.add_argument("--mode", choices=["text-only", "multimodal"], default=None,
@@ -294,6 +296,9 @@ def _parser_extract() -> argparse.ArgumentParser:
                    help="Path to sections.txt for context reset at section boundaries")
     p.add_argument("--workers", "-w", type=int, metavar="N", default=None,
                    help="Parallel workers for NER extraction")
+    p.add_argument("--flex", action=argparse.BooleanOptionalAction, default=True,
+                   help="Use Gemini Flex inference (~50%% cheaper, 1–15 min latency). "
+                        "On by default. Pass --no-flex for time-sensitive runs.")
     p.add_argument("--geocode", action="store_true",
                    help="Geocode extracted addresses to lat/lon")
     p.add_argument("--map", action="store_true",
@@ -317,6 +322,7 @@ def _extract(args: argparse.Namespace) -> None:
     if args.mode:       cmd += ["--mode", args.mode]
     if args.sections:   cmd += ["--sections", args.sections]
     if args.workers:    cmd += ["--workers", str(args.workers)]
+    if not args.flex:   cmd.append("--no-flex")
     if args.dry_run:    cmd.append("--dry-run")
     _exec(cmd)
 

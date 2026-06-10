@@ -31,7 +31,7 @@ python main.py https://archive.org/details/ldpd_11290437_001/ --extract \
   --ner-prompt output/ldpd_11290437_000/ner_prompt.md
 ```
 
-Requires `GEMINI_API_KEY`. Can run on the [free tier](#costs) — no billing required for collections up to ~150 pages. Add `--flex` to any `--gemini-ocr` run for ~50% cheaper API calls (1–15 min latency per request, best-effort availability).
+Requires `GEMINI_API_KEY`. Can run on the [free tier](#costs) — no billing required for collections up to ~150 pages. Flex inference (~50% cheaper API calls, 1–15 min latency per request, best-effort availability) is on by default; pass `--no-flex` for time-sensitive runs.
 
 ---
 
