@@ -84,34 +84,13 @@ from utils.iiif_utils import manifest_item_id as _iiif_manifest_item_id
 from sources.loc_utils import _resource_url_to_item_url, loc_slug
 from sources.ia_utils import _extract_ia_identifier, _fetch_ia_info, _make_ia_slug
 from pipeline.state import write_state, record_stage
+from pipeline.stages import STAGES, STAGE_BY_NAME, build_declarative_args
 from utils.models import DEFAULT_OCR_MODEL
 
-# ---------------------------------------------------------------------------
-# Pipeline definition — stages always execute in this order.
-# Each entry is (dest_attr_name, script_filename, human_label).
-# ---------------------------------------------------------------------------
-PIPELINE: list[tuple[str, str, str]] = [
-    ("loc_csv",         "sources/loc_collection_csv.py",       "--loc-csv"),
-    ("ia_csv",          "sources/ia_collection_csv.py",        "--ia-csv"),
-    ("iiif_csv",        "sources/iiif_manifest_csv.py",        "--iiif-csv"),
-    ("download",        "pipeline/download_images.py",         "--download"),
-    ("detect_spreads",  "pipeline/detect_spreads.py",          "--detect-spreads"),
-    ("split_spreads",   "pipeline/split_spreads.py",           "--split-spreads"),
-    ("select_pages",    "pipeline/select_pages.py",     "--select-pages"),
-    ("generate_prompts","pipeline/generate_prompt.py",     "--generate-prompts"),
-    ("surya_detect",    "pipeline/surya_detect.py",            "--surya-detect"),
-    ("detect_columns",  "pipeline/detect_columns.py",          "--detect-columns"),
-    ("surya_ocr",       "pipeline/run_surya_ocr.py",           "--surya-ocr"),
-    ("gemini_ocr",      "pipeline/run_gemini_ocr.py",          "--gemini-ocr"),
-    ("compare_ocr",     "pipeline/compare_ocr.py",             "--compare-ocr"),
-    ("align_ocr",       "pipeline/align_ocr.py",               "--align-ocr"),
-    ("visualize",       "pipeline/visualize_alignment.py",     "--visualize"),
-    ("review_alignment","pipeline/review_alignment.py",        "--review-alignment"),
-    ("extract_entries", "pipeline/extract_entries.py",         "--extract-entries"),
-    ("geocode",         "pipeline/geo/geocode_entries.py",     "--geocode"),
-    ("map",             "pipeline/geo/map_entries.py",         "--map"),
-    ("explore",         "pipeline/explore_entries.py",         "--explore"),
-]
+# Stage order, flags, and declarative argv specs live in pipeline/stages.py —
+# the single registry shared with app.py. Stages whose argv needs real logic
+# (source validation, file discovery, multi-run expansion) are handled
+# explicitly in build_stage_args() below.
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +234,15 @@ def build_stage_args(
             return False
         return True
 
+    # Declarative stages: argv comes from the registry spec (pipeline/stages.py).
+    sd = STAGE_BY_NAME[stage]
+    if sd.declarative:
+        if not _require_images():
+            return None
+        return build_declarative_args(
+            sd, output_dir, parsed, ctx={"sections": _resolve_sections()}
+        )
+
     if stage == "loc_csv":
         if source.lower().endswith(".csv"):
             print(
@@ -325,38 +313,6 @@ def build_stage_args(
             a += ["--width", str(parsed.width)]
         return a
 
-    if stage == "surya_ocr":
-        if not _require_images():
-            return None
-        a = [str(output_dir)]
-        if getattr(parsed, "batch_size", None) is not None:
-            a += ["--batch-size", str(parsed.batch_size)]
-        return a
-
-    if stage == "gemini_ocr":
-        if not _require_images():
-            return None
-        model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
-        runs = []
-        for m in model_list:
-            a = [str(output_dir)]
-            if m:
-                a += ["--model", m]
-            if parsed.workers is not None:
-                a += ["--workers", str(parsed.workers)]
-            if getattr(parsed, "expand_dittos", False):
-                a += ["--expand-dittos"]
-            if getattr(parsed, "high_res", False):
-                a += ["--high-res"]
-            if getattr(parsed, "ocr_prompt", None):
-                a += ["--prompt-file", parsed.ocr_prompt]
-            if getattr(parsed, "flex", False):
-                a += ["--flex"]
-            if _resolve_sections():
-                a += ["--sections", _resolve_sections()]
-            runs.append(a)
-        return runs  # list[list[str]] — one run per model
-
     if stage == "compare_ocr":
         if not _require_images():
             return None
@@ -367,62 +323,6 @@ def build_stage_args(
             a += ["--skip-empty-rerun"]
         if getattr(parsed, "high_res", False):
             a += ["--high-res"]
-        return a
-
-    if stage == "align_ocr":
-        if not _require_images():
-            return None
-        model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
-        runs = []
-        for m in model_list:
-            a = [str(output_dir)]
-            if m:
-                a += ["--model", m]
-            if parsed.workers is not None:
-                a += ["--workers", str(parsed.workers)]
-            if getattr(parsed, "force", False):
-                a += ["--force"]
-            if getattr(parsed, "min_surya_confidence", None) is not None:
-                a += ["--min-surya-confidence", str(parsed.min_surya_confidence)]
-            runs.append(a)
-        return runs  # list[list[str]] — one run per model
-
-    if stage == "visualize":
-        if not _require_images():
-            return None
-        model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
-        runs = []
-        for m in model_list:
-            a = [str(output_dir)]
-            if m:
-                a += ["--model", m]
-            if getattr(parsed, "no_text", False):
-                a += ["--no-text"]
-            if getattr(parsed, "force", False):
-                a += ["--force"]
-            runs.append(a)
-        return runs  # list[list[str]] — one run per model
-
-    if stage == "surya_detect":
-        if not _require_images():
-            return None
-        a = [str(output_dir)]
-        if getattr(parsed, "force", False):
-            a += ["--force"]
-        return a
-
-    if stage == "detect_columns":
-        if not _require_images():
-            return None
-        a = [str(output_dir)]
-        if parsed.workers is not None:
-            a += ["--workers", str(parsed.workers)]
-        if parsed.threshold is not None:
-            a += ["--threshold", str(parsed.threshold)]
-        if getattr(parsed, "max_columns", None) is not None:
-            a += ["--max-columns", str(parsed.max_columns)]
-        if getattr(parsed, "force", False):
-            a += ["--force"]
         return a
 
     if stage == "detect_spreads":
@@ -525,75 +425,6 @@ def build_stage_args(
             )
             return None
         return runs  # list[list[str]] — one run per item with a selection
-
-    if stage == "review_alignment":
-        if not _require_images():
-            return None
-        a = [str(output_dir)]
-        m = (parsed.models[0] if parsed.models else None) or parsed.ocr_model
-        if m:
-            a += ["--model", m]
-        return a
-
-    if stage == "extract_entries":
-        if not _require_images():
-            return None
-        # Pass --aligned-model (OCR file slug) separately from --model (NER model).
-        # Omitting --model lets extract_entries use its own NER DEFAULT_MODEL.
-        ocr_models = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
-        runs = []
-        for ocr_m in ocr_models:
-            a = [str(output_dir)]
-            if ocr_m:
-                a += ["--aligned-model", ocr_m]
-            if getattr(parsed, "ner_prompt", None):
-                a += ["--prompt", parsed.ner_prompt]
-            if getattr(parsed, "force", False):
-                a += ["--force"]
-            if getattr(parsed, "flex", False):
-                a += ["--flex"]
-            if getattr(parsed, "mode", None):
-                a += ["--mode", parsed.mode]
-            if _resolve_sections():
-                a += ["--sections", _resolve_sections()]
-            runs.append(a)
-        return runs
-
-    if stage == "geocode":
-        if not _require_images():
-            return None
-        model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
-        runs = []
-        for m in model_list:
-            a = [str(output_dir)]
-            if m:
-                a += ["--model", m]
-            runs.append(a)
-        return runs
-
-    if stage == "map":
-        if not _require_images():
-            return None
-        model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
-        runs = []
-        for m in model_list:
-            a = [str(output_dir)]
-            if m:
-                a += ["--model", m]
-            runs.append(a)
-        return runs
-
-    if stage == "explore":
-        if not _require_images():
-            return None
-        model_list = parsed.models if parsed.models else ([parsed.ocr_model] if parsed.ocr_model else [None])
-        runs = []
-        for m in model_list:
-            a = [str(output_dir)]
-            if m:
-                a += ["--model", m]
-            runs.append(a)
-        return runs
 
     return None
 
@@ -1066,7 +897,7 @@ def main() -> None:
             args.workers = 8
 
     # Validate: at least one stage must be selected
-    enabled = {stage for stage, _, _ in PIPELINE if getattr(args, stage)}
+    enabled = {sd.name for sd in STAGES if getattr(args, sd.name)}
 
     # If --download is requested without an explicit *-csv stage, auto-detect
     # the right source CSV stage per target (based on URL type) at run time.
@@ -1098,7 +929,7 @@ def main() -> None:
         print("No targets found in source.", file=sys.stderr)
         sys.exit(1)
 
-    stage_labels = " → ".join(label for stage, _, label in PIPELINE if stage in enabled)
+    stage_labels = " → ".join(sd.flag for sd in STAGES if sd.name in enabled)
     dry_tag = "  *** DRY RUN — no scripts will be executed ***\n" if args.dry_run else ""
     print(
         f"\n{'═' * 62}\n"
@@ -1261,7 +1092,8 @@ def main() -> None:
         if not args.dry_run:
             write_state(output_dir, {"slug": slug, "source_url": target})
 
-        for stage, script, _ in PIPELINE:
+        for sd_stage in STAGES:
+            stage, script = sd_stage.name, sd_stage.script
             if stage not in target_enabled:
                 continue
 
@@ -1279,7 +1111,7 @@ def main() -> None:
                 all_runs = [stage_args_raw]
 
             all_ok = True
-            is_interactive = stage in ("select_pages", "review_alignment")
+            is_interactive = sd_stage.interactive
             for stage_args in all_runs:
                 ok = run_stage(script, stage_args, dry_run=args.dry_run, interactive=is_interactive)
                 if not ok:

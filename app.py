@@ -47,27 +47,38 @@ _OUTPUT_SLUG_RE = re.compile(r"\boutput/([^/\s]+)")
 # Stage definitions
 # ---------------------------------------------------------------------------
 
+# UI metadata only (label, group, optional-package gating). The main.py flag
+# and interactivity for pipeline stages come from the shared registry
+# (pipeline/stages.py) so they cannot drift from the orchestrator.
+# 'requires': optional Python package — if missing, stage button is disabled in the UI.
+# Stages with no registry entry (flag=None) are app-only and launch their
+# 'script' / 'collection_script' directly instead of going through main.py.
+from pipeline.stages import STAGE_BY_NAME as _REGISTRY  # noqa: E402
+
 STAGES = [
-    # (name, label, main.py flag, group, interactive, standalone script path, requires)
-    # 'requires': optional Python package — if missing, stage button is disabled in the UI.
-    {"name": "download",           "label": "Download",           "flag": "--download",          "group": "ingest",    "interactive": False, "script": None},
-    {"name": "select_pages",       "label": "Select pages",       "flag": "--select-pages",      "group": "calibrate", "interactive": True,  "script": None},
-    {"name": "generate_prompts",   "label": "Generate prompts",   "flag": "--generate-prompts",  "group": "calibrate", "interactive": False, "script": None},
-    {"name": "surya_ocr",          "label": "Surya OCR",          "flag": "--surya-ocr",         "group": "ocr",       "interactive": False, "script": None,
+    {"name": "download",           "label": "Download",           "group": "ingest",    "script": None},
+    {"name": "select_pages",       "label": "Select pages",       "group": "calibrate", "script": None},
+    {"name": "generate_prompts",   "label": "Generate prompts",   "group": "calibrate", "script": None},
+    {"name": "surya_ocr",          "label": "Surya OCR",          "group": "ocr",       "script": None,
      "requires": "surya", "install_hint": "uv sync --extra gpu"},
-    {"name": "gemini_ocr",         "label": "Gemini OCR",         "flag": "--gemini-ocr",        "group": "ocr",       "interactive": False, "script": None},
-    {"name": "align_ocr",          "label": "Align OCR",          "flag": "--align-ocr",         "group": "ocr",       "interactive": False, "script": None},
-    {"name": "review_alignment",   "label": "Review alignment",   "flag": "--review-alignment",  "group": "review",    "interactive": True,  "script": None},
-    {"name": "extract_entries",    "label": "Extract entries",    "flag": "--extract-entries",   "group": "extract",   "interactive": False, "script": None},
-    {"name": "explore",            "label": "Explore",            "flag": "--explore",           "group": "extract",   "interactive": False, "script": None},
-    {"name": "geocode",            "label": "Geocode",            "flag": "--geocode",           "group": "extract",   "interactive": False, "script": None,
+    {"name": "gemini_ocr",         "label": "Gemini OCR",         "group": "ocr",       "script": None},
+    {"name": "align_ocr",          "label": "Align OCR",          "group": "ocr",       "script": None},
+    {"name": "review_alignment",   "label": "Review alignment",   "group": "review",    "script": None},
+    {"name": "extract_entries",    "label": "Extract entries",    "group": "extract",   "script": None},
+    {"name": "explore",            "label": "Explore",            "group": "extract",   "script": None},
+    {"name": "geocode",            "label": "Geocode",            "group": "extract",   "script": None,
      "requires": "geopy", "install_hint": "uv sync --extra geo"},
-    {"name": "map",                "label": "Map",                "flag": "--map",               "group": "extract",   "interactive": False, "script": None},
-    {"name": "postprocess",        "label": "Postprocess",        "flag": None,                  "group": "extract",   "interactive": False, "collection_script": "pipeline/postprocess.py"},
-    {"name": "export_annotations", "label": "Export annotations", "flag": None,                  "group": "iiif",      "interactive": False, "script": "pipeline/iiif/export_annotations.py"},
-    {"name": "export_entry_boxes", "label": "Export entry boxes", "flag": None,                  "group": "iiif",      "interactive": False, "script": "pipeline/iiif/export_entry_boxes.py"},
-    {"name": "build_ranges",       "label": "Build ranges",       "flag": None,                  "group": "iiif",      "interactive": False, "script": "pipeline/iiif/build_ranges.py"},
+    {"name": "map",                "label": "Map",                "group": "extract",   "script": None},
+    {"name": "postprocess",        "label": "Postprocess",        "group": "extract",   "collection_script": "pipeline/postprocess.py"},
+    {"name": "export_annotations", "label": "Export annotations", "group": "iiif",      "script": "pipeline/iiif/export_annotations.py"},
+    {"name": "export_entry_boxes", "label": "Export entry boxes", "group": "iiif",      "script": "pipeline/iiif/export_entry_boxes.py"},
+    {"name": "build_ranges",       "label": "Build ranges",       "group": "iiif",      "script": "pipeline/iiif/build_ranges.py"},
 ]
+
+for _s in STAGES:
+    _reg = _REGISTRY.get(_s["name"])
+    _s["flag"] = _reg.flag if _reg else None
+    _s["interactive"] = _reg.interactive if _reg else False
 
 STAGE_BY_NAME = {s["name"]: s for s in STAGES}
 
@@ -480,7 +491,7 @@ _RUNS_LOCK = threading.Lock()
 
 # Interactive stages: Ctrl-C (SIGINT, exit 130) means the user is finished,
 # not that something went wrong.
-_INTERACTIVE_STAGES = {"select_pages", "review_alignment"}
+_INTERACTIVE_STAGES = {s["name"] for s in STAGES if s["interactive"]}
 
 
 def _reader_thread(run_id: int, item_id: int, stage_name: str) -> None:
