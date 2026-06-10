@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # ---------------------------------------------------------------------------
 
 _EXCLUDE = re.compile(
-    r"_(?:viz|surya|gemini|tesseract|chandra|aligned|entries|annotations)"
+    r"_(?:viz|surya|gemini|aligned|entries|annotations)"
 )
 _SPLIT = re.compile(r"_(left|right)$", re.IGNORECASE)
 

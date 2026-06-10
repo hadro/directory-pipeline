@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""Compare OCR output from multiple models, including Tesseract and Gemini.
+"""Compare OCR output from multiple Gemini models side-by-side.
 
-Accepts any mix of Gemini model names and the special token "tesseract" via
+Accepts any mix of Gemini model names and the special token "surya" via
 --models.  For Gemini models the script calls the API (or loads an existing
-.txt file).  For Tesseract it reads the {stem}_tesseract.txt file produced by
-run_ocr.py — no API call is made.
+.txt file).  For "surya" it reads the {stem}_surya.txt file — no API call.
 
 Outputs (placed alongside each image):
   {stem}_comparison.html     — side-by-side model comparison
   ocr_comparison_stats.csv   — summary stats (in the root images directory)
 
-Requires GEMINI_API_KEY only when Gemini models are listed.
-The system prompt (for Gemini API calls) is read from ocr_prompt.md.
+Requires GEMINI_API_KEY.
+The system prompt is read from ocr_prompt.md.
 
 Usage
 -----
     python compare_ocr.py output/greenbooks/item_uuid \\
-        --models gemini-2.0-flash tesseract
+        --models gemini-2.0-flash gemini-2.5-pro
 
     python compare_ocr.py output/greenbooks/item_uuid \\
-        --models gemini-2.0-flash gemini-2.5-pro tesseract --workers 6
+        --models gemini-2.0-flash gemini-2.5-pro surya --workers 6
 """
 
 import argparse
@@ -37,9 +36,8 @@ load_dotenv()
 
 _DEFAULT_PROMPT_FILE = Path(__file__).parent / "prompts" / "ocr_prompt.md"
 _HANDWRITING_KEYWORDS = ("handwrit", "manuscript", "cursive")
-TESSERACT = "tesseract"
 SURYA = "surya"
-_LOCAL_ENGINES = {TESSERACT, SURYA}  # tokens that read a local file, no API call
+_LOCAL_ENGINES = {SURYA}  # tokens that read a local file, no API call
 
 # Background colours for model panels in the HTML report
 PANEL_COLORS = ["#e8f4fd", "#e8fde8", "#fdf5e8", "#fde8f4", "#f5e8fd"]
@@ -57,8 +55,6 @@ def model_slug(model: str) -> str:
 
 
 def txt_path_for(image_path: Path, model: str) -> Path:
-    if model == TESSERACT:
-        return image_path.parent / f"{image_path.stem}_tesseract.txt"
     if model == SURYA:
         return image_path.parent / f"{image_path.stem}_surya.txt"
     return image_path.parent / f"{image_path.stem}_{model_slug(model)}.txt"
@@ -82,7 +78,7 @@ def get_text(
     """
     path = txt_path_for(image_path, model)
 
-    # ── Local engines (Tesseract, Surya): read existing file, no API call ───
+    # ── Local engines (Surya): read existing file, no API call ───────────────
     if model in _LOCAL_ENGINES:
         if not path.exists():
             return model, "missing", ""
@@ -214,7 +210,7 @@ def build_comparison_html(image_path: Path, results: dict[str, str]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Compare OCR output from Gemini and/or Tesseract on the same images.",
+        description="Compare OCR output from multiple Gemini models on the same images.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -229,7 +225,7 @@ def main() -> None:
         metavar="MODEL",
         help=(
             'Two or more model names to compare. '
-            'Use "surya" for Surya output or "tesseract" for Tesseract output.'
+            'Use "surya" to include Surya output alongside Gemini models.'
         ),
     )
     parser.add_argument(
@@ -378,7 +374,7 @@ def main() -> None:
                 else:
                     _log(f"[{completed:04d}/{total}] FAILED:  {label}")
 
-    # Smart re-run for Gemini empty files (not applicable to tesseract)
+    # Smart re-run for Gemini empty files (not applicable to local engines)
     rerun_tasks = []
     if not args.skip_empty_rerun:
         for img in images:
@@ -412,7 +408,7 @@ def main() -> None:
     if not args.quiet:
         print("\nWriting HTML comparisons…", file=sys.stderr)
     for img in images:
-        # Only include models that have some result (skip "missing" tesseract)
+        # Only include models that have some result
         present_models = [
             m for m in args.models
             if image_statuses[img].get(m) not in ("missing", "failed")

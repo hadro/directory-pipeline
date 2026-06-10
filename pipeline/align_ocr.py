@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
-"""Align Gemini OCR text with Surya (or Tesseract) bounding boxes using Needleman-Wunsch.
+"""Align Gemini OCR text with Surya bounding boxes using Needleman-Wunsch.
 
-Primary backend: Surya (line-level)
-------------------------------------
 For each image that has both {stem}_{model}.txt (Gemini) and
 {stem}_surya.json (Surya), produces {stem}_{model}_aligned.json with
 line-level bounding boxes from Surya and corrected text from Gemini.
-
-Legacy backend: Tesseract (word-level)
-----------------------------------------
-If no _surya.json is found but a _tesseract.hocr file exists, the aligner
-falls back to word-level Tesseract alignment for backward compatibility.
 
 Reading-order correction
 ------------------------
@@ -22,8 +15,8 @@ download_images.py in each item directory.
 
 Confidence tiers
 ----------------
-  line — matched with line-level bboxes from Surya (primary)
-  word — matched with word-level bboxes from Tesseract (legacy fallback)
+  line   — matched with line-level bboxes from Surya
+  manual — user-confirmed in --review-alignment
 
 Output JSON
 -----------
@@ -62,12 +55,12 @@ import sys
 import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import iiif_utils
+from pipeline.state import get_ocr_model
 
 DEFAULT_MODEL = "gemini-2.0-flash"
 
@@ -91,7 +84,6 @@ def _discover_ocr_slug(output_root: Path) -> str | None:
 
 _print_lock = threading.Lock()
 
-BBOX_RE = re.compile(r"bbox\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)")
 
 # ---------------------------------------------------------------------------
 # IIIF image-service helpers
@@ -167,14 +159,14 @@ _MERGE_RATIO_THRESHOLD = 1.8
 _MERGE_RATIO_MAX       = 5.0
 _MERGE_MIN_LINES       = 10
 
-# Anchor matching: commit Gemini↔Tesseract line pairs that are near-verbatim
+# Anchor matching: commit Gemini↔Surya line pairs that are near-verbatim
 # matches BEFORE running the global NW.  This prevents the aligner from
 # consuming heading words (city names, state names, category lines) on the
 # wrong Gemini lines — the failure mode where e.g. "CHERAW" entries mapped to
 # CHARLESTON bounding boxes because the global NW preferred nearby wrong words
-# over paying the gap cost to reach the real CHERAW Tesseract line.
+# over paying the gap cost to reach the real CHERAW Surya line.
 _ANCHOR_MIN_LEN    = 3     # minimum normalised chars to consider a line as an anchor
-_ANCHOR_MAX_SUFFIX = 6     # extra trailing chars allowed in prefix match (Tesseract noise)
+_ANCHOR_MAX_SUFFIX = 6     # extra trailing chars allowed in prefix match
 _ANCHOR_SIM_HIGH   = 0.92  # similarity threshold when prefix match doesn't apply
 
 
@@ -188,80 +180,7 @@ def model_slug(model: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# hOCR parsing
 # ---------------------------------------------------------------------------
-
-class _HocrParser(HTMLParser):
-    """Parse Tesseract hOCR output into page bbox and a flat list of line dicts."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.page_bbox: tuple[int, int, int, int] = (0, 0, 0, 0)
-        self.lines: list[dict] = []
-        self._span_depth = 0
-        self._line: dict | None = None
-        self._line_depth = -1
-        self._word: dict | None = None
-        self._word_depth = -1
-        self._word_text: list[str] = []
-
-    @staticmethod
-    def _parse_bbox(title: str) -> tuple[int, int, int, int] | None:
-        m = BBOX_RE.search(title)
-        return (
-            int(m.group(1)), int(m.group(2)),
-            int(m.group(3)), int(m.group(4)),
-        ) if m else None
-
-    def handle_starttag(self, tag: str, attrs: list) -> None:
-        d = dict(attrs)
-        cls = d.get("class", "")
-        title = d.get("title", "")
-        if tag == "span":
-            self._span_depth += 1
-        bbox = self._parse_bbox(title)
-        if "ocr_page" in cls and bbox:
-            self.page_bbox = bbox
-        elif any(c in cls for c in ("ocr_line", "ocr_caption", "ocr_textfloat", "ocr_header")) and bbox and tag == "span":
-            self._line = {"bbox": list(bbox), "words": []}
-            self._line_depth = self._span_depth
-        elif "ocrx_word" in cls and bbox and tag == "span":
-            self._word = {"bbox": list(bbox)}
-            self._word_depth = self._span_depth
-            self._word_text = []
-
-    def handle_data(self, data: str) -> None:
-        if self._word is not None:
-            self._word_text.append(data)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag != "span":
-            return
-        if self._word is not None and self._span_depth == self._word_depth:
-            text = "".join(self._word_text).strip()
-            if text and self._line is not None:
-                self._word["text"] = text
-                self._line["words"].append(self._word)
-            self._word = None
-            self._word_text = []
-        elif self._line is not None and self._span_depth == self._line_depth:
-            if self._line["words"]:
-                self.lines.append(self._line)
-            self._line = None
-        self._span_depth -= 1
-
-
-def parse_hocr(path: Path) -> tuple[tuple[int, int, int, int], list[dict]]:
-    """
-    Parse a Tesseract hOCR file.
-
-    Returns (page_bbox, lines) where each line is:
-        {'bbox': [x1, y1, x2, y2], 'words': [{'bbox': [...], 'text': str}, ...]}
-    """
-    parser = _HocrParser()
-    parser.feed(path.read_text(encoding="utf-8", errors="replace"))
-    return parser.page_bbox, parser.lines
-
 
 def parse_surya(
     path: Path, min_confidence: float = 0.35
@@ -346,14 +265,13 @@ def _expand_multiline_surya_lines(lines: list[dict]) -> list[dict]:
 
 # Minimum line bbox height in pixels — absolute floor used when there are too
 # few lines to compute a reliable median.  Lines below the effective threshold
-# are dot-leader artifacts or horizontal rules that Tesseract mis-OCRs as text;
-# letting them into the word pool creates false-positive matches with garbage
+# are dot-leader artifacts or horizontal rules detected as text;
 # coordinates.
 _MIN_LINE_HEIGHT = 15
 
 
 def filter_short_lines(lines: list[dict], min_height: int | None = None) -> list[dict]:
-    """Remove hOCR lines whose bounding box height is below an adaptive threshold.
+    """Remove lines whose bounding box height is below an adaptive threshold.
 
     When *min_height* is not provided, the threshold is computed as 35% of the
     median line height across all input lines, with *_MIN_LINE_HEIGHT* as a
@@ -397,24 +315,24 @@ _READING_ORDER_BAND = 50  # pixels — horizontal band height for y-band sort.
 # sorted top-to-bottom.  This keeps row pairs (y-difference ≤ ~35 px) in the
 # same band while placing centred section headings (which have ≥ 80 px of
 # whitespace above/below them) in their own band ahead of body content —
-# preventing them from being pushed to the end of the Tesseract word sequence
-# by a pure column-major sort.
+# preventing them from being pushed to the end of the line sequence by a pure
+# column-major sort.
 
 
 def sort_by_reading_order(lines: list[dict], page_width: int) -> list[dict]:
     """
-    Re-sort hOCR lines into correct reading order for multi-column pages.
+    Re-sort Surya lines into correct reading order for multi-column pages.
 
     Default (row-major y-band sort): lines are grouped into 50 px horizontal
     bands (sorted top-to-bottom), and within each band sorted left-column-first.
     This correctly places centred page headings (e.g. state names) before
     the body-text columns they head.
 
-    True two-column pages (column-major): when Tesseract lines cluster into
-    exactly two distinct columns and each column contains at least 20% of all
-    lines, Gemini reads the entire left column top-to-bottom before the entire
-    right column.  In that case we emit left-column lines (sorted by y) followed
-    by right-column lines (sorted by y) to match Gemini's reading order.
+    True two-column pages (column-major): when lines cluster into exactly two
+    distinct columns and each column contains at least 20% of all lines, Gemini
+    reads the entire left column top-to-bottom before the entire right column.
+    In that case we emit left-column lines (sorted by y) followed by right-column
+    lines (sorted by y) to match Gemini's reading order.
 
     Column breaks are detected in two stages:
 
@@ -757,7 +675,7 @@ def _find_anchors(
 
     # Lines whose normalised text appears more than once in the Gemini sequence
     # are ambiguous anchors: we cannot tell which Gemini occurrence corresponds
-    # to which Tesseract line, so we skip them entirely.
+    # to which Surya line, so we skip them entirely.
     from collections import Counter
     gem_counts = Counter(n for n in gem_norms if len(n) >= _ANCHOR_MIN_LEN)
 
@@ -779,8 +697,7 @@ def _find_anchors(
                 continue
             if len(tnorm) < _ANCHOR_MIN_LEN:
                 continue
-            # Strategy 1: prefix match — one string is a clean prefix of the other.
-            # Handles Tesseract appending garbage characters to a clean heading
+            # Strategy 1: prefix match — one string is a clean prefix of the other
             # (e.g. "SELLERSVILLE oun" → normalized "sellersvilleoun" vs "sellersville").
             # Add a tiny bonus so prefix matches always beat sim-only matches.
             short, long_ = (tnorm, gnorm) if len(tnorm) <= len(gnorm) else (gnorm, tnorm)
@@ -804,176 +721,6 @@ def _find_anchors(
 
     return anchors
 
-
-def _build_word_aligned_lines(
-    sorted_tess_lines: list[dict],
-    gemini_lines: list[str],
-    fragment_fn,
-) -> tuple[list[dict], list[str]]:
-    """
-    Align Gemini text to Tesseract bounding boxes using anchored
-    Needleman-Wunsch.
-
-    Approach
-    --------
-    0.  Find "anchor" pairs: Gemini lines that are near-verbatim matches to an
-        entire Tesseract line (city/state headings, category lines, etc.).
-        Committing those as fixed anchors prevents the NW from misassigning
-        heading words to wrong Gemini lines when the reading orders drift apart.
-    1.  Split both flat word/token sequences into segments at anchor points.
-    2.  Run an independent NW pass within each segment (and for each anchor
-        line itself, to handle minor OCR noise in the heading text).
-    3.  Group the matched Tesseract words back by their Gemini line index.
-    4.  Apply an intra-line y-consistency filter: discard words whose
-        y-center is more than _INTRA_LINE_Y_TOLERANCE px from the median
-        y-center of all matched words in that line.
-    5.  Lines with no remaining matches are added to unmatched_gemini.
-
-    Why this is better than a single global NW pass
-    ------------------------------------------------
-    A single global NW can map "CHERAW" (Gemini line 33) to whatever Tesseract
-    words happen to be cheapest at that position in the flat sequence, even
-    though the real "CHERAW" Tesseract line is 20 positions later.  Anchoring
-    "CHERAW" first splits the problem: the NW segment before the anchor handles
-    CHARLESTON entries, and the segment after handles the rest of CHERAW —
-    each is short enough that gap costs dominate correctly.
-
-    Returns (result_lines, unmatched_gemini).
-    """
-    if not sorted_tess_lines or not gemini_lines:
-        return [], list(gemini_lines)
-
-    # Adaptive intra-line y-tolerance: 2.5× median Surya/Tesseract line height,
-    # floored at 50 px.  Scales with scan resolution so a loose threshold on a
-    # 400 dpi scan doesn't collapse to a hairline on a 150 dpi scan.
-    _line_heights = [tl["bbox"][3] - tl["bbox"][1] for tl in sorted_tess_lines]
-    _median_line_h = statistics.median(_line_heights) if _line_heights else 40
-    intra_line_y_tol = max(50, round(_median_line_h * 2.5))
-
-    # Flat Tesseract word list + per-line boundary indices.
-    # tess_line_starts[i]   = first flat index of words for Tess line i.
-    # tess_line_starts[i+1] = first flat index of words for Tess line i+1
-    #                         (= exclusive end of line i).  Sentinel appended.
-    tess_words: list[dict] = []
-    tess_line_starts: list[int] = []
-    for tl in sorted_tess_lines:
-        tess_line_starts.append(len(tess_words))
-        tess_words.extend(tl["words"])
-    tess_line_starts.append(len(tess_words))  # sentinel
-
-    # Flat Gemini token list + per-line boundary indices (same sentinel pattern).
-    gemini_tokens: list[tuple[int, str]] = []
-    gem_line_starts: list[int] = []
-    for li, gline in enumerate(gemini_lines):
-        gem_line_starts.append(len(gemini_tokens))
-        gemini_tokens.extend((li, w) for w in gline.split())
-    gem_line_starts.append(len(gemini_tokens))  # sentinel
-
-    if not tess_words or not gemini_tokens:
-        return [], list(gemini_lines)
-
-    def _nw_slice(tw_start: int, tw_end: int, gt_start: int, gt_end: int):
-        """Run NW on flat-array slices; return pairs with original indices."""
-        if tw_start >= tw_end or gt_start >= gt_end:
-            return []
-        pairs = needleman_wunsch(
-            [w["text"] for w in tess_words[tw_start:tw_end]],
-            [tok[1] for tok in gemini_tokens[gt_start:gt_end]],
-            _text_sim,
-        )
-        return [
-            (ti + tw_start if ti is not None else None,
-             gi + gt_start if gi is not None else None)
-            for ti, gi in pairs
-        ]
-
-    # Anchored segmented NW
-    tess_line_texts = [" ".join(w["text"] for w in tl["words"]) for tl in sorted_tess_lines]
-    anchors = _find_anchors(tess_line_texts, gemini_lines)
-
-    all_pairs: list[tuple[int | None, int | None]] = []
-    prev_tl = 0  # next Tess line to process (line index, inclusive)
-    prev_gl = 0  # next Gem line to process (line index, inclusive)
-
-    for tess_li, gem_li in anchors:
-        # Segment before this anchor
-        all_pairs.extend(_nw_slice(
-            tess_line_starts[prev_tl], tess_line_starts[tess_li],
-            gem_line_starts[prev_gl], gem_line_starts[gem_li],
-        ))
-        # Anchor line itself (tiny NW to handle minor OCR noise in the heading)
-        all_pairs.extend(_nw_slice(
-            tess_line_starts[tess_li], tess_line_starts[tess_li + 1],
-            gem_line_starts[gem_li],  gem_line_starts[gem_li + 1],
-        ))
-        prev_tl = tess_li + 1
-        prev_gl = gem_li + 1
-
-    # Final segment after the last anchor
-    all_pairs.extend(_nw_slice(
-        tess_line_starts[prev_tl], len(tess_words),
-        gem_line_starts[prev_gl],  len(gemini_tokens),
-    ))
-
-    # Group matched Tesseract words by Gemini line index
-    line_matches: dict[int, list[tuple[str, list[int]]]] = {
-        li: [] for li in range(len(gemini_lines))
-    }
-    for ti, gi in all_pairs:
-        if ti is None or gi is None:
-            continue
-        li, gword = gemini_tokens[gi]
-        line_matches[li].append((gword, tess_words[ti]["bbox"]))
-
-    result_lines: list[dict] = []
-    unmatched_gemini: list[str] = []
-
-    for li, gline in enumerate(gemini_lines):
-        matches = line_matches[li]
-        if not matches:
-            unmatched_gemini.append(gline)
-            continue
-
-        # Intra-line y-consistency filter
-        if len(matches) > 1:
-            y_centers = [_y_center(bb) for _, bb in matches]
-            med_y = _median(y_centers)
-            matches = [
-                (gw, bb) for gw, bb in matches
-                if abs(_y_center(bb) - med_y) <= intra_line_y_tol
-            ]
-
-        if not matches:
-            unmatched_gemini.append(gline)
-            continue
-
-        bboxes = [bb for _, bb in matches]
-        line_bbox = _union_bbox(bboxes)
-
-        output_words = [
-            {
-                "bbox": bb,
-                "canvas_fragment": fragment_fn(bb),
-                "confidence": "word",
-                "text": gw,
-            }
-            for gw, bb in matches
-        ]
-
-        result_lines.append({
-            "bbox": line_bbox,
-            "canvas_fragment": fragment_fn(line_bbox),
-            "confidence": "word",
-            "gemini_text": gline,
-            "words": output_words,
-        })
-
-    return result_lines, unmatched_gemini
-
-
-# ---------------------------------------------------------------------------
-# Line-level alignment (Surya backend)
-# ---------------------------------------------------------------------------
 
 def _build_line_aligned_lines(
     sorted_surya_lines: list[dict],
@@ -1128,10 +875,7 @@ def align_image(
     min_surya_confidence: float = 0.35,
 ) -> tuple[str, bool]:
     """
-    Align Gemini OCR text and OCR bounding boxes for one image.
-
-    Prefers Surya (_surya.json, line-level) over Tesseract (_tesseract.hocr,
-    word-level) when both are present.
+    Align Gemini OCR text and Surya bounding boxes for one image.
 
     Returns (status, possible_column_merge) where status is one of
     'ok' / 'skipped' / 'missing' / 'failed' and possible_column_merge is True
@@ -1141,28 +885,23 @@ def align_image(
     stem = image_path.stem
     gemini_txt  = image_path.parent / f"{stem}_{slug}.txt"
     surya_path  = image_path.parent / f"{stem}_surya.json"
-    hocr_path   = image_path.parent / f"{stem}_tesseract.hocr"
     out_path    = image_path.parent / f"{stem}_{slug}_aligned.json"
 
     if out_path.exists() and not force:
         return "skipped", False
 
     use_surya = surya_path.exists()
-    use_hocr  = hocr_path.exists()
 
-    if not gemini_txt.exists() or (not use_surya and not use_hocr):
+    if not gemini_txt.exists() or not use_surya:
         return "missing", False
 
     try:
         # Parse OCR source ----------------------------------------------------
         surya_median_conf: "float | None" = None
-        if use_surya:
-            page_bbox, lines, surya_median_conf = parse_surya(
-                surya_path, min_confidence=min_surya_confidence
-            )
-            lines = _expand_multiline_surya_lines(lines)
-        else:
-            page_bbox, lines = parse_hocr(hocr_path)
+        page_bbox, lines, surya_median_conf = parse_surya(
+            surya_path, min_confidence=min_surya_confidence
+        )
+        lines = _expand_multiline_surya_lines(lines)
 
         img_w, img_h = page_bbox[2], page_bbox[3]
         page_w = img_w - page_bbox[0]
@@ -1282,14 +1021,9 @@ def align_image(
             )
 
         # NW alignment --------------------------------------------------------
-        if use_surya:
-            result_lines, unmatched_gemini = _build_line_aligned_lines(
-                lines, gemini_lines, fragment, gemini_ad_indices
-            )
-        else:
-            result_lines, unmatched_gemini = _build_word_aligned_lines(
-                lines, gemini_lines, fragment
-            )
+        result_lines, unmatched_gemini = _build_line_aligned_lines(
+            lines, gemini_lines, fragment, gemini_ad_indices
+        )
 
         needs_review = (
             surya_median_conf is not None
@@ -1335,10 +1069,7 @@ def align_image(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=(
-            "Align Gemini OCR text with Surya line bboxes (primary) "
-            "or Tesseract hOCR bboxes (legacy fallback)."
-        ),
+        description="Align Gemini OCR text with Surya line bboxes.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -1391,7 +1122,11 @@ def main() -> None:
         sys.exit(1)
 
     if args.model is None:
-        args.model = _discover_ocr_slug(output_root) or DEFAULT_MODEL
+        args.model = (
+            get_ocr_model(output_root)
+            or _discover_ocr_slug(output_root)
+            or DEFAULT_MODEL
+        )
         if not getattr(args, "quiet", False):
             print(f"  Auto-detected OCR model: {args.model}", file=sys.stderr)
 
@@ -1459,7 +1194,7 @@ def main() -> None:
                     _log(f"[{completed:04d}/{total}] Done:    {out_name}{suffix}")
                 elif status == "missing":
                     _log(
-                        f"[{completed:04d}/{total}] Missing: Surya JSON (or hOCR) "
+                        f"[{completed:04d}/{total}] Missing: Surya JSON "
                         f"and/or Gemini txt for {image_path.name}"
                     )
                 else:
@@ -1469,7 +1204,7 @@ def main() -> None:
         parts = [f"{counts['ok']} aligned", f"{counts['skipped']} skipped"]
         if counts["missing"]:
             parts.append(
-                f"{counts['missing']} missing (need both hOCR and Gemini txt)"
+                f"{counts['missing']} missing (need both Surya JSON and Gemini txt)"
             )
         if counts["failed"]:
             parts.append(f"{counts['failed']} failed")

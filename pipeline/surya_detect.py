@@ -2,8 +2,8 @@
 """Detect column layout using Surya's neural text-line detector.
 
 Drop-in replacement for detect_columns.py: produces the same
-columns_report.csv schema so run_ocr.py (Tesseract) and subsequent
-pipeline stages work without modification.
+columns_report.csv schema so subsequent pipeline stages work without
+modification.
 
 Why Surya over pixel projection?
   detect_columns.py uses a dark-pixel projection profile to find gutters.
@@ -53,8 +53,8 @@ REPORT_FILENAME = "columns_report.csv"
 FIELDNAMES = [
     "image", "num_columns", "confidence", "recommended_psm", "gutter_x_positions",
 ]
-PSM_SINGLE_COLUMN = 4   # Tesseract: assume single column of uniform text
-PSM_MULTI_COLUMN  = 1   # Tesseract: automatic page segmentation with OSD
+PSM_SINGLE_COLUMN = 4   # single column
+PSM_MULTI_COLUMN  = 1   # multi-column with OSD
 MIN_OVERLAP_RATIO = 0.3
 # Minimum gap between left- and right-column x1 clusters (as a fraction of
 # page width) needed to declare a 2-column layout.  8 % ≈ 150 px at 1920 px.
@@ -161,13 +161,13 @@ def _select_images(output_root: Path) -> list[Path]:
     Return the images to process.
 
     If a spread has already been split (_left/_right files exist), use those
-    and skip the original — same logic as detect_columns.py and run_ocr.py.
+    and skip the original — same logic as detect_columns.py.
 
     Pipeline-generated derivative images are always excluded, identified by
-    known stem suffixes (_viz, _surya_det, _chandra_layout).
+    known stem suffixes (_viz, _surya_det).
     """
     # Stems ending with any of these are pipeline outputs, not source scans.
-    _SKIP_SUFFIXES = ("_viz", "_surya_det", "_chandra_layout")
+    _SKIP_SUFFIXES = ("_viz", "_surya_det")
 
     all_jpgs = sorted(output_root.rglob("*.jpg"))
     images: list[Path] = []

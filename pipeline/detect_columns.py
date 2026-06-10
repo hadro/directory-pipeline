@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detect column layout per image to guide Tesseract PSM selection.
+"""Detect column layout per image using pixel projection profiles.
 
 Analyzes each image using a vertical pixel projection profile: dark-pixel
 density is averaged per column (via a fast PIL single-row resize), smoothed,
@@ -62,10 +62,6 @@ REPORT_FILENAME = "columns_report.csv"
 FIELDNAMES = [
     "image", "num_columns", "confidence", "recommended_psm", "gutter_x_positions",
 ]
-
-# Tesseract PSM values assigned by detected column count
-PSM_SINGLE_COLUMN = 4   # assume a single column of uniform text
-PSM_MULTI_COLUMN  = 1   # automatic page segmentation with orientation detection
 
 
 def _log(msg: str) -> None:
@@ -303,7 +299,7 @@ def analyze_image(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Detect column layout per image to guide Tesseract PSM selection.",
+        description="Detect column layout per image using pixel projection profiles.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

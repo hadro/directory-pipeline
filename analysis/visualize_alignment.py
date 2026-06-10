@@ -4,9 +4,8 @@
 For each *_aligned.json file found, opens the corresponding image, draws
 color-coded bounding boxes, and saves a *_viz.jpg next to it:
 
-  green  — word confidence: per-word boxes, Tesseract aligned to Gemini
-  orange — line confidence: one box for the whole line (word alignment weak)
-  red    — unmatched Gemini lines (no Tesseract coordinates, listed in margin)
+  orange — line confidence: one box for the whole Surya line
+  red    — unmatched Gemini lines (no Surya coordinates, listed in margin)
 
 Usage
 -----
