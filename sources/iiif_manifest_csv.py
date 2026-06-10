@@ -7,7 +7,7 @@ Handles:
       → one row per child manifest (no sub-fetching required; labels are
         read from the collection manifest itself)
 
-Output schema (same as nypl_collection_csv.py / loc_collection_csv.py):
+Output schema (same as loc_collection_csv.py / ia_collection_csv.py):
     item_id, item_title, iiif_manifest_url, microform
 
 Usage

@@ -2,8 +2,8 @@
 """Internet Archive Digital Collections → CSV extractor.
 
 For a given Internet Archive item or collection URL, outputs a CSV that is
-fully compatible with download_images.py (same column schema as the NYPL
-and LoC equivalents).
+fully compatible with download_images.py (same column schema as the
+loc_collection_csv.py equivalent).
 
 No API token or authentication is required for publicly accessible items.
 
@@ -19,7 +19,7 @@ The IIIF manifest URL is derived from the item identifier:
 This CSV feeds directly into the existing download → OCR → align pipeline:
     python ia_collection_csv.py https://archive.org/details/durstoldyorklibrary \\
         --output durstoldyorklibrary.csv
-    python main.py collections.txt --download --tesseract --gemini-ocr …
+    python main.py collections.txt --download --gemini-ocr …
 
 Usage
 -----

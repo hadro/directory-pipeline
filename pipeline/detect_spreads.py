@@ -54,7 +54,7 @@ MICROFORM_THRESHOLD_FACTOR = 0.6  # multiply threshold by this for known microfo
 
 def load_microform_lookup(csv_path: Path) -> dict[str, bool]:
     """
-    Read a collection CSV (produced by nypl_collection_csv.py or loc_collection_csv.py)
+    Read a collection CSV (produced by loc_collection_csv.py or ia_collection_csv.py)
     and return a dict mapping item_id → microform (bool).
 
     Rows without an 'item_id' or 'microform' column are skipped silently.
@@ -303,7 +303,7 @@ def main() -> None:
         default=None,
         metavar="CSV",
         help=(
-            "Optional collection CSV (from nypl_collection_csv.py). "
+            "Optional collection CSV (from loc_collection_csv.py or ia_collection_csv.py). "
             "When provided, items flagged microform=True use a lower gutter "
             f"threshold ({MICROFORM_THRESHOLD_FACTOR}× the normal value) so "
             "faint gutters still register as double-page spreads."

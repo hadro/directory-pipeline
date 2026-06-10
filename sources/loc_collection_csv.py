@@ -2,8 +2,8 @@
 """Library of Congress Digital Collections → CSV extractor.
 
 For a given LoC collection URL or single item URL, outputs a CSV that is
-fully compatible with download_images.py (same column schema as the NYPL
-equivalent, nypl_collection_csv.py).
+fully compatible with download_images.py (same column schema as the
+ia_collection_csv.py equivalent).
 
 No API token or authentication is required.  The LoC JSON API is publicly
 accessible for all digitized items.
@@ -18,7 +18,7 @@ The IIIF manifest URL is derived predictably from the item URL:
 This CSV feeds directly into the existing download → OCR → align pipeline:
     python loc_collection_csv.py https://www.loc.gov/collections/civil-war-maps/ \\
         --output civil-war-maps.csv
-    python main.py collections.txt --download --tesseract --gemini-ocr …
+    python main.py collections.txt --download --gemini-ocr …
         (or point --download directly at the generated CSV)
 
 Usage

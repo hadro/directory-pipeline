@@ -38,6 +38,18 @@ uv.lock
 # Generated docs / exports
 directory-pipeline-*
 
+# Runtime logs
+logs/
+
+# Generated output artifacts
+analysis/model_eval_report.md
+
+# Ephemeral session notes
+docs/session-handoff-*.md
+
+# Local ad-hoc screenshots (curated ones under docs/screenshots/ are tracked)
+docs/screenshots/Screenshot*
+
 # Research
 research/*
 

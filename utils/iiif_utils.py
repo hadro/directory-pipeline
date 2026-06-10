@@ -161,7 +161,7 @@ def image_url(service_id: str, width: int, iiif_version: int = 2) -> str:
     Works for both Image API v2 and v3.
 
     Pass width=0 to request native/maximum resolution without upscaling.
-    For v2 servers (LOC, NYPL) 'full' is the native-size keyword; 'max' returns HTTP 400.
+    For v2 servers (LOC and others) 'full' is the native-size keyword; 'max' returns HTTP 400.
     For v3 servers (Internet Archive) 'max' is required; 'full' returns HTTP 400.
     """
     if width == 0:
@@ -181,15 +181,14 @@ def normalize_for_viewer(
     *,
     session=None,
 ) -> tuple[dict, dict[str, str]]:
-    """Normalize a raw NYPL (or similar) IIIF Presentation v3 manifest so that
-    strict viewers (e.g. Clover IIIF) can render it.
+    """Normalize a IIIF Presentation v3 manifest for strict viewers (e.g. Clover IIIF).
 
     Problems fixed
     --------------
     * ``manifest["id"]`` — replaced with *hosted_manifest_url* (the URL at which
-      this file will actually be served; many NYPL manifests point to the
-      originating API endpoint instead).
-    * Canvas IDs — NYPL manifests use image-API URLs as canvas IDs, making
+      this file will actually be served; some manifests point to the originating
+      API endpoint instead).
+    * Canvas IDs — some institutions use image-API URLs as canvas IDs, making
       them indistinguishable from the image body.  Replaced with proper
       ``{hosted_manifest_url}/canvas/{n}`` URIs.
     * AnnotationPage / Annotation IDs within the manifest — rekeyed to match
@@ -199,10 +198,10 @@ def normalize_for_viewer(
     * Image body ``width`` / ``height`` / ``format`` — populated from the IIIF
       Image API ``info.json`` endpoint when missing.
     * Canvas ``width`` / ``height`` — updated to match image dimensions when
-      they differ (NYPL manifests often declare 2560×2560 for all canvases).
+      they differ (some institutions declare placeholder dimensions for all canvases).
     * ``structures`` canvas references — updated to the new canvas IDs.
-    * Top-level ``services`` — removed (NYPL search services are dead and some
-      viewers block on fetching them).
+    * Top-level ``services`` — removed (stale search services that some viewers
+      block on fetching).
 
     Parameters
     ----------
@@ -343,7 +342,6 @@ def manifest_item_id(manifest_url: str) -> str:
     directory or file name.
 
         'https://www.loc.gov/item/01015253/manifest.json' → '01015253'
-        'https://api-collections.nypl.org/manifests/abc-def-123' → 'abc-def-123'
         'https://dcmny.org/do/dedab5e6-.../metadata/iiifmanifest/default.jsonld'
             → 'dedab5e6-...'
     """

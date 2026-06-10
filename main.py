@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Digital Collections pipeline orchestrator (NYPL, Library of Congress, Internet Archive).
+"""Digital Collections pipeline orchestrator (Library of Congress, Internet Archive, IIIF).
 
-Reads a list of collection URLs/UUIDs from a text file (or a single URL/UUID
-passed directly) and runs the requested pipeline stages in order for each.
+Reads a list of collection URLs from a text file (or a single URL passed
+directly) and runs the requested pipeline stages in order for each.
 A human-readable slug is derived automatically and used as the base name for
 every output file and directory, so all stages stay in sync:
 
@@ -12,7 +12,6 @@ every output file and directory, so all stages stay in sync:
 Stages run in this fixed order regardless of the order flags appear on the
 command line:
 
-  --nypl-csv        sources/nypl_collection_csv.py  → output/{slug}/{slug}.csv  (NYPL only)
   --loc-csv         sources/loc_collection_csv.py   → output/{slug}/{slug}.csv  (LoC only)
   --ia-csv          sources/ia_collection_csv.py    → output/{slug}/{slug}.csv  (Internet Archive only)
   --iiif-csv        sources/iiif_manifest_csv.py    → output/{slug}/{slug}.csv  (any IIIF manifest or collection)
@@ -21,11 +20,10 @@ command line:
   --split-spreads   pipeline/split_spreads.py         (split spreads into left/right pages)
   --surya-detect    pipeline/surya_detect.py          (Surya neural column detection → columns_report.csv)
   --detect-columns  pipeline/detect_columns.py        (pixel-projection column detection → columns_report.csv)
-  --tesseract       old/run_ocr.py                    (Tesseract OCR — legacy; use --surya-ocr instead)
   --surya-ocr       pipeline/run_surya_ocr.py         (Surya OCR → *_surya.json line bboxes + *_surya.txt)
   --gemini-ocr      pipeline/run_gemini_ocr.py        (Gemini OCR)
   --compare-ocr     analysis/compare_ocr.py           (side-by-side model comparison; accepts "surya" token)
-  --align-ocr       pipeline/align_ocr.py             (NW alignment of Gemini text to Surya/Tesseract bboxes)
+  --align-ocr       pipeline/align_ocr.py             (NW alignment of Gemini text to Surya bboxes)
   --visualize       analysis/visualize_alignment.py   (draw alignment boxes on images → *_viz.jpg)
   --review-alignment pipeline/review_alignment.py     (interactive UI to correct unmatched entries → *_aligned.json)
   --extract-entries pipeline/extract_entries.py        (extract structured entries from aligned OCR)
@@ -46,17 +44,9 @@ Key model flags:
 
 Usage
 -----
-    # NYPL collection or item:
-    python main.py collections.txt --nypl-csv --download --gemini-ocr
-    python main.py https://digitalcollections.nypl.org/collections/<uuid> \\
-        --nypl-csv --download --gemini-ocr
-
     # Library of Congress collection or item:
     python main.py https://www.loc.gov/collections/civil-war-maps/ \\
         --loc-csv --download --gemini-ocr
-    python main.py https://www.loc.gov/item/01015253/ \\
-        --loc-csv --download --tesseract
-
     # Internet Archive item or collection:
     python main.py https://archive.org/details/ldpd_11290437_000/ \\
         --ia-csv --download --gemini-ocr
@@ -73,21 +63,17 @@ Usage
     python main.py output/my_items/my_items.csv --download --gemini-ocr
 
     # Multiple models / parallel workers:
-    python main.py collections.txt --nypl-csv --download \\
+    python main.py collections.txt --download \\
         --compare-ocr --models gemini-2.0-flash gemini-1.5-flash \\
         --workers 8
 """
 
 import argparse
 import json
-import os
-import re
 import subprocess
 import sys
-import time
 from pathlib import Path
 
-import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -96,21 +82,15 @@ SCRIPT_DIR = Path(__file__).parent
 
 sys.path.insert(0, str(SCRIPT_DIR))
 from utils.iiif_utils import manifest_item_id as _iiif_manifest_item_id
-from sources.nypl_utils import fetch_title, make_slug
 from sources.loc_utils import _resource_url_to_item_url, loc_slug
 from sources.ia_utils import _extract_ia_identifier, _fetch_ia_info, _make_ia_slug
-
-UUID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-    re.IGNORECASE,
-)
+from pipeline.state import write_state, record_stage
 
 # ---------------------------------------------------------------------------
 # Pipeline definition — stages always execute in this order.
 # Each entry is (dest_attr_name, script_filename, human_label).
 # ---------------------------------------------------------------------------
 PIPELINE: list[tuple[str, str, str]] = [
-    ("nypl_csv",        "sources/nypl_collection_csv.py",      "--nypl-csv"),
     ("loc_csv",         "sources/loc_collection_csv.py",       "--loc-csv"),
     ("ia_csv",          "sources/ia_collection_csv.py",        "--ia-csv"),
     ("iiif_csv",        "sources/iiif_manifest_csv.py",        "--iiif-csv"),
@@ -121,10 +101,8 @@ PIPELINE: list[tuple[str, str, str]] = [
     ("generate_prompts","pipeline/generate_prompt.py",     "--generate-prompts"),
     ("surya_detect",    "pipeline/surya_detect.py",            "--surya-detect"),
     ("detect_columns",  "pipeline/detect_columns.py",          "--detect-columns"),
-    ("tesseract",       "old/run_ocr.py",                      "--tesseract"),
     ("surya_ocr",       "pipeline/run_surya_ocr.py",           "--surya-ocr"),
     ("gemini_ocr",      "pipeline/run_gemini_ocr.py",          "--gemini-ocr"),
-    ("chandra_ocr",     "pipeline/run_chandra_ocr.py",         "--chandra-ocr"),
     ("compare_ocr",     "analysis/compare_ocr.py",             "--compare-ocr"),
     ("align_ocr",       "pipeline/align_ocr.py",               "--align-ocr"),
     ("visualize",       "analysis/visualize_alignment.py",     "--visualize"),
@@ -159,15 +137,6 @@ def load_targets(source: str) -> list[str]:
     return [source]
 
 
-def extract_uuid(text: str) -> str | None:
-    m = UUID_RE.search(text)
-    return m.group(0).lower() if m else None
-
-
-def is_item_url(text: str) -> bool:
-    return "/items/" in text
-
-
 def is_loc_url(text: str) -> bool:
     return "loc.gov" in text
 
@@ -177,15 +146,11 @@ def is_ia_url(text: str) -> bool:
 
 
 def _is_generic_iiif_url(text: str) -> bool:
-    """True for any HTTP(S) URL that is not a NYPL, LoC, or IA URL.
-
-    Used to detect arbitrary IIIF manifest URLs from external institutions.
-    """
+    """True for any HTTP(S) URL that is not a LoC or IA URL."""
     return (
         text.startswith("http")
         and not is_loc_url(text)
         and not is_ia_url(text)
-        and "nypl.org" not in text
     )
 
 
@@ -286,25 +251,6 @@ def build_stage_args(
             return False
         return True
 
-    if stage == "nypl_csv":
-        if source.lower().endswith(".csv"):
-            print(
-                "    Skipping: --nypl-csv is not applicable when source is a CSV file.",
-                file=sys.stderr,
-            )
-            return None
-        if is_loc_url(source):
-            print(
-                "    Skipping: --nypl-csv is not applicable for loc.gov URLs. "
-                "Use --loc-csv instead.",
-                file=sys.stderr,
-            )
-            return None
-        a = [source, "--output", f"{slug}.csv"]
-        if parsed.token:
-            a += ["--token", parsed.token]
-        return a
-
     if stage == "loc_csv":
         if source.lower().endswith(".csv"):
             print(
@@ -314,8 +260,7 @@ def build_stage_args(
             return None
         if not is_loc_url(source):
             print(
-                "    Skipping: --loc-csv requires a loc.gov URL. "
-                "Use --nypl-csv for NYPL sources.",
+                "    Skipping: --loc-csv requires a loc.gov URL.",
                 file=sys.stderr,
             )
             return None
@@ -331,7 +276,7 @@ def build_stage_args(
         if not is_ia_url(source):
             print(
                 "    Skipping: --ia-csv requires an archive.org URL. "
-                "Use --nypl-csv or --loc-csv for other sources.",
+                "Use --loc-csv for loc.gov sources.",
                 file=sys.stderr,
             )
             return None
@@ -347,7 +292,7 @@ def build_stage_args(
         if not _is_generic_iiif_url(source):
             print(
                 "    Skipping: --iiif-csv requires a generic IIIF manifest URL "
-                "(not NYPL, LoC, or IA). Use --nypl-csv, --loc-csv, or --ia-csv instead.",
+                "(not LoC or IA). Use --loc-csv or --ia-csv for those sources.",
                 file=sys.stderr,
             )
             return None
@@ -367,29 +312,13 @@ def build_stage_args(
         if not dry_run and not actual_csv.exists():
             print(
                 f"    Skipping: collection CSV not found ({actual_csv}). "
-                "Run --iiif-csv, --nypl-csv, or --loc-csv first.",
+                "Run --iiif-csv, --loc-csv, or --ia-csv first.",
                 file=sys.stderr,
             )
             return None
         a = [str(actual_csv), "--resume"]
         if parsed.width is not None:
             a += ["--width", str(parsed.width)]
-        return a
-
-    if stage == "tesseract":
-        if not _require_images():
-            return None
-        a = [str(output_dir)]
-        if parsed.workers is not None:
-            a += ["--workers", str(parsed.workers)]
-        if getattr(parsed, "psm", None) is not None:
-            a += ["--psm", str(parsed.psm)]
-        if getattr(parsed, "oem", None) is not None:
-            a += ["--oem", str(parsed.oem)]
-        if getattr(parsed, "dpi", None) is not None:
-            a += ["--dpi", str(parsed.dpi)]
-        if getattr(parsed, "use_dict", False):
-            a += ["--dict"]
         return a
 
     if stage == "surya_ocr":
@@ -423,16 +352,6 @@ def build_stage_args(
                 a += ["--sections", _resolve_sections()]
             runs.append(a)
         return runs  # list[list[str]] — one run per model
-
-    if stage == "chandra_ocr":
-        if not _require_images():
-            return None
-        a = [str(output_dir)]
-        if getattr(parsed, "chandra_method", None):
-            a += ["--method", parsed.chandra_method]
-        if getattr(parsed, "batch_size", None) is not None:
-            a += ["--batch-size", str(parsed.batch_size)]
-        return a
 
     if stage == "compare_ocr":
         if not _require_images():
@@ -506,12 +425,7 @@ def build_stage_args(
         if not _require_images():
             return None
         a = [str(output_dir)]
-        # Pass --csv for microform prior: in dry-run, use it if --nypl-csv is
-        # also selected (it would be created); in live runs, only if it exists.
-        if dry_run:
-            if getattr(parsed, "nypl_csv", False):
-                a += ["--csv", str(csv_path)]
-        elif csv_path.exists():
+        if csv_path.exists():
             a += ["--csv", str(csv_path)]
         if parsed.threshold is not None:
             a += ["--threshold", str(parsed.threshold)]
@@ -686,7 +600,7 @@ def build_stage_args(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run digital collections pipeline stages (NYPL and Library of Congress).",
+        description="Run digital collections pipeline stages (Library of Congress, Internet Archive, IIIF).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -694,8 +608,8 @@ def main() -> None:
         "source",
         help=(
             "A text file of URLs/UUIDs (one per line), "
-            "a single NYPL or Library of Congress URL or UUID, "
-            "or a pre-built collection CSV file."
+            "a single LoC or Internet Archive URL, a generic IIIF manifest URL, "
+            "an existing output directory, or a pre-built collection CSV file."
         ),
     )
 
@@ -703,12 +617,6 @@ def main() -> None:
     stages = parser.add_argument_group(
         "pipeline stages",
         "Select one or more stages to run. They always execute in the order listed.",
-    )
-    stages.add_argument(
-        "--nypl-csv",
-        dest="nypl_csv",
-        action="store_true",
-        help="Export NYPL item metadata to output/{slug}/{slug}.csv (NYPL URLs only)",
     )
     stages.add_argument(
         "--loc-csv",
@@ -730,7 +638,7 @@ def main() -> None:
             "Export metadata from any IIIF manifest to output/{slug}/{slug}.csv. "
             "Accepts any public IIIF Presentation v2 or v3 manifest URL. "
             "For IIIF Collection manifests, writes one row per child manifest. "
-            "Use for institutions not supported by --nypl-csv, --loc-csv, or --ia-csv."
+            "Use for institutions not supported by --loc-csv or --ia-csv."
         ),
     )
     stages.add_argument(
@@ -745,21 +653,15 @@ def main() -> None:
         action="store_true",
         help=(
             "Detect column layout using Surya neural text-line detection "
-            "(alternative to --detect-columns; produces the same columns_report.csv "
-            "so --tesseract works unchanged; requires surya-ocr)"
+            "(alternative to --detect-columns; produces the same columns_report.csv; "
+            "requires surya-ocr)"
         ),
     )
     stages.add_argument(
         "--detect-columns",
         dest="detect_columns",
         action="store_true",
-        help="Detect per-image column layout and produce columns_report.csv (used by --tesseract)",
-    )
-    stages.add_argument(
-        "--tesseract",
-        dest="tesseract",
-        action="store_true",
-        help="Run Tesseract OCR on downloaded images (legacy; prefer --surya-ocr)",
+        help="Detect per-image column layout and produce columns_report.csv",
     )
     stages.add_argument(
         "--surya-ocr",
@@ -777,15 +679,6 @@ def main() -> None:
         help="Run Gemini OCR on downloaded images (see --ocr-model)",
     )
     stages.add_argument(
-        "--chandra-ocr",
-        dest="chandra_ocr",
-        action="store_true",
-        help=(
-            "Run Chandra OCR on downloaded images (local 5B model, no API key needed). "
-            "Requires: pip install chandra-ocr[hf]. Use --chandra-method to select backend."
-        ),
-    )
-    stages.add_argument(
         "--compare-ocr",
         dest="compare_ocr",
         action="store_true",
@@ -795,10 +688,7 @@ def main() -> None:
         "--align-ocr",
         dest="align_ocr",
         action="store_true",
-        help=(
-            "Align Gemini text to OCR bboxes (Surya line-level preferred; "
-            "Tesseract word-level as legacy fallback). See --ocr-model / --models."
-        ),
+        help="Align Gemini text to Surya bboxes. See --ocr-model / --models.",
     )
     stages.add_argument(
         "--visualize",
@@ -904,19 +794,11 @@ def main() -> None:
             "and expects --generate-prompts to have been run first for new collection types. "
             "Defaults --batch-size to 4 and --workers to 8 unless already set. "
             "Add --ocr-model to override the Gemini model (each stage uses its own default otherwise). "
-            "Combine with --nypl-csv / --loc-csv / --ia-csv to also export metadata. "
+            "Combine with --loc-csv / --ia-csv to also export metadata. "
             "For microfilm or bound-volume scans that contain double-page spreads, run "
             "--detect-spreads --split-spreads before --guided so pages are correctly "
             "separated before OCR."
         ),
-    )
-
-    # --- Authentication ---
-    auth = parser.add_argument_group("authentication")
-    auth.add_argument(
-        "--token",
-        default=os.environ.get("NYPL_API_TOKEN", ""),
-        help="NYPL API token (or set NYPL_API_TOKEN env var)",
     )
 
     # --- Pass-through options ---
@@ -1017,15 +899,7 @@ def main() -> None:
         default=None,
         dest="batch_size",
         metavar="N",
-        help="Images per Surya/Chandra inference batch (default: 4 for Surya, 1 for Chandra; reduce if OOM)",
-    )
-    opts.add_argument(
-        "--chandra-method",
-        dest="chandra_method",
-        choices=["hf", "vllm"],
-        default="hf",
-        metavar="METHOD",
-        help="Chandra inference backend for --chandra-ocr: 'hf' (HuggingFace, default) or 'vllm'",
+        help="Images per Surya inference batch (default: 4; reduce if OOM)",
     )
     opts.add_argument(
         "--width",
@@ -1050,45 +924,6 @@ def main() -> None:
         help=(
             "Maximum columns to detect for --detect-columns (default: 2). "
             "Increase for genuine 3+ column layouts."
-        ),
-    )
-    opts.add_argument(
-        "--psm",
-        type=int,
-        default=None,
-        metavar="N",
-        help=(
-            "Tesseract page segmentation mode for --tesseract "
-            "(default: Tesseract built-in, 3 = auto). "
-            "Recommended for multi-column pages: 1 (auto with OSD)."
-        ),
-    )
-    opts.add_argument(
-        "--oem",
-        type=int,
-        default=None,
-        metavar="N",
-        help=(
-            "Tesseract OCR engine mode for --tesseract "
-            "(0=legacy, 1=LSTM, 2=legacy+LSTM). "
-            "Try 2 for degraded historical scans."
-        ),
-    )
-    opts.add_argument(
-        "--dpi",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Image DPI hint for --tesseract (300 or 400 typical for archival scans).",
-    )
-    opts.add_argument(
-        "--dict",
-        dest="use_dict",
-        action="store_true",
-        help=(
-            "Re-enable Tesseract dictionary correction for --tesseract "
-            "(disabled by default to preserve proper nouns and addresses "
-            "for NW alignment with Gemini text)."
         ),
     )
     opts.add_argument(
@@ -1233,22 +1068,15 @@ def main() -> None:
     # the right source CSV stage per target (based on URL type) at run time.
     _auto_infer_csv = (
         "download" in enabled
-        and not enabled & {"nypl_csv", "loc_csv", "ia_csv"}
+        and not enabled & {"loc_csv", "ia_csv"}
     )
 
     if not enabled and not getattr(args, "retry_merged", False):
         parser.error(
             "No pipeline stages selected. "
-            "Use --nypl-csv, --loc-csv, --ia-csv, --iiif-csv, --download, --surya-ocr, "
-            "--gemini-ocr, --align-ocr, --review-alignment, --extract-entries, --geocode, "
-            "--map, etc."
-        )
-
-    # Validate: stages that need a token (not enforced in dry-run)
-    if "nypl_csv" in enabled and not args.token and not args.dry_run:
-        parser.error(
-            "--nypl-csv requires an API token. "
-            "Use --token or set NYPL_API_TOKEN."
+            "Use --loc-csv, --ia-csv, --iiif-csv, --download, --surya-ocr, "
+            "--gemini-ocr, --align-ocr, --review-alignment, --extract-entries, "
+            "--geocode, --map, etc."
         )
 
     # Validate: --compare-ocr needs models
@@ -1265,12 +1093,6 @@ def main() -> None:
     if not targets:
         print("No targets found in source.", file=sys.stderr)
         sys.exit(1)
-
-    # Session for title fetching (only built when a token is available)
-    session: requests.Session | None = None
-    if args.token:
-        session = requests.Session()
-        session.headers["Authorization"] = f'Token token="{args.token}"'
 
     stage_labels = " → ".join(label for stage, _, label in PIPELINE if stage in enabled)
     dry_tag = "  *** DRY RUN — no scripts will be executed ***\n" if args.dry_run else ""
@@ -1347,7 +1169,7 @@ def main() -> None:
                 label = ia_title or ia_id
             uuid = None
 
-        # Generic IIIF manifest URL (not NYPL, LoC, or IA)
+        # Generic IIIF manifest URL (not LoC or IA)
         elif _is_generic_iiif_url(target):
             slug = args.slug or _iiif_manifest_item_id(target)
             uuid = None
@@ -1355,30 +1177,13 @@ def main() -> None:
             kind = "iiif-manifest"
 
         else:
-            uuid = extract_uuid(target)
-            if not uuid:
-                print(
-                    f"\n[{i}/{len(targets)}] Skipping — no UUID found: {target}",
-                    file=sys.stderr,
-                )
-                continue
-
-            item = is_item_url(target)
-
-            # Derive slug
-            if args.slug:
-                slug = args.slug
-                title = ""
-            elif session:
-                title = fetch_title(session, uuid, item)
-                time.sleep(0.15)  # polite pause between API calls
-                slug = make_slug(title, uuid)
-            else:
-                title = ""
-                slug = make_slug("", uuid)
-
-            label = title or uuid
-            kind = "item" if item else "collection"
+            print(
+                f"\n[{i}/{len(targets)}] Skipping — unrecognised source: {target}\n"
+                "  Expected: loc.gov URL, archive.org URL, IIIF manifest URL, "
+                "existing output directory, or pre-built CSV path.",
+                file=sys.stderr,
+            )
+            continue
 
         # Always create the output directory (even in dry-run, so the folder
         # structure is in place for inspection or manual follow-up).
@@ -1441,15 +1246,16 @@ def main() -> None:
                 elif kind in ("ia-item", "ia-collection", "ia"):
                     target_enabled.add("ia_csv")
                     print("  Auto-adding --ia-csv (collection CSV not found)", file=sys.stderr)
-                elif kind in ("item", "collection"):
-                    target_enabled.add("nypl_csv")
-                    print("  Auto-adding --nypl-csv (collection CSV not found)", file=sys.stderr)
                 elif kind == "iiif-manifest":
                     # CSV is optional for IIIF URLs — download falls back to
                     # --manifest mode automatically; only add --iiif-csv if the
                     # user has explicitly requested other post-download stages
                     # that need the full CSV (e.g. --extract-entries).
                     pass
+
+        # Seed pipeline_state.json with slug + source_url for this target.
+        if not args.dry_run:
+            write_state(output_dir, {"slug": slug, "source_url": target})
 
         for stage, script, _ in PIPELINE:
             if stage not in target_enabled:
@@ -1475,6 +1281,14 @@ def main() -> None:
                 if not ok:
                     all_ok = False
             stage_outcomes[stage] = "ok" if all_ok else "failed"
+
+            if all_ok and not args.dry_run:
+                record_stage(output_dir, stage)
+                # Record which model was used so downstream scripts don't need --model.
+                if stage == "gemini_ocr" and args.ocr_model:
+                    write_state(output_dir, {"ocr_model": args.ocr_model})
+                if stage == "extract_entries" and args.ocr_model:
+                    write_state(output_dir, {"ner_model": args.ocr_model})
 
         # Summarise this target
         n_ok    = sum(1 for v in stage_outcomes.values() if v == "ok")
