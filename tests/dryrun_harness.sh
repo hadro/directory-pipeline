@@ -1,17 +1,20 @@
 #!/bin/zsh
-# Dry-run regression harness — the de facto test suite until T12 lands.
-#
-# Captures `main.py --dry-run` output for a fixed matrix of invocations so a
-# refactor can be verified byte-identical:
+# Dry-run regression harness — captures `main.py --dry-run` output for a fixed
+# matrix of invocations so a refactor can be verified byte-identical:
 #
 #   tests/dryrun_harness.sh /tmp/before     # on the baseline commit
 #   ... make changes ...
 #   tests/dryrun_harness.sh /tmp/after
 #   diff -r /tmp/before /tmp/after          # must be empty
 #
+# Hermetic equivalents of the highest-value cases also run in CI as pytest
+# tests (tests/test_dryrun_cli.py); this script remains useful for full-matrix
+# byte-identical comparisons against a real local volume.
+#
 # Requires a local volume at $VOL (any output dir with images + a {slug}.csv
-# works — adjust VOL below). Network-free: uses dir/CSV sources plus URL forms
-# whose slug derivation is pure string parsing (LoC item, generic IIIF).
+# works — adjust VOL below). Network-free except fixture 14: LoC *item* URLs
+# fetch the item title from the LoC API to derive the slug (collections URLs
+# and generic IIIF URLs are pure string parsing).
 set -u
 OUT="$1"; mkdir -p "$OUT"
 VOL=output/lain_healy_s_brooklyn_directory_for_the_1897BPL

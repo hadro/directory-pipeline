@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies (core + dev)
+        run: uv sync
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: CLI help smoke test
+        run: |
+          uv run pipeline --help
+          uv run pipeline run --help
+          uv run pipeline ocr --help
+
+      - name: Subcommand dry-run matrix (stub volume, no API calls)
+        run: |
+          mkdir -p output/ci_stub
+          touch output/ci_stub/0001_img.jpg
+          uv run pipeline run         output/ci_stub --dry-run
+          uv run pipeline guided      output/ci_stub --dry-run
+          uv run pipeline ingest      output/ci_stub --dry-run
+          uv run pipeline ocr         output/ci_stub --dry-run
+          uv run pipeline extract     output/ci_stub --dry-run
+          uv run pipeline calibrate   output/ci_stub --no-open --dry-run
+          uv run pipeline postprocess output/ci_stub --no-combine --dry-run

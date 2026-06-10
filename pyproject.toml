@@ -27,6 +27,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["cli", "pipeline", "sources", "utils", "analysis"]
 
+[dependency-groups]
+# Installed by `uv sync` by default (dev group); not part of the published wheel.
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [project.optional-dependencies]
 # Heavy GPU-dependent OCR models (Surya).
 # Install with: pip install -e ".[gpu]"
