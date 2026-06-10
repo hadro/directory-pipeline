@@ -24,7 +24,7 @@ Present the following numbered choices and ask the user to pick one:
 
 ## Step 2: Ask for the source
 
-Ask: "What is your source? Provide either a IIIF manifest URL (or NYPL/LOC/IA
+Ask: "What is your source? Provide either a IIIF manifest URL (or LoC/IA
 collection URL), or the path to an existing output directory (e.g. `output/green-book-1956/`)."
 
 ## Step 3: Inspect the output directory

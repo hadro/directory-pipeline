@@ -52,7 +52,7 @@ Stages always execute in fixed order regardless of flag order. All stages are op
 
 `--gemini-ocr` supports two cost-saving modes via the Gemini API:
 
-- **`--flex`** — Flex inference (`service_tier="flex"`): ~50% cheaper than standard pricing, with 1–15 min latency per request. Best for large volumes where real-time throughput isn't needed. Use with `--gemini-ocr` in `main.py` or directly with `pipeline/run_gemini_ocr.py`.
+- **`--flex`** — Flex inference (`service_tier="flex"`): ~50% cheaper than standard pricing, with 1–15 min latency per request. Best for large volumes where real-time throughput isn't needed. The `pipeline` CLI (`run`/`guided`/`ocr`) enables Flex **by default** — pass `--no-flex` for time-sensitive runs. The underlying `main.py` and `pipeline/run_gemini_ocr.py` keep `--flex` opt-in.
 - **Batch API** (not yet implemented) — Submit all pages as a single async job; 50% cheaper, up to 24-hour turnaround. Planned for future implementation.
 
 Default model is `gemini-3.1-flash-lite` for both OCR and NER. For higher accuracy use `--ocr-model gemini-2.0-flash`. Combine with `--flex` to cut cost ~50%.

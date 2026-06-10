@@ -2,9 +2,9 @@
 
 Turn a public digital archive URL into a structured, browsable CSV — no manual transcription, no custom code per collection type.
 
-Give it a URL from the [Library of Congress](https://www.loc.gov/collections/), [Internet Archive](https://archive.org/), [NYPL Digital Collections](https://digitalcollections.nypl.org/), or any institution that publishes a public IIIF manifest. It downloads the scans, OCRs them, and extracts entries into a structured CSV. With the enrichment steps, every row links back to the exact location in the original scan.
+Give it a URL from the [Library of Congress](https://www.loc.gov/collections/), [Internet Archive](https://archive.org/), or any institution that publishes a public IIIF manifest (CONTENTdm repositories included). It downloads the scans, OCRs them, and extracts entries into a structured CSV. With the enrichment steps, every row links back to the exact location in the original scan.
 
-Built for digitized historical directories — city directories, gazetteers, trade directories — but works on just about any historical document with regularl entry-like structure.
+Built for digitized historical directories — city directories, gazetteers, trade directories — but works on just about any historical document with regular entry-like structure.
 
 ![Interactive data explorer with facet filters, field distribution charts, and a detail panel with IIIF source thumbnail](docs/screenshots/explorer.png)
 
@@ -53,6 +53,17 @@ Alongside the extracted data CSV, `--extract` also generates a self-contained HT
 
 ---
 
+## Examples
+
+Two published collections built with this pipeline:
+
+- **[Tulsa city directories — 1921](https://hadro.github.io/tulsa-city-directories/1921#about)** — a Polk-style city directory.
+- **[The Negro Motorist Green Book explorer](https://hadro.github.io/green-books/explorer#about)** — the full run of Green Book volumes.
+
+> Both explorers received additional front-end design work beyond what the pipeline generates. The pipeline produces the entry CSVs, IIIF manifests, and a baseline HTML explorer; these published sites build on that output.
+
+---
+
 ## Installation
 
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
@@ -64,11 +75,19 @@ uv sync --extra geo      # add geocoding + map generation
 uv sync --all-extras     # everything
 ```
 
+This installs a `pipeline` command (run `pipeline --help` for all subcommands):
+
+```bash
+pipeline run    <URL>     # automated: download → OCR → extract → explore
+pipeline guided <URL>     # human-in-loop: page selection + alignment review
+```
+
+The `python main.py <URL> [flags]` form shown throughout this README is the underlying interface and still works for advanced use.
+
 Set your API keys (or copy `.env.template` to `.env`):
 
 ```bash
 export GEMINI_API_KEY=your_key_here
-export NYPL_API_TOKEN=your_token_here      # only needed for NYPL API access
 export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geocoding
 ```
 
@@ -95,7 +114,7 @@ python main.py URL --extract-entries --mode multimodal
 
 This is most valuable for materials where geographic or thematic section headings fall mid-page (the model can see the heading visually rather than relying on text order), multi-column layouts where reading order is ambiguous, or any collection where state/category context shifts frequently within a page. In testing on Green Book volumes it eliminated mid-page geographic attribution errors entirely, compared to text-only mode.
 
-The cost increase is negligible — each page image is resized to ≤768 px and counts as one tile (~258 input tokens), adding roughly $0.0001 per page at standard rates. See [docs/costs.md](docs/costs.md) for a full breakdown.
+The cost increase is negligible — each page image is resized to ≤768 px and counts as one tile (~258 input tokens), adding roughly $0.00006 per page at standard rates. See [docs/costs.md](docs/costs.md) for a full breakdown.
 
 ---
 
@@ -108,20 +127,20 @@ python main.py URL --surya-ocr --align-ocr
 python main.py URL --review-alignment     # optional: fix unmatched lines interactively
 ```
 
-![NW alignment result drawn on a source page — green bounding boxes on matched lines, unmatched Gemini lines listed in the margin in red](docs/screenshots/alignment-viz.jpg)
+![NW alignment result drawn on a source page — orange bounding boxes on matched lines, unmatched Gemini lines listed in the margin in red](docs/screenshots/alignment-viz.jpg)
 
 ---
 
 ## Costs
 
-A single ~80-page volume costs roughly **$0.70 in Gemini API charges** at standard rates, or **~$0.35 with `--flex`**, and can run within the free tier's daily quota (~15–20 minutes at 15 RPM). See [docs/costs.md](docs/costs.md) for a full breakdown including platform costs (Surya OCR on Mac, Colab, and GPU).
+A single ~80-page volume costs roughly **$0.60 in Gemini API charges** at standard rates, or **~$0.30 with `--flex`**, and can run within the free tier's daily quota (~15–20 minutes at 15 RPM). See [docs/costs.md](docs/costs.md) for a full breakdown including platform costs (Surya OCR on Mac, Colab, and GPU).
 
 ---
 
 ## Docs
 
 - [Pipeline stage reference](docs/pipeline-stages.md) — every flag, script, and output file
-- [Usage examples](docs/usage-examples.md) — full examples by source (LoC, IA, NYPL, IIIF manifest)
+- [Usage examples](docs/usage-examples.md) — full examples by source (LoC, IA, IIIF manifest)
 - [Costs](docs/costs.md) — API and platform cost breakdown
 - [Key design decisions](docs/key-design-decisions.md) — architecture and technical notes
 - [Prior work](docs/prior-work.md) — related research and citations
@@ -133,7 +152,7 @@ A single ~80-page volume costs roughly **$0.70 in Gemini API charges** at standa
 - **Anchored Needleman-Wunsch alignment.** City/state headings that appear verbatim in both sources are committed as fixed anchors before the NW pass, preventing misalignment drift on long pages.
 - **Schema-agnostic NER.** `extract_entries.py` hard-codes nothing. The NER prompt defines all field names; CSV columns are inferred dynamically — no code changes for a new collection type.
 - **IIIF-native output.** Every aligned line and entry carries a `canvas_fragment` (`#xywh=`) URI in natural image pixel coordinates, directly consumable by IIIF viewers and annotation tools.
-- **Any IIIF source.** `--iiif-csv` and `--download` accept any public IIIF Presentation v2 or v3 manifest URL, not just NYPL/LoC/IA. IIIF Collection manifests are enumerated automatically, writing one CSV row per child manifest.
+- **Any IIIF source.** `--iiif-csv` and `--download` accept any public IIIF Presentation v2 or v3 manifest URL, not just LoC and IA. IIIF Collection manifests are enumerated automatically, writing one CSV row per child manifest. CONTENTdm repositories work too — run `sources/build_contentdm_manifest.py` to generate a manifest, then pass it like any other IIIF URL.
 
 See [docs/key-design-decisions.md](docs/key-design-decisions.md) for full technical notes.
 

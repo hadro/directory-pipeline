@@ -16,7 +16,7 @@ project root directory.
 Start by explaining the approach:
 
 The pipeline is designed so that you calibrate once for a collection type (e.g.
-"NYPL Green Book 1950s") and then reuse those calibration outputs for every
+"Green Book 1950s") and then reuse those calibration outputs for every
 additional volume in that series. Calibration produces two reusable files:
 
 - `ner_prompt.md` — a Gemini-generated prompt customized to the layout and content
@@ -39,8 +39,9 @@ Explain:
   from the collection metadata. Override with `--slug my-name`.
 - It also writes `manifest.json`, which maps image filenames to IIIF canvas URIs
   (needed for image thumbnails in the explorer and IIIF viewer).
-- Accepted URL formats: NYPL digital collections, Library of Congress, Internet
-  Archive, or any direct IIIF manifest URL.
+- Accepted URL formats: Library of Congress, Internet Archive, or any public
+  IIIF manifest or collection URL. (CONTENTdm repositories are supported by first
+  generating a manifest with `sources/build_contentdm_manifest.py`.)
 
 Tell the user to run it and note the output directory path (e.g. `output/green-book-1947/`).
 

@@ -25,13 +25,7 @@ python sources/ia_collection_csv.py https://archive.org/details/ldpd_11290437_00
 python sources/ia_collection_csv.py https://archive.org/details/durstoldyorklibrary
 ```
 
-#### `sources/nypl_collection_csv.py` — Export NYPL metadata
-Walks the NYPL Digital Collections API hierarchy for a collection UUID, recursively
-descending into sub-collections. For each item found, fetches capture metadata and
-writes one row to a CSV. Requires a `NYPL_API_TOKEN` environment variable (or `--token`).
-Responses are cached locally as JSON to avoid redundant API calls on re-runs.
-
-All three source scripts produce the same CSV schema, which feeds into `pipeline/download_images.py`:
+Both source scripts produce the same CSV schema, which feeds into `pipeline/download_images.py`:
 
 | Column | Description |
 |---|---|
@@ -157,16 +151,15 @@ python pipeline/generate_prompt.py output/the_travelers_guide_e088efa0/ \
 #### `pipeline/surya_detect.py` — Surya column detection (preferred)
 Runs Surya's neural text-line detection model on each image to count text columns
 and detect gutter positions. Produces the same `columns_report.csv` format as
-`detect_columns.py` (with `recommended_psm` per image), so either detector feeds
-`old/run_ocr.py` unchanged. Surya's neural approach is more robust than pixel-projection
+`detect_columns.py`, so the two detectors are interchangeable. Surya's neural approach is more robust than pixel-projection
 on degraded microfilm scans and pages with irregular layouts.
 
 #### `pipeline/detect_columns.py` — Pixel-projection column detection (legacy)
 Uses a vertical pixel-projection profile (dark-pixel density per column) to count
 text columns per image and detect gutter positions. Outputs `columns_report.csv`
-with a `recommended_psm` (Tesseract page segmentation mode) for each image:
-PSM 4 for single-column pages, PSM 1 for multi-column. `old/run_ocr.py` reads this
-CSV to apply per-image PSM automatically. Prefer `--surya-detect` for new runs.
+with the column count and gutter x-positions for each image (the legacy
+`recommended_psm` field is still written but no longer consumed). Prefer
+`--surya-detect` for new runs.
 
 #### `pipeline/run_surya_ocr.py` — Surya OCR (preferred)
 Runs Surya's recognition model on each image and saves:
@@ -177,19 +170,6 @@ Surya produces line-level bounding boxes rather than word-level, which aligns
 more cleanly with Gemini's line-oriented output format. Handles multi-column
 pages via the reading-order correction in `align_ocr.py`. Runs in batches
 (default 4 images per batch; reduce with `--batch-size` if OOM).
-
-#### `old/run_ocr.py` — Tesseract OCR (legacy)
-Runs Tesseract on each image and saves:
-- `{stem}_tesseract.hocr` — full hOCR with word-level bounding boxes
-- `{stem}_tesseract.txt` — plain text
-
-Tesseract dictionary correction is **disabled by default** (`load_system_dawg=0`,
-`load_freq_dawg=0`). This preserves proper nouns, street names, and abbreviations
-as-written, which is critical for accurate NW alignment with Gemini text. Use
-`--dict` to re-enable. Runs in parallel using `--workers`.
-
-Per-image PSM is loaded from `columns_report.csv` if present; the global `--psm`
-flag always overrides it. Prefer `--surya-ocr` for new runs.
 
 #### `pipeline/run_gemini_ocr.py` — Gemini OCR
 Sends each image to the Gemini API using a system prompt from `prompts/ocr_prompt.md`
@@ -220,8 +200,8 @@ marks to avoid repeating city names or categories.
 **Flex inference (`--flex`).** Pass `--flex` to use Gemini's Flex inference tier
 (`service_tier="flex"`): approximately 50% cheaper than standard pricing, with
 1–15 minute latency per request and best-effort availability. Recommended for large
-bulk runs. Combine with `--ocr-model gemini-3.1-flash-lite` for the lowest
-cost option.
+bulk runs. The `pipeline` CLI enables Flex by default; pass `--no-flex` to disable.
+Combine with `--ocr-model gemini-3.1-flash-lite` for the lowest cost option.
 
 #### `analysis/compare_ocr.py` — Model comparison
 Calls multiple models (any mix of Gemini model names and the special token
@@ -234,11 +214,11 @@ committing to a full extract or guided run.
 
 #### `pipeline/align_ocr.py` — NW alignment
 The core output stage. For each image that has both a Gemini `.txt` file and a
-Surya `.json` (preferred) or Tesseract `.hocr` (legacy) file, aligns the two using
+Surya `.json` file, aligns the two using
 anchored [Needleman-Wunsch](https://en.wikipedia.org/wiki/Needleman%E2%80%93Wunsch_algorithm)
 global sequence alignment and saves `{stem}_{model_slug}_aligned.json`.
 
-**Approach:** Runs a single global NW pass over all Surya lines (or Tesseract words)
+**Approach:** Runs a single global NW pass over all Surya lines
 and all Gemini tokens on a page. Before the NW pass, city/state headings and category
 lines that appear verbatim in both sources are committed as fixed anchors. The NW
 problem is then split into independent segments at those anchors, preventing
@@ -290,7 +270,7 @@ page-number outlier creates a degenerate single-line split.
 IIIF canvas URIs are read from the `manifest.json` cached by
 `download_images.py`. `canvas_width` and `canvas_height` reflect the **natural
 image pixel dimensions** fetched from the IIIF Image API `info.json` — not the
-dimensions declared in the manifest, which may differ (e.g. NYPL manifests
+dimensions declared in the manifest, which may differ (e.g. some manifests
 declare 2560×2560 square canvases for portrait images). All `bbox` and
 `canvas_fragment` coordinates are in this natural pixel space, which is required
 for IIIF annotation tools and Mirador to place boxes correctly.
@@ -299,7 +279,7 @@ for IIIF annotation tools and Mirador to place boxes correctly.
 Reads each `*_aligned.json` and draws color-coded bounding boxes on the source
 image, saving `{stem}_{model_slug}_viz.jpg`:
 
-- **Green** — word-confidence boxes (per word)
+- **Orange** — line-confidence boxes (one per matched Surya line)
 - **Red** — unmatched Gemini lines (listed in the margin, no coordinates)
 
 Visualization output files are automatically excluded from all OCR and alignment
@@ -535,27 +515,6 @@ No geocoding or alignment required; runs directly after `--extract-entries`.
 python pipeline/explore_entries.py output/green_book_1947_4bea2040/
 python pipeline/explore_entries.py output/green_book_1947_4bea2040/ --out my_explorer.html
 python pipeline/explore_entries.py output/green_book_1947_4bea2040/uuid/entries_gemini-2.0-flash.csv
-```
-
-#### `pipeline/run_chandra_ocr.py` — Chandra OCR (local model, GPU)
-Runs [Chandra](https://github.com/datalab-to/chandra-ocr) (a 5B vision-language
-model) on each image and saves `{stem}_chandra-ocr-2.txt`. Converts Chandra's
-Markdown output (tables, bold headers) to plain text compatible with `align_ocr.py`.
-Safe to re-run — already-processed images are skipped.
-
-Chandra is fully local — no API key or per-call cost — and produces layout-aware
-transcriptions well-suited to complex multi-column pages. GPU strongly recommended
-(T4 16 GB fits the BF16 model with headroom). Supports two inference backends:
-
-- `--method hf` — HuggingFace Transformers (default; works on Colab T4)
-- `--method vllm` — vLLM server (faster; requires H100 80 GB)
-
-To use Chandra output for alignment, pass `--model chandra-ocr-2` to `align_ocr.py`.
-
-```bash
-python pipeline/run_chandra_ocr.py output/travelguide/
-python pipeline/run_chandra_ocr.py output/travelguide/ --method hf --batch-size 4
-python pipeline/align_ocr.py output/travelguide/ --model chandra-ocr-2
 ```
 
 #### `pipeline/review_ocr.py` — OCR anomaly triage report

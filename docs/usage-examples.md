@@ -52,15 +52,7 @@ The pipeline accepts any of these URL forms directly — no preprocessing needed
 | Internet Archive collection | `https://archive.org/details/durstoldyorklibrary` | |
 | Library of Congress item | `https://www.loc.gov/item/01015253/` | |
 | Library of Congress collection | `https://www.loc.gov/collections/civil-war-maps/` | |
-| NYPL item or collection | UUID or collection URL | Requires `NYPL_API_TOKEN` |
 | Any IIIF manifest | `https://example.org/iiif/manifest.json` | Accepts v2 or v3 |
-
-NYPL requires an API token. Set it in your environment or `.env` file:
-
-```bash
-export NYPL_API_TOKEN=your_token_here
-python main.py collections.txt --nypl-csv --download
-```
 
 To download a single IIIF manifest directly without a CSV:
 

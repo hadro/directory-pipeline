@@ -7,22 +7,16 @@ Technical architecture notes for directory-pipeline. See the [main README](../RE
 **Gemini for accuracy, Surya for coordinates.** Gemini produces far more
 accurate transcriptions of historical print than conventional OCR engines, especially
 for proper nouns, abbreviations, and damaged text. Surya provides line-level bounding
-boxes that align more cleanly with Gemini's line-oriented output than Tesseract's
-word-level hOCR. Tesseract remains supported as a legacy fallback for collections
-where Surya has already been run or word-level granularity is needed.
+boxes that align more cleanly with Gemini's line-oriented output than the
+word-level hOCR of conventional engines like Tesseract.
 
 **Anchored Needleman-Wunsch alignment.** The aligner runs a single global
-word-level NW pass (gap penalty −40, similarity 0–100 based on character edit
+NW pass (gap penalty −40, similarity 0–100 based on character edit
 distance). Before the NW pass, city/state headings and category lines that appear
 verbatim in both Gemini and Surya are committed as fixed *anchors*. The
 sequence is then split into independent segments at each anchor and each segment
 is aligned separately. This prevents misalignment drift on long pages where a
 mismatched heading would otherwise pull all subsequent entries to wrong coordinates.
-
-**Tesseract dictionary correction disabled.** By default Tesseract silently
-"corrects" street names, proper nouns, and abbreviations toward dictionary words
-(e.g. `Mound` → `Wound`, `Innesfallen` → `Innisfallen`). This is disabled via
-`load_system_dawg=0 load_freq_dawg=0` to preserve names as-written for alignment.
 
 **Column reading-order correction.** OCR engines on multi-column pages may read
 across columns (left-to-right by y position) while Gemini reads column-by-column.
@@ -72,9 +66,9 @@ service's advertised `maxWidth` to prevent upscaling artifacts on tile-pyramid
 servers.
 
 **IIIF canvas coordinate space.** IIIF manifest canvas dimensions do not
-necessarily match the actual image pixel dimensions. NYPL manifests, for example,
-declare all canvases as 2560×2560 (square) even for portrait images that are
-3316×4513. Mirador 3 maps annotation `xywh` coordinates directly to image pixel
+necessarily match the actual image pixel dimensions. Some institutions' manifests,
+for example, declare all canvases as 2560×2560 (square) even for portrait images
+that are 3316×4513. Mirador 3 maps annotation `xywh` coordinates directly to image pixel
 space regardless of the canvas dimensions in the manifest. As a result, all
 bounding boxes and `canvas_fragment` values in this pipeline are stored in
 **natural image pixel coordinates**, fetched at align time from the IIIF Image API
@@ -86,15 +80,14 @@ space during export, and `map_entries.py` reads canvas dimensions from
 remain correct even after a manifest has been updated with natural canvas dims.
 
 **IIIF-native output.** The aligned JSON includes `canvas_uri` and
-`canvas_fragment` (IIIF `#xywh=` fragment) for every word and line, making the
+`canvas_fragment` (IIIF `#xywh=` fragment) for every line, making the
 output directly consumable by IIIF annotation tools and viewers.
 
-**Alignment confidence tiers.** Every line and word in `*_aligned.json` carries a
-`"confidence"` field: `"line"` for Surya-aligned output (most reliable), `"word"`
-for legacy Tesseract hOCR-aligned output (less precise), and `"manual"` for matches
+**Alignment confidence tiers.** Every line in `*_aligned.json` carries a
+`"confidence"` field: `"line"` for Surya-aligned output, and `"manual"` for matches
 accepted through the `--review-alignment` UI. Downstream scripts can filter or weight
 by this tier — e.g. `export_entry_boxes.py` inherits whatever confidence level was
-set during alignment, and `visualize_alignment.py` color-codes the three tiers
+set during alignment, and `visualize_alignment.py` color-codes them
 differently.
 
 **Cross-page NER context persistence.** After each page is processed by
