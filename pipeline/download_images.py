@@ -572,7 +572,7 @@ def main() -> None:
         manifest_cache = out_root / "manifest.json"
         if not args.quiet:
             if manifest_cache.exists():
-                print(f"Loading manifest from cache…", file=sys.stderr)
+                print("Loading manifest from cache…", file=sys.stderr)
             else:
                 print(f"Fetching manifest: {args.manifest}", file=sys.stderr)
 
@@ -657,9 +657,9 @@ def main() -> None:
             print(f"\n[{items_processed + 1}/{len(rows)}] {item_title} ({item_id})",
                   file=sys.stderr)
             if manifest_cache.exists():
-                print(f"  Loading manifest from cache…", file=sys.stderr)
+                print("  Loading manifest from cache…", file=sys.stderr)
             else:
-                print(f"  Fetching manifest…", file=sys.stderr)
+                print("  Fetching manifest…", file=sys.stderr)
 
         try:
             manifest = fetch_manifest(session, manifest_url, cache_path=manifest_cache)

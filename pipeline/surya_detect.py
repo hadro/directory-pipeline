@@ -51,10 +51,8 @@ os.environ.setdefault("DISABLE_TQDM", "true")
 # ---------------------------------------------------------------------------
 REPORT_FILENAME = "columns_report.csv"
 FIELDNAMES = [
-    "image", "num_columns", "confidence", "recommended_psm", "gutter_x_positions",
+    "image", "num_columns", "confidence", "gutter_x_positions",
 ]
-PSM_SINGLE_COLUMN = 4   # single column
-PSM_MULTI_COLUMN  = 1   # multi-column with OSD
 MIN_OVERLAP_RATIO = 0.3
 # Minimum gap between left- and right-column x1 clusters (as a fraction of
 # page width) needed to declare a 2-column layout.  8 % ≈ 150 px at 1920 px.
@@ -98,7 +96,6 @@ def _analyze_bboxes(bboxes: list, image_width: int) -> dict:
         return {
             "num_columns":        1,
             "confidence":         "low",
-            "recommended_psm":    PSM_SINGLE_COLUMN,
             "gutter_x_positions": "",
         }
 
@@ -109,7 +106,6 @@ def _analyze_bboxes(bboxes: list, image_width: int) -> dict:
         return {
             "num_columns":        1,
             "confidence":         "high",
-            "recommended_psm":    PSM_SINGLE_COLUMN,
             "gutter_x_positions": "",
         }
 
@@ -120,7 +116,6 @@ def _analyze_bboxes(bboxes: list, image_width: int) -> dict:
         return {
             "num_columns":        1,
             "confidence":         "high",
-            "recommended_psm":    PSM_SINGLE_COLUMN,
             "gutter_x_positions": "",
         }
 
@@ -140,14 +135,12 @@ def _analyze_bboxes(bboxes: list, image_width: int) -> dict:
         return {
             "num_columns":        2,
             "confidence":         confidence,
-            "recommended_psm":    PSM_MULTI_COLUMN,
             "gutter_x_positions": str(refined_gutter),
         }
     else:
         return {
             "num_columns":        1,
             "confidence":         "high",
-            "recommended_psm":    PSM_SINGLE_COLUMN,
             "gutter_x_positions": "",
         }
 
@@ -287,7 +280,7 @@ def main() -> None:
                 gutter  = row["gutter_x_positions"] or "—"
                 print(
                     f"  [{len(rows):04d}/{total}] "
-                    f"{cols}-col ({conf:6s}, PSM {row['recommended_psm']}, "
+                    f"{cols}-col ({conf:6s}, "
                     f"gutter={gutter}, lines={n_lines}): {img_path.name}",
                     file=sys.stderr,
                 )

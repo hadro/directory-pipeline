@@ -31,10 +31,20 @@ packages = ["cli", "pipeline", "sources", "utils", "analysis"]
 # Installed by `uv sync` by default (dev group); not part of the published wheel.
 dev = [
     "pytest>=8.0",
+    "ruff>=0.8",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+# Colab notebooks re-import per cell by design — don't lint them.
+extend-exclude = ["colab"]
+
+[tool.ruff.lint]
+# Bug-catching rules only (pyflakes + syntax errors). Style/formatting rules
+# are deliberately not enabled — see docs/refactor-plan.md session log.
+select = ["F", "E9"]
 
 [project.optional-dependencies]
 # Heavy GPU-dependent OCR models (Surya).

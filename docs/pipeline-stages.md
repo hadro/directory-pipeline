@@ -250,8 +250,7 @@ on degraded microfilm scans and pages with irregular layouts.
 #### `pipeline/detect_columns.py` — Pixel-projection column detection (legacy)
 Uses a vertical pixel-projection profile (dark-pixel density per column) to count
 text columns per image and detect gutter positions. Outputs `columns_report.csv`
-with the column count and gutter x-positions for each image (the legacy
-`recommended_psm` field is still written but no longer consumed). Prefer
+with the column count and gutter x-positions for each image. Prefer
 `--surya-detect` for new runs.
 
 #### `pipeline/run_surya_ocr.py` — Surya OCR (preferred)

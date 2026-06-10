@@ -976,7 +976,7 @@ def main() -> None:
         elif is_loc_url(target):
             if "/resource/" in target:
                 print(
-                    f"  Resolving /resource/ URL to /item/ URL via LoC API…",
+                    "  Resolving /resource/ URL to /item/ URL via LoC API…",
                     file=sys.stderr,
                 )
                 target = _resource_url_to_item_url(target)

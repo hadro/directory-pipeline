@@ -173,7 +173,6 @@ def main() -> None:
         sys.exit(1)
 
     aligned_slug = args.aligned_model.replace("/", "_")
-    uuid_pat = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
     # Collect item dirs: either root itself, or any subdir containing aligned files
     item_dirs: list[Path] = []

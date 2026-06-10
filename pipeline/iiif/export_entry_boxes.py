@@ -173,7 +173,6 @@ def _box_annotation(ann_id: str, canvas_id: str, x: int, y: int, w: int, h: int,
                      addr_fields: list[str] | None = None) -> dict:
     cat = entry.get("category", "other")
     fill, stroke, sw = _PALETTE.get(cat, _DEFAULT_STYLE)
-    is_ad = str(entry.get("is_advertisement", "")).strip().lower() in ("true", "1", "yes")
 
     ann: dict = {
         "type": "Annotation",

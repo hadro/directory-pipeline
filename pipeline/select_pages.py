@@ -23,7 +23,6 @@ import http.server
 import json
 import re
 import socketserver
-import subprocess
 import sys
 import threading
 import time

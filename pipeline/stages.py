@@ -26,7 +26,7 @@ Model handling (``model_mode``):
   None      → stage takes no model flag from the orchestrator.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 

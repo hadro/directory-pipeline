@@ -93,7 +93,7 @@ def get_text(
         return model, "failed", ""
 
     try:
-        from google.genai.types import GenerateContentConfig, MediaResolution, Part, ThinkingConfig  # noqa: PLC0415
+        from google.genai.types import GenerateContentConfig, Part, ThinkingConfig  # noqa: PLC0415
 
         with open(image_path, "rb") as f:
             img_bytes = f.read()

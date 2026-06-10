@@ -86,10 +86,9 @@ def _find_gutter_col(arr: np.ndarray) -> int:
     Signal A — Tonal boundary (one dark page, one light page):
       Finds the steepest step in a heavily-smoothed (~12 %) column-mean
       profile, searching the center 50 % of content.  Only used when the
-      two halves of the spread differ in brightness by more than
-      TONAL_MIN_RANGE brightness units.  When both pages look similar, this
-      score can be falsely inflated by dividing a tiny gradient by a tiny
-      range, so it is suppressed.
+      left/right halves differ in mean brightness by ≥ 15 % of their
+      average — for same-tone pages the gradient is noise, so the signal
+      is skipped in favor of the geometric-centre fallback.
 
     Signal B — Spine shadow (dark binding crease between similar-tone pages):
       Searches a narrow ±7 % band around the geometric content centre for
@@ -122,14 +121,11 @@ def _find_gutter_col(arr: np.ndarray) -> int:
     col_means = content.mean(axis=0)
 
     # ----------------------------------------------------------------
-    # Signal A: Tonal boundary
-    # Only active when the two pages have meaningfully different mean
-    # brightness (page_range >= TONAL_MIN_RANGE).  For same-tone pages
-    # (e.g. both white text pages) the score is suppressed because
-    # dividing a tiny gradient by a tiny range inflates it randomly.
+    # Signal A: Tonal boundary — only active when the two halves differ
+    # meaningfully in mean brightness (boundary_score threshold below);
+    # for same-tone pages the gradient is noise and we fall through to
+    # the geometric-centre fallback.
     # ----------------------------------------------------------------
-    TONAL_MIN_RANGE = 25.0   # brightness units (0–255 scale)
-
     heavy = _smooth(col_means, max(5, cw // 8))
     quarter = max(1, cw // 4)
     center_h = heavy[quarter: cw - quarter]

@@ -416,7 +416,7 @@ def main() -> None:
         print("Subcommands:")
         for name, desc in _DESCRIPTIONS.items():
             print(f"  {name:<{col}}{desc}")
-        print(f"\nRun `pipeline <subcommand> --help` for per-subcommand options.")
+        print("\nRun `pipeline <subcommand> --help` for per-subcommand options.")
         sys.exit(0)
 
     subcommand = sys.argv[1]

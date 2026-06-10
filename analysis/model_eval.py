@@ -21,7 +21,6 @@ Usage:
 import argparse
 import re
 import sys
-from collections import Counter
 from pathlib import Path
 
 import pandas as pd
@@ -116,8 +115,6 @@ def _discover_csvs(vol_dir: Path) -> list[tuple[Path, str, str]]:
     """Return list of (csv_path, model_name, mode) for a volume directory."""
     found = []
     seen: set[tuple[str, str]] = set()
-
-    skip_suffixes = {"_fixed", "_fixed_backup", "_backup"}
 
     for p in sorted(vol_dir.glob("entries_gemini-*.csv")):
         stem = p.stem
@@ -305,7 +302,7 @@ def main() -> None:
 
     missing = [d for d in vol_dirs if not d.exists()]
     if missing:
-        sys.exit(f"Volume dirs not found:\n" + "\n".join(str(d) for d in missing))
+        sys.exit("Volume dirs not found:\n" + "\n".join(str(d) for d in missing))
 
     geonames_lookup = None
     if not args.no_geonames:

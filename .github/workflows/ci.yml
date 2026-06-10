@@ -18,6 +18,9 @@ jobs:
       - name: Install dependencies (core + dev)
         run: uv sync
 
+      - name: Lint (bug rules only)
+        run: uv run ruff check .
+
       - name: Run tests
         run: uv run pytest
 

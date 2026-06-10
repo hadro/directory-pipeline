@@ -8,10 +8,10 @@ the number of columns.
 
 Produces columns_report.csv in the images directory:
 
-    image, num_columns, confidence, recommended_psm, gutter_x_positions
+    image, num_columns, confidence, gutter_x_positions
 
-run_ocr.py reads this report and applies the recommended PSM per image instead
-of a single global setting. The global --psm flag always takes precedence.
+The report is a manual-QA artifact: review it to spot pages whose column
+layout will confuse OCR reading order.
 
 PSM recommendations
 -------------------
@@ -60,7 +60,7 @@ _print_lock = threading.Lock()
 
 REPORT_FILENAME = "columns_report.csv"
 FIELDNAMES = [
-    "image", "num_columns", "confidence", "recommended_psm", "gutter_x_positions",
+    "image", "num_columns", "confidence", "gutter_x_positions",
 ]
 
 
@@ -277,12 +277,10 @@ def analyze_image(
             max_columns=max_columns,
         )
         num_columns = len(gutters) + 1
-        recommended_psm = PSM_MULTI_COLUMN if num_columns > 1 else PSM_SINGLE_COLUMN
         return {
             "image": image_path.name,
             "num_columns": num_columns,
             "confidence": confidence,
-            "recommended_psm": recommended_psm,
             "gutter_x_positions": ";".join(str(x) for x in gutters),
             "_error": None,
         }
@@ -291,7 +289,6 @@ def analyze_image(
             "image": image_path.name,
             "num_columns": 1,
             "confidence": "low",
-            "recommended_psm": PSM_SINGLE_COLUMN,
             "gutter_x_positions": "",
             "_error": str(exc),
         }
@@ -440,7 +437,6 @@ def main() -> None:
                     "image": image_path.name,
                     "num_columns": 1,
                     "confidence": "low",
-                    "recommended_psm": PSM_SINGLE_COLUMN,
                     "gutter_x_positions": "",
                     "_error": str(exc),
                 }
@@ -453,10 +449,9 @@ def main() -> None:
                 else:
                     cols = result["num_columns"]
                     conf = result["confidence"]
-                    psm  = result["recommended_psm"]
                     _log(
                         f"[{completed:04d}/{total}] "
-                        f"{cols}-col ({conf:6s}, PSM {psm}): {image_path.name}"
+                        f"{cols}-col ({conf:6s}): {image_path.name}"
                     )
 
     # Write report in original image order

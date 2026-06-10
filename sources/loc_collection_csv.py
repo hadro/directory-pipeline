@@ -40,7 +40,6 @@ import os
 import re
 import sys
 import time
-from pathlib import Path
 
 import requests
 
@@ -224,10 +223,6 @@ def process_collection(
     verbose: bool = True,
 ) -> int:
     """Export all digitized items from a LoC collection. Returns row count."""
-    # Extract a short container ID from the collection URL slug
-    slug_match = re.search(r"/collections/([^/?#]+)", collection_url)
-    container_id = slug_match.group(1).rstrip("/") if slug_match else ""
-
     rows = 0
     for item in iter_collection_items(session, collection_url, per_page, verbose):
         item_id = _extract_item_id(item.get("id", ""))
