@@ -10,6 +10,7 @@ scripts/*
 docs/item_ideas.md
 docs/notes.md
 my_collections/
+collections/
 
 # tmp files
 .tmp*
@@ -59,7 +60,7 @@ pipeline.db
 collections.txt
 analysis/chandra_eval.py
 analysis/surya_eval.py
-CLAUDE.md
+pipeline/output/*
 
 # Expose skills
 !.claude/skills/*
