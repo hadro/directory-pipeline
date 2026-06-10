@@ -59,8 +59,9 @@ def _parser_run() -> argparse.ArgumentParser:
                    help="Custom OCR system prompt")
     p.add_argument("--mode", choices=["text-only", "multimodal"], default=None,
                    help="Entry extraction mode (default: text-only)")
-    p.add_argument("--flex", action="store_true",
-                   help="Use Gemini Flex inference (~50%% cheaper, 1–15 min latency)")
+    p.add_argument("--flex", action=argparse.BooleanOptionalAction, default=True,
+                   help="Use Gemini Flex inference (~50%% cheaper, 1–15 min latency). "
+                        "On by default. Pass --no-flex for time-sensitive runs.")
     p.add_argument("--workers", "-w", type=int, metavar="N", default=None,
                    help="Parallel workers for OCR stages")
     p.add_argument("--sections", metavar="PATH", default=None,
@@ -107,6 +108,9 @@ def _parser_guided() -> argparse.ArgumentParser:
                    help="Path to sections.txt marking structural boundaries")
     p.add_argument("--workers", "-w", type=int, metavar="N", default=None,
                    help="Parallel workers (default: 8 in guided mode)")
+    p.add_argument("--flex", action=argparse.BooleanOptionalAction, default=True,
+                   help="Use Gemini Flex inference (~50%% cheaper, 1–15 min latency). "
+                        "On by default. Pass --no-flex for time-sensitive runs.")
     p.add_argument("--slug", metavar="SLUG", default=None,
                    help="Override the auto-generated output folder name")
     p.add_argument("--dry-run", action="store_true",
@@ -121,6 +125,7 @@ def _guided(args: argparse.Namespace) -> None:
     if args.ocr_prompt:  cmd += ["--ocr-prompt", args.ocr_prompt]
     if args.sections:    cmd += ["--sections", args.sections]
     if args.workers:     cmd += ["--workers", str(args.workers)]
+    if args.flex:        cmd.append("--flex")
     if args.slug:        cmd += ["--slug", args.slug]
     if args.dry_run:     cmd.append("--dry-run")
     _exec(cmd)
@@ -217,8 +222,9 @@ def _parser_ocr() -> argparse.ArgumentParser:
                    help="Path to sections.txt for per-section prompt routing")
     p.add_argument("--workers", "-w", type=int, metavar="N", default=None,
                    help="Parallel workers for Gemini OCR")
-    p.add_argument("--flex", action="store_true",
-                   help="Use Gemini Flex inference (~50%% cheaper, 1–15 min latency)")
+    p.add_argument("--flex", action=argparse.BooleanOptionalAction, default=True,
+                   help="Use Gemini Flex inference (~50%% cheaper, 1–15 min latency). "
+                        "On by default. Pass --no-flex for time-sensitive runs.")
     p.add_argument("--high-res", action="store_true",
                    help="Use high media resolution for Gemini (higher token cost)")
     p.add_argument("--expand-dittos", action="store_true",

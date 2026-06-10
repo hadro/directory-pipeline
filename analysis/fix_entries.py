@@ -28,6 +28,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from pipeline.state import get_ner_model, get_ocr_model
+
 # ---------------------------------------------------------------------------
 # 1. Unicode normalization
 # ---------------------------------------------------------------------------
@@ -901,12 +904,24 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="gemini-3.1-flash-lite",
-        help="Model slug used in entries CSV filename (default: gemini-3.1-flash-lite).",
+        default=None,
+        help=(
+            "Model slug used in entries CSV filename. "
+            "Auto-detected from pipeline_state.json if omitted "
+            "(fallback default: gemini-3.1-flash-lite)."
+        ),
     )
     args = parser.parse_args()
 
     if args.all:
+        collection_dir = Path(args.collection)
+        # Auto-detect model from pipeline_state.json if --model not provided.
+        if args.model is None:
+            args.model = (
+                get_ner_model(collection_dir)
+                or get_ocr_model(collection_dir)
+                or "gemini-3.1-flash-lite"
+            )
         pattern = f"{args.collection}/*/entries_{args.model}.csv"
         paths = sorted(Path(p) for p in glob.glob(pattern))
         if not paths:

@@ -34,9 +34,9 @@ SCRIPT_DIR = Path(__file__).parent
 DB_PATH = SCRIPT_DIR / "pipeline.db"
 OUTPUT_ROOT = SCRIPT_DIR / "output"
 DEFAULT_PORT = 5001
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
 
-# Matches the first segment of a NYPL-style UUID (8 hex chars)
+# Matches the first segment of a UUID (8 hex chars)
 _UUID_RE = re.compile(r"([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 # Matches any http://127.0.0.1:PORT/... URL in subprocess output
 _SERVER_URL_RE = re.compile(r"http://127\.0\.0\.1:\d+\S*")
@@ -48,25 +48,48 @@ _OUTPUT_SLUG_RE = re.compile(r"\boutput/([^/\s]+)")
 # ---------------------------------------------------------------------------
 
 STAGES = [
-    # (name, label, main.py flag, group, interactive, standalone script path)
+    # (name, label, main.py flag, group, interactive, standalone script path, requires)
+    # 'requires': optional Python package — if missing, stage button is disabled in the UI.
     {"name": "download",           "label": "Download",           "flag": "--download",          "group": "ingest",    "interactive": False, "script": None},
     {"name": "select_pages",       "label": "Select pages",       "flag": "--select-pages",      "group": "calibrate", "interactive": True,  "script": None},
     {"name": "generate_prompts",   "label": "Generate prompts",   "flag": "--generate-prompts",  "group": "calibrate", "interactive": False, "script": None},
-    {"name": "generate_palette",   "label": "Generate palette",   "flag": "--generate-palette",  "group": "calibrate", "interactive": False, "script": None},
-    {"name": "surya_ocr",          "label": "Surya OCR",          "flag": "--surya-ocr",         "group": "ocr",       "interactive": False, "script": None},
+    {"name": "surya_ocr",          "label": "Surya OCR",          "flag": "--surya-ocr",         "group": "ocr",       "interactive": False, "script": None,
+     "requires": "surya", "install_hint": "uv sync --extra gpu"},
     {"name": "gemini_ocr",         "label": "Gemini OCR",         "flag": "--gemini-ocr",        "group": "ocr",       "interactive": False, "script": None},
     {"name": "align_ocr",          "label": "Align OCR",          "flag": "--align-ocr",         "group": "ocr",       "interactive": False, "script": None},
     {"name": "review_alignment",   "label": "Review alignment",   "flag": "--review-alignment",  "group": "review",    "interactive": True,  "script": None},
     {"name": "extract_entries",    "label": "Extract entries",    "flag": "--extract-entries",   "group": "extract",   "interactive": False, "script": None},
     {"name": "explore",            "label": "Explore",            "flag": "--explore",           "group": "extract",   "interactive": False, "script": None},
-    {"name": "geocode",            "label": "Geocode",            "flag": "--geocode",           "group": "extract",   "interactive": False, "script": None},
+    {"name": "geocode",            "label": "Geocode",            "flag": "--geocode",           "group": "extract",   "interactive": False, "script": None,
+     "requires": "geopy", "install_hint": "uv sync --extra geo"},
     {"name": "map",                "label": "Map",                "flag": "--map",               "group": "extract",   "interactive": False, "script": None},
+    {"name": "postprocess",        "label": "Postprocess",        "flag": None,                  "group": "extract",   "interactive": False, "collection_script": "pipeline/postprocess.py"},
     {"name": "export_annotations", "label": "Export annotations", "flag": None,                  "group": "iiif",      "interactive": False, "script": "pipeline/iiif/export_annotations.py"},
     {"name": "export_entry_boxes", "label": "Export entry boxes", "flag": None,                  "group": "iiif",      "interactive": False, "script": "pipeline/iiif/export_entry_boxes.py"},
     {"name": "build_ranges",       "label": "Build ranges",       "flag": None,                  "group": "iiif",      "interactive": False, "script": "pipeline/iiif/build_ranges.py"},
 ]
 
 STAGE_BY_NAME = {s["name"]: s for s in STAGES}
+
+
+def _check_available_packages() -> dict[str, bool]:
+    """Check which optional packages are importable. Runs once at startup."""
+    import importlib
+    packages = {s["requires"] for s in STAGES if s.get("requires")}
+    return {pkg: importlib.util.find_spec(pkg) is not None for pkg in packages}
+
+
+# Checked once at import time so the result is stable across requests.
+_AVAILABLE_PACKAGES: dict[str, bool] = _check_available_packages()
+
+
+def _stage_available(stage_name: str) -> tuple[bool, str]:
+    """Return (available, install_hint). Unavailable = required package missing."""
+    s = STAGE_BY_NAME.get(stage_name, {})
+    pkg = s.get("requires")
+    if pkg and not _AVAILABLE_PACKAGES.get(pkg, True):
+        return False, s.get("install_hint", f"pip install {pkg}")
+    return True, ""
 
 # ---------------------------------------------------------------------------
 # Per-stage argument definitions
@@ -95,6 +118,9 @@ STAGE_ARG_DEFS: dict[str, list[dict]] = {
         {"name": "expand_dittos", "flag": "--expand-dittos",   "type": "bool", "label": "Expand dittos",
          "default": False,
          "hint": "Expand ditto marks (″) into the repeated text from the previous entry."},
+        {"name": "flex",          "flag": "--flex",            "type": "bool", "label": "Flex inference",
+         "default": True,
+         "hint": "Use Gemini Flex inference (~50% cheaper, 1–15 min latency per request). Recommended for large batches where real-time throughput isn't needed. Uncheck for time-sensitive runs."},
         {"name": "high_res",      "flag": "--high-res",        "type": "bool", "label": "High res",
          "default": False,
          "hint": "Send images at higher resolution to the API. Slower and costlier; useful for small or dense text, and recommended for handwritten text (HTR)."},
@@ -102,7 +128,7 @@ STAGE_ARG_DEFS: dict[str, list[dict]] = {
     "align_ocr": [
         {"name": "model",                "flag": "--model",                 "type": "str",   "label": "OCR model",
          "default": DEFAULT_MODEL, "placeholder": "",
-         "hint": "Must match the model used for Gemini OCR (e.g. gemini-2.0-flash). Used to locate the *_{model}.txt files."},
+         "hint": "Model used for Gemini OCR. Auto-detected from pipeline_state.json if left at the default — only override if you ran OCR with a different model."},
         {"name": "workers",              "flag": "--workers",               "type": "int",   "label": "Workers",
          "default": "", "placeholder": "e.g. 4",
          "hint": "Parallel alignment workers."},
@@ -129,8 +155,8 @@ STAGE_ARG_DEFS: dict[str, list[dict]] = {
     ],
     "extract_entries": [
         {"name": "aligned_model", "flag": "--ocr-model", "type": "str", "label": "Aligned model (OCR)",
-         "default": "", "placeholder": "e.g. gemini-2.0-flash",
-         "hint": "OCR model whose *_aligned.json files to use for bounding boxes. Omit to run text-only (no #xywh= in output)."},
+         "default": "", "placeholder": "e.g. gemini-3.1-flash-lite",
+         "hint": "OCR model whose *_aligned.json files to use for bounding boxes. Auto-detected from pipeline_state.json if omitted. Leave blank for text-only (no #xywh= in output)."},
         {"name": "ner_prompt",    "flag": "--ner-prompt",     "type": "str", "label": "NER prompt path",
          "default": "", "placeholder": "e.g. output/slug/ner_prompt.md",
          "hint": "Path to a custom NER prompt. Auto-discovered from output/{slug}/ner_prompt.md if omitted. Reuse across volumes in the same series."},
@@ -152,6 +178,11 @@ STAGE_ARG_DEFS: dict[str, list[dict]] = {
         {"name": "model", "flag": "--model", "type": "str", "label": "Model",
          "default": "", "placeholder": "auto-detect",
          "hint": "Model slug identifying which entries CSV to explore. Leave blank to auto-detect the available CSV. Produces a self-contained interactive HTML explorer with search and filtering."},
+    ],
+    "postprocess": [
+        {"name": "no_combine", "flag": "--no-combine", "type": "bool", "label": "No combine",
+         "default": False,
+         "hint": "Skip the combine step. Use this for single-volume directories that don't need merging."},
     ],
     "export_annotations": [
         {"name": "model", "flag": "--model", "type": "str",  "label": "Model",
@@ -179,7 +210,6 @@ STAGE_HINTS: dict[str, str] = {
     "download":          "Fetches IIIF images to output/{slug}/. Also writes manifest.json, needed for image thumbnails.",
     "select_pages":      "Browser UI with two tabs: Sample (pick 4–10 pages for prompt calibration → selection.txt) and Scope (exclude frontmatter/back-matter → included_pages.txt). Run once per collection type.",
     "generate_prompts":  "Sends selected sample pages to Gemini and generates volume-specific ocr_prompt.md and ner_prompt.md. Run once per collection type; reuse prompts for subsequent volumes.",
-    "generate_palette":  "Generates a color palette from cover pages for the data explorer. Reads cover_pages.txt (from the Cover & colors tab in --select-pages).",
     "surya_ocr":         "Runs Surya's neural line-detection model to produce bounding boxes (*_surya.json). Requires GPU or Apple Silicon. Needed before --align-ocr.",
     "gemini_ocr":        "Sends each image to Gemini for text extraction (*_{model}.txt). Handles rate limits with exponential backoff. Output is cached — safe to re-run.",
     "align_ocr":         "Aligns Gemini text to Surya bounding boxes using Needleman-Wunsch (*_{model}_aligned.json). Produces the #xywh= fragment coordinates used in the entries CSV.",
@@ -188,6 +218,7 @@ STAGE_HINTS: dict[str, str] = {
     "explore":           "Generates a self-contained interactive HTML explorer from the entries CSV. Auto-introspects the schema — search, filter, and browse entries without any additional setup.",
     "geocode":           "Resolves entries to lat/lon coordinates. Uses Google Maps API for address-level geocoding (requires GOOGLE_MAPS_API_KEY) and Nominatim as a city-level fallback.",
     "map":               "Generates a self-contained Leaflet HTML map from the geocoded CSV with clustered markers, search, and IIIF thumbnail popups.",
+    "postprocess":        "Runs the full post-extraction sequence: fix_entries (normalize, deduplicate) → combine_volumes (merge per-volume CSVs) → explore_entries (build interactive HTML explorer). Model is read from pipeline_state.json automatically.",
     "export_annotations": "Converts aligned JSON to W3C Annotation Pages (JSON-LD) for IIIF viewers like Mirador and Universal Viewer.",
     "export_entry_boxes": "Converts entries JSON to colored bounding box annotations (W3C Annotation Pages). Color-coded by establishment category.",
     "build_ranges":      "Builds a IIIF Presentation v3 Range hierarchy (table of contents) from the geocoded CSV, grouping entries by State → City → Category.",
@@ -214,7 +245,7 @@ def _init_db() -> None:
                 url        TEXT NOT NULL,
                 slug       TEXT,
                 output_dir TEXT,
-                model      TEXT NOT NULL DEFAULT 'gemini-2.0-flash',
+                model      TEXT NOT NULL DEFAULT 'gemini-3.1-flash-lite',
                 added_at   TEXT DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS runs (
@@ -297,9 +328,14 @@ def _find_uuid_dirs(output_dir: Path) -> list[Path]:
 
 def _check_stage_done(item: dict) -> dict[str, bool]:
     """Return {stage_name: done_bool} for all stages of an item."""
-    model = item.get("model") or DEFAULT_MODEL
-    item_id = item["id"]
     od = _resolve_output_dir(item)
+    # Use same model resolution as _build_cmd so completion checks stay in sync.
+    model = (
+        _read_pipeline_model(od)
+        or item.get("model")
+        or DEFAULT_MODEL
+    )
+    item_id = item["id"]
 
     results: dict[str, bool] = {}
     for s in STAGES:
@@ -309,15 +345,16 @@ def _check_stage_done(item: dict) -> dict[str, bool]:
 
 
 def _stage_done(stage: str, od: Path | None, model: str, item_id: int) -> bool:
-    if stage == "review_alignment":
-        with _db() as conn:
-            row = conn.execute(
-                "SELECT id FROM runs WHERE item_id=? AND stage=? AND status='done'",
-                (item_id, stage)
-            ).fetchone()
-        return row is not None
-
     if not od or not od.exists():
+        # Before the output dir exists, nothing can be done.
+        if stage == "review_alignment":
+            # Fall back to DB check even with no output dir.
+            with _db() as conn:
+                row = conn.execute(
+                    "SELECT id FROM runs WHERE item_id=? AND stage=? AND status='done'",
+                    (item_id, stage)
+                ).fetchone()
+            return row is not None
         return False
 
     checks = {
@@ -326,14 +363,21 @@ def _stage_done(stage: str, od: Path | None, model: str, item_id: int) -> bool:
                             or list(d.glob("*.png")) or list(d.glob("*.tif")))
             for d in od.iterdir() if d.is_dir()
         ),
-        "select_pages":      lambda: (od / "selection.txt").exists(),
+        # selection.txt may land in the top-level dir or an item subdir.
+        "select_pages":      lambda: bool(list(od.glob("**/selection.txt"))),
         "generate_prompts":  lambda: (od / "ner_prompt.md").exists() or (od / "ocr_prompt.md").exists(),
-        "generate_palette":  lambda: (od / "palette.json").exists(),
         "surya_ocr":         lambda: bool(list(od.glob("**/*_surya.json"))),
         "gemini_ocr":        lambda: bool(list(od.glob(f"**/*_{model}.txt"))),
         "align_ocr":         lambda: bool(list(od.glob(f"**/*_{model}_aligned.json"))),
+        # review_alignment: any aligned JSON with a manually-confirmed line is sufficient.
+        "review_alignment":  lambda: bool([
+            f for f in od.glob(f"**/*_{model}_aligned.json")
+            if any(ln.get("confidence") == "manual"
+                   for ln in (json.loads(f.read_text(encoding="utf-8")).get("lines") or []))
+        ]) or _db_stage_done(stage, item_id),
         "extract_entries":   lambda: bool(list(od.glob("**/entries_*.csv"))),
         "explore":           lambda: bool(list(od.glob("**/entries_*_explorer.html"))),
+        "postprocess":       lambda: (od / "combined.csv").exists() or bool(list(od.glob("**/entries_*_fixed.csv"))),
         "geocode":           lambda: bool(list(od.glob("**/entries_*_geocoded.csv"))),
         "map":               lambda: bool(list(od.glob("**/entries_*.html"))),
         "export_annotations": lambda: bool([
@@ -344,7 +388,37 @@ def _stage_done(stage: str, od: Path | None, model: str, item_id: int) -> bool:
     }
     fn = checks.get(stage)
     try:
-        return fn() if fn else False
+        result = fn() if fn else False
+    except Exception:
+        result = False
+
+    # Final fallback: check pipeline_state.json for stages run via the CLI.
+    if not result:
+        result = _pipeline_state_stage_done(od, stage)
+
+    return result
+
+
+def _db_stage_done(stage: str, item_id: int) -> bool:
+    """Check the runs DB for a 'done' record (fallback for stages with no file artifact)."""
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT id FROM runs WHERE item_id=? AND stage=? AND status='done'",
+            (item_id, stage)
+        ).fetchone()
+    return row is not None
+
+
+def _pipeline_state_stage_done(od: Path | None, stage: str) -> bool:
+    """Check pipeline_state.json for stages completed via the CLI outside the dashboard."""
+    if not od:
+        return False
+    state_file = od / "pipeline_state.json"
+    if not state_file.exists():
+        return False
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        return stage in (state.get("stages_completed") or [])
     except Exception:
         return False
 
@@ -404,8 +478,12 @@ _RUNS: dict[int, dict] = {}       # run_id -> state dict
 _SUBS: dict[int, list] = {}       # run_id -> list[Queue]
 _RUNS_LOCK = threading.Lock()
 
+# Interactive stages: Ctrl-C (SIGINT, exit 130) means the user is finished,
+# not that something went wrong.
+_INTERACTIVE_STAGES = {"select_pages", "review_alignment"}
 
-def _reader_thread(run_id: int, item_id: int) -> None:
+
+def _reader_thread(run_id: int, item_id: int, stage_name: str) -> None:
     """Read subprocess stdout/stderr, notify SSE subscribers, update DB on finish."""
     run = _RUNS[run_id]
     proc = run["process"]
@@ -439,7 +517,9 @@ def _reader_thread(run_id: int, item_id: int) -> None:
         run["finished"] = True
         run["exit_code"] = exit_code
 
-    status = "done" if exit_code == 0 else "failed"
+    # For interactive stages, Ctrl-C (exit 130) means the user finished normally.
+    sigint_exit = exit_code in (130, -2)
+    status = "done" if exit_code == 0 or (sigint_exit and stage_name in _INTERACTIVE_STAGES) else "failed"
     log_text = "\n".join(run["log_lines"])
 
     # Try to detect output_dir from log output
@@ -501,9 +581,23 @@ def _start_run(item_id: int, stage_name: str, cmd: list[str], forced: bool = Fal
     with _RUNS_LOCK:
         _RUNS[run_id] = run_state
 
-    t = threading.Thread(target=_reader_thread, args=(run_id, item_id), daemon=True)
+    t = threading.Thread(target=_reader_thread, args=(run_id, item_id, stage_name), daemon=True)
     t.start()
     return run_id
+
+
+def _read_pipeline_model(od: Path | None) -> str | None:
+    """Read the OCR/NER model from pipeline_state.json if present."""
+    if not od:
+        return None
+    state_file = od / "pipeline_state.json"
+    if not state_file.exists():
+        return None
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        return state.get("ner_model") or state.get("ocr_model")
+    except Exception:
+        return None
 
 
 def _build_cmd(
@@ -516,11 +610,26 @@ def _build_cmd(
     """Build the subprocess command for a pipeline stage."""
     overrides = overrides or {}
     s = STAGE_BY_NAME[stage]
-    model = overrides.get("model") or item.get("model") or DEFAULT_MODEL
+    od = _resolve_output_dir(item)
+    # Model resolution: explicit override > pipeline_state.json > DB item model > default
+    model = (
+        overrides.get("model")
+        or _read_pipeline_model(od)
+        or item.get("model")
+        or DEFAULT_MODEL
+    )
     effective_force = force or bool(overrides.get("force"))
     effective_workers = overrides.get("workers") or workers
 
-    if s["flag"] is not None:
+    if s.get("collection_script"):
+        # Collection-level script — pass the output dir directly (not a UUID subdir)
+        script_path = SCRIPT_DIR / s["collection_script"]
+        if not od:
+            raise ValueError("Output directory not found. Run --download first.")
+        cmd = [sys.executable, str(script_path), str(od)]
+        if effective_force:
+            cmd.append("--force")
+    elif s["flag"] is not None:
         # Route through main.py
         # For 'explore', omit --model unless the user explicitly set it so that
         # explore_entries.py can auto-detect whichever entries_*.csv is present.
@@ -534,25 +643,24 @@ def _build_cmd(
     else:
         # IIIF standalone script — needs a UUID subdir
         script_path = SCRIPT_DIR / s["script"]
-        od = _resolve_output_dir(item)
         if not od:
             raise ValueError("Output directory not found. Run --download first.")
         uuid_dirs = _find_uuid_dirs(od)
         if not uuid_dirs:
             raise ValueError(f"No item subdirectory found in {od}. Run --download first.")
-        # Use the first UUID dir (v1 limitation: collections with multiple items
-        # will only process the first one)
         uuid_dir = uuid_dirs[0]
         cmd = [sys.executable, str(script_path), str(uuid_dir), "--model", model]
         if effective_force:
             cmd.append("--force")
 
-    # Append remaining stage-specific overrides
+    # Append remaining stage-specific overrides, falling back to arg_def defaults.
     for arg_def in STAGE_ARG_DEFS.get(stage, []):
         name = arg_def["name"]
         if name in ("model", "force", "workers"):
             continue  # already handled above
         val = overrides.get(name)
+        if val is None:
+            val = arg_def.get("default")  # use UI default when user hasn't overridden
         if val is None or val == "" or val is False:
             continue
         flag = arg_def["flag"]
@@ -572,12 +680,18 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
-    stages_for_js = [
-        {"name": s["name"], "label": s["label"],
-         "group": s["group"], "interactive": s["interactive"],
-         "flag": s["flag"]}
-        for s in STAGES
-    ]
+    stages_for_js = []
+    for s in STAGES:
+        available, install_hint = _stage_available(s["name"])
+        stages_for_js.append({
+            "name":         s["name"],
+            "label":        s["label"],
+            "group":        s["group"],
+            "interactive":  s["interactive"],
+            "flag":         s["flag"],
+            "available":    available,
+            "install_hint": install_hint,
+        })
     return render_template_string(
         _HTML,
         stages_json=json.dumps(stages_for_js),
@@ -709,6 +823,16 @@ def run_stage_endpoint(item_id, stage):
     if stage not in STAGE_BY_NAME:
         return jsonify({"error": "unknown stage"}), 400
 
+    # Reject immediately if a required package isn't installed.
+    available, install_hint = _stage_available(stage)
+    if not available:
+        pkg = STAGE_BY_NAME[stage].get("requires", "")
+        return jsonify({
+            "error": f"'{pkg}' is not installed. Run: {install_hint}",
+            "unavailable": True,
+            "install_hint": install_hint,
+        }), 422
+
     # Prevent duplicate concurrent runs
     with _db() as conn:
         running = conn.execute(
@@ -722,6 +846,17 @@ def run_stage_endpoint(item_id, stage):
     force = bool(data.get("force", False))
     workers = data.get("workers")
     overrides = data.get("overrides") or {}
+
+    # Guard: refuse to re-run a completed stage unless force=True.
+    # This catches the case where the UI's model mismatch caused a "pending"
+    # status but the files actually exist on disk.
+    if not force:
+        done_map = _check_stage_done(item)
+        if done_map.get(stage):
+            return jsonify({
+                "error": "already done — use force to re-run",
+                "status": "done",
+            }), 409
 
     try:
         cmd = _build_cmd(item, stage, force=force, workers=workers, overrides=overrides)
@@ -1019,7 +1154,7 @@ header h1 { font-size: 13px; font-weight: normal; color: var(--muted); flex-shri
     <input id="url-input"   type="text"
            placeholder="IIIF manifest URL or collection URL"
            autocomplete="off" spellcheck="false">
-    <input id="model-input" type="text" value="gemini-2.0-flash" placeholder="model">
+    <input id="model-input" type="text" value="gemini-3.1-flash-lite" placeholder="model">
     <button type="submit">+ Add item</button>
     <span id="add-error"></span>
   </form>
@@ -1253,6 +1388,18 @@ function buildStageControl(item, stage, status) {
     return wrap;
   }
 
+  // Unavailable: required package not installed.
+  if (stage.available === false) {
+    btn.disabled = true;
+    btn.title = `Not available — install with: ${stage.install_hint}`;
+    const hint = el('span');
+    hint.style.cssText = 'font-size:11px;color:var(--muted);margin-left:6px;';
+    hint.textContent = stage.install_hint;
+    wrap.appendChild(btn);
+    wrap.appendChild(hint);
+    return wrap;
+  }
+
   // Arg panel
   const panel = el('div', 'arg-panel');
   panel.dataset.stage = stage.name;
@@ -1353,7 +1500,7 @@ function gatherOverrides(fields) {
 function bool(v) { return v === true || v === 'true'; }
 
 function buildCmdPreview(item, stage, overrides) {
-  const model = overrides.model || item.model || 'gemini-2.0-flash';
+  const model = overrides.model || item.model || 'gemini-3.1-flash-lite';
   const parts = ['python main.py', item.url || '<url>'];
   if (stage.flag) {
     parts.push(stage.flag);
@@ -1523,7 +1670,20 @@ async function runStage(itemId, stageName, force, overrides = {}) {
     body: JSON.stringify({force, overrides}),
   });
   const data = await res.json();
-  if (!res.ok) { alert(data.error || 'Failed to start stage'); return; }
+  if (!res.ok) {
+    if (data.status === 'done') {
+      // Stale UI — stage was already done but showed as pending (e.g. model slug changed).
+      // Refresh status silently so the button updates to "Force-run".
+      await refreshItem(itemId);
+      return;
+    }
+    if (data.unavailable) {
+      alert(`Cannot run ${stageName}: ${data.error}`);
+      return;
+    }
+    alert(data.error || 'Failed to start stage');
+    return;
+  }
 
   const runId = data.run_id;
   const stage = STAGES.find(s => s.name === stageName);
