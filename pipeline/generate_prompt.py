@@ -297,7 +297,7 @@ def _detect_two_columns(image_paths: list[Path]) -> bool:
 
     A strict majority of usable pages must be detected as 2-column.
     """
-    from detect_columns import analyze_image  # sibling pipeline module
+    from pipeline.detect_columns import analyze_image
 
     two_col = 0
     usable = 0
