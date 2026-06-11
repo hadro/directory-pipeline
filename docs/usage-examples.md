@@ -193,3 +193,50 @@ python main.py collections.txt --compare-ocr \
 # Force re-processing of already-completed OCR + alignment
 pipeline ocr output/ldpd_11290437_000/ --force
 ```
+
+---
+
+## 9. Using pieces as a library
+
+Everything in `pipeline/api.py` is supported for direct use from notebooks and
+external scripts — no CLI required. (Anything *not* re-exported there is
+internal and may change without notice; the API itself is provisional until a
+1.0 release.) A runnable tour lives in `colab/library-cookbook.ipynb`.
+
+```python
+# Walk any public IIIF manifest (v2 or v3) — works with no pipeline run at all
+import json, urllib.request
+from pipeline.api import iter_canvases, image_url
+
+manifest = json.load(urllib.request.urlopen("https://www.loc.gov/item/01015253/manifest.json"))
+for canvas in iter_canvases(manifest):
+    print(canvas["canvas_id"], image_url(canvas["service_id"], width=1024))
+```
+
+```python
+# Find what a pipeline run produced, then load the entries
+from pathlib import Path
+import csv
+from pipeline.api import get_ocr_model, discover_ocr_slug
+
+vol = Path("output/my_volume")
+model = get_ocr_model(vol) or discover_ocr_slug(vol)
+with next(vol.rglob(f"entries_{model}*.csv")).open() as fh:
+    entries = list(csv.DictReader(fh))
+```
+
+```python
+# Parse Surya OCR output; clean and merge entries CSVs
+from pipeline.api import parse_surya, process_csv, combine_volumes
+
+page_bbox, lines, median_conf = parse_surya(vol / "item" / "0001_x_surya.json")
+stats = process_csv(src_csv, dst_csv, infer_categories=True)
+combine_volumes(collection_dir, collection_dir / "combined.csv")
+```
+
+```python
+# Call Gemini yourself, with the pipeline's retry/backoff behavior
+from pipeline.api import get_client, generate_with_retry
+
+client = get_client()   # reads GEMINI_API_KEY from the environment / .env
+```

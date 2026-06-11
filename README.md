@@ -113,6 +113,7 @@ export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geo
 | Geocode entries and build a map | `pipeline extract output/<vol>/ --geocode --map` |
 | Full pipeline with page scoping + alignment review | `pipeline guided <URL>` |
 | Clean + merge volumes after extraction | `pipeline postprocess output/<collection>/` |
+| Use pipeline pieces from a notebook or script | `from pipeline.api import iter_canvases, …` [→ details](docs/usage-examples.md#9-using-pieces-as-a-library) |
 | Export W3C/IIIF annotations | `python -m pipeline.iiif.export_annotations` |
 
 ### Multimodal extraction
