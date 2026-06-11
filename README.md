@@ -116,7 +116,7 @@ export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geo
 |---|---|
 | Add spatial bounding boxes to every row | `pipeline ocr output/<vol>/` [→ details](#precision-upgrade) |
 | Interactively fix unmatched lines | `pipeline review output/<vol>/` |
-| Improve geographic accuracy on complex materials | `pipeline extract output/<vol>/ --mode multimodal` [→ details](#multimodal-extraction) |
+| Improve accuracy on complex layout-dependent materials | `pipeline extract output/<vol>/ --mode multimodal` [→ details](#multimodal-extraction) |
 | Geocode entries and build a map | `pipeline extract output/<vol>/ --geocode --map` |
 | Full pipeline with page scoping + alignment review | `pipeline guided <URL>` |
 | Clean + merge volumes after extraction | `pipeline postprocess output/<collection>/` |
