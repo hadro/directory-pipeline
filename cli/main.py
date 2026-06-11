@@ -391,8 +391,8 @@ _SUBPARSERS = {
     "ingest":      (_parser_ingest,      _ingest),
     "calibrate":   (_parser_calibrate,   _calibrate),
     "ocr":         (_parser_ocr,         _ocr),
-    "extract":     (_parser_extract,     _extract),
     "review":      (_parser_review,      _review),
+    "extract":     (_parser_extract,     _extract),
     "postprocess": (_parser_postprocess, _postprocess),
 }
 
@@ -402,8 +402,8 @@ _DESCRIPTIONS = {
     "ingest":      "Download IIIF images for a collection or item",
     "calibrate":   "Select sample pages + generate OCR/NER prompts (once per collection type)",
     "ocr":         "Run Surya OCR + Gemini OCR + align bboxes",
-    "extract":     "Extract structured entries + build HTML explorer",
     "review":      "Interactive Flask UI to correct alignment mismatches",
+    "extract":     "Extract structured entries + build HTML explorer",
     "postprocess": "Fix entries, combine volumes, build explorer (post-extraction)",
 }
 
