@@ -94,8 +94,8 @@ pipeline guided <URL>          # human-in-loop: page selection + alignment revie
 pipeline ingest <URL>          # download only
 pipeline calibrate <URL|DIR>   # select sample pages + generate prompts (once per collection type)
 pipeline ocr    <DIR>          # Surya OCR + Gemini OCR + align bboxes
-pipeline extract <DIR>         # NER extraction + explorer
 pipeline review  <DIR>         # interactive alignment review (browser UI)
+pipeline extract <DIR>         # NER extraction + explorer
 pipeline postprocess <DIR>     # fix + combine volumes + rebuild explorer
 ```
 
@@ -152,7 +152,7 @@ pipeline review output/<vol>/    # optional: fix unmatched lines interactively
 
 ## Costs
 
-A single ~80-page volume costs roughly **$0.60 in Gemini API charges** at standard rates, or **~$0.30 with `--flex`**, and can run within the free tier's daily quota (~15–20 minutes at 15 RPM). See [docs/costs.md](docs/costs.md) for a full breakdown including platform costs (Surya OCR on Mac, Colab, and GPU).
+A single ~80-page volume costs roughly **~$0.30 in Gemini API charges with `--flex`** or **$0.60** at standard rates, and can run within the free tier's daily quota (~15–20 minutes at 15 RPM). See [docs/costs.md](docs/costs.md) for a full breakdown including platform costs (Surya OCR on Mac, Colab, and GPU).
 
 ---
 

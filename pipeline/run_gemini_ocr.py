@@ -34,6 +34,7 @@ load_dotenv()
 from google.genai.types import FinishReason, GenerateContentConfig, MediaResolution, Part, ThinkingConfig
 
 from utils.gemini import flex_http_options, generate_with_retry, get_client
+from utils.image_utils import is_blank_page
 from utils.models import DEFAULT_OCR_MODEL, FALLBACK_MODEL, model_slug
 
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
@@ -220,7 +221,7 @@ def process_image(
 ) -> tuple[str, bool | None]:
     """
     OCR one image via Gemini. Returns (status, success) where status is one of
-    'skipped', 'ok', 'failed'.
+    'skipped', 'blank', 'ok', 'failed'.
     """
     txt_path = image_path.parent / f"{image_path.stem}_{model_slug(model)}.txt"
     if txt_path.exists():
@@ -229,6 +230,13 @@ def process_image(
         # File is empty — previous run produced no output; delete and retry.
         _log(f"  Re-running (empty output file): {txt_path.name}")
         txt_path.unlink()
+
+    # Blank pages are hallucination magnets — the model invents the text the
+    # prompt describes instead of returning nothing. Detect and skip them
+    # before spending an API call. No .txt is written, so downstream stages
+    # (align, extract) never see the page; re-runs just re-check (cheap).
+    if is_blank_page(image_path):
+        return "blank", None
 
     with open(image_path, "rb") as f:
         img_bytes = f.read()
@@ -528,7 +536,7 @@ def main() -> None:
         )
 
     client = get_client()
-    counts = {"ok": 0, "skipped": 0, "failed": 0}
+    counts = {"ok": 0, "skipped": 0, "blank": 0, "failed": 0}
     completed = 0
 
     fallback_model = args.fallback_model.strip() or None
@@ -555,6 +563,8 @@ def main() -> None:
                 txt_name = f"{image_path.stem}_{model_slug(args.model)}.txt"
                 if status == "skipped":
                     _log(f"[{completed:04d}/{total}] Skipped (exists): {txt_name}")
+                elif status == "blank":
+                    _log(f"[{completed:04d}/{total}] Blank page — no OCR: {image_path.name}")
                 elif status == "ok":
                     _log(f"[{completed:04d}/{total}] Done: {txt_name}")
                 else:
@@ -563,7 +573,8 @@ def main() -> None:
     if not args.quiet:
         print(
             f"\nDone. {total} image(s): "
-            f"{counts['ok']} processed, {counts['skipped']} skipped, {counts['failed']} failed.",
+            f"{counts['ok']} processed, {counts['skipped']} skipped, "
+            f"{counts['blank']} blank, {counts['failed']} failed.",
             file=sys.stderr,
         )
 
