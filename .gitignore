@@ -2,15 +2,11 @@
 output/*
 analysis/data/
 ideas_and_questions.md
-old/*
-colab.sh
-spacetime/*
-collection_csv/*
 scripts/*
 docs/item_ideas.md
 docs/notes.md
-my_collections/
 collections/
+old/*
 
 # tmp files
 .tmp*
@@ -44,6 +40,7 @@ logs/
 
 # Ephemeral session notes
 docs/session-handoff-*.md
+docs/refactor-plan.md
 
 # Local ad-hoc screenshots (curated ones under docs/screenshots/ are tracked)
 docs/screenshots/Screenshot*
@@ -52,9 +49,7 @@ docs/screenshots/Screenshot*
 research/*
 
 # Run files
-test.txt
 pipeline.db
-collections.txt
 analysis/chandra_eval.py
 analysis/surya_eval.py
 pipeline/output/*
