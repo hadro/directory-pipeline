@@ -69,9 +69,12 @@ pipeline guided <URL>
 ```
 
 (equivalent to `python main.py <URL> --guided`). `--guided` is shorthand for `--download --select-pages --surya-ocr --gemini-ocr
---align-ocr --review-alignment --extract-entries --geocode --map`. It pauses at
+--align-ocr --review-alignment --extract-entries --explore` — the `pipeline run` arc plus the
+human-in-the-loop stages. It pauses at
 `--select-pages` (to scope which pages to process) and again at `--review-alignment`
 (to correct unmatched lines) before continuing. Requires GPU or Apple Silicon for Surya.
+Geo stages are not included; for materials with address fields, run
+`pipeline geo output/{slug}/` (or `--geocode --map`) afterwards.
 
 If `ner_prompt.md` exists from a prior collection run, append:
 ```

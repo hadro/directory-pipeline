@@ -96,6 +96,7 @@ pipeline calibrate <URL|DIR>   # select sample pages + generate prompts (once pe
 pipeline ocr    <DIR>          # Surya OCR + Gemini OCR + align bboxes
 pipeline review  <DIR>         # interactive alignment review (browser UI)
 pipeline extract <DIR>         # NER extraction + explorer
+pipeline geo     <DIR>         # geocode entries + build map (needs address fields)
 pipeline postprocess <DIR>     # fix + combine volumes + rebuild explorer
 ```
 
@@ -117,7 +118,7 @@ export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geo
 | Add spatial bounding boxes to every row | `pipeline ocr output/<vol>/` [→ details](#precision-upgrade) |
 | Interactively fix unmatched lines | `pipeline review output/<vol>/` |
 | Improve accuracy on complex layout-dependent materials | `pipeline extract output/<vol>/ --mode multimodal` [→ details](#multimodal-extraction) |
-| Geocode entries and build a map | `pipeline extract output/<vol>/ --geocode --map` |
+| Geocode entries and build a map | `pipeline geo output/<vol>/` |
 | Full pipeline with page scoping + alignment review | `pipeline guided <URL>` |
 | Clean + merge volumes after extraction | `pipeline postprocess output/<collection>/` |
 | Use pipeline pieces from a notebook or script | `from pipeline.api import iter_canvases, …` [→ details](docs/usage-examples.md#9-using-pieces-as-a-library) |

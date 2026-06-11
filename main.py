@@ -34,9 +34,11 @@ command line:
   --generate-prompts    pipeline/generate_prompt.py  (Gemini generates volume-specific OCR + NER prompts from sample pages)
 
   --guided              shorthand for --download --select-pages --surya-ocr --gemini-ocr
-                          --align-ocr --review-alignment --extract-entries --geocode --map
-                          (defaults --batch-size and --workers to 8;
-                          run --generate-prompts first for new collection types)
+                          --align-ocr --review-alignment --extract-entries --explore
+                          (the --extract pipeline plus human-in-the-loop stages;
+                          defaults --batch-size to 4 and --workers to 8;
+                          run --generate-prompts first for new collection types;
+                          add --geocode --map for materials with addresses)
 
 Key model flags:
   --ocr-model MODEL     Gemini model for OCR and downstream stages (each stage uses its own default if omitted)
@@ -651,9 +653,11 @@ def main() -> None:
         dest="guided",
         action="store_true",
         help=(
-            "Human-in-the-loop shorthand for the full pipeline: "
+            "Human-in-the-loop shorthand: the --extract pipeline plus page scoping, "
+            "alignment, and review — "
             "--download --select-pages --surya-ocr --gemini-ocr --align-ocr --review-alignment "
-            "--extract-entries --geocode --map. "
+            "--extract-entries --explore. "
+            "Geo stages are not included; add --geocode --map for materials with addresses. "
             "Pauses at --select-pages (page scoping), --review-alignment (unmatched line correction), "
             "and expects --generate-prompts to have been run first for new collection types. "
             "Defaults --batch-size to 4 and --workers to 8 unless already set. "
@@ -915,10 +919,13 @@ def main() -> None:
         for flag in ("download", "gemini_ocr", "extract_entries", "explore"):
             setattr(args, flag, True)
 
-    # Expand --guided into its constituent stage flags and defaults (human-in-the-loop path)
+    # Expand --guided into its constituent stage flags and defaults: the same
+    # arc as --extract plus the human-in-the-loop stages. Geo stages are
+    # material-dependent (need address fields) — run them via --geocode --map
+    # or `pipeline geo` afterwards.
     if args.guided:
         for flag in ("download", "select_pages", "surya_ocr", "gemini_ocr", "align_ocr",
-                     "review_alignment", "extract_entries", "geocode", "map"):
+                     "review_alignment", "extract_entries", "explore"):
             setattr(args, flag, True)
         if args.batch_size is None:
             args.batch_size = 4

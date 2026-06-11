@@ -88,9 +88,16 @@ pipeline review output/ldpd_11290437_000/
 
 ## 5. Geocoding and maps
 
+Geo stages run separately from `pipeline run`/`guided` — they only make sense
+for materials whose entries carry address or city/state fields, and they need
+the geo extra (`uv sync --extra geo`).
+
 ```bash
 # Geocode entries (Nominatim city-level by default; Google Maps with API key),
 # then build the interactive Leaflet map. The model slug is auto-detected.
+pipeline geo output/ldpd_11290437_000/
+
+# Equivalent flag-level invocation:
 python main.py output/ldpd_11290437_000/ --geocode --map
 
 # Generate map with IIIF Content State deep-links (opens viewer at exact page and region)

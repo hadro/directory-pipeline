@@ -29,6 +29,7 @@ pipeline calibrate <DIR>       # select sample pages + generate prompts (once pe
 pipeline ocr    <DIR>          # Surya OCR + Gemini OCR + align bboxes
 pipeline extract <DIR>         # NER extraction + build explorer
 pipeline review  <DIR>         # interactive Flask alignment review
+pipeline geo     <DIR>         # geocode entries + build map (needs address fields)
 pipeline postprocess <DIR>     # fix + combine + build explorer (post-extraction)
 ```
 

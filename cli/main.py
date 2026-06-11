@@ -10,6 +10,7 @@ Usage
     pipeline ocr      DIR   [flags]   # Surya OCR + Gemini OCR + alignment
     pipeline extract  DIR   [flags]   # NER extraction + explorer
     pipeline review   DIR             # interactive alignment review (Flask UI)
+    pipeline geo      DIR   [flags]   # geocode entries + build map
     pipeline postprocess DIR [flags]  # fix + combine + explorer (post-extraction)
 
 Examples
@@ -93,9 +94,11 @@ def _parser_guided() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pipeline guided",
         description=(
-            "Human-in-loop pipeline: download → select pages → Surya OCR → "
-            "Gemini OCR → align → review alignment → extract → geocode → map.\n\n"
-            "Pauses at --select-pages and --review-alignment for user input."
+            "Human-in-loop pipeline: the same arc as `pipeline run` plus page "
+            "selection, alignment, and review — download → select pages → "
+            "Surya OCR → Gemini OCR → align → review alignment → extract → explore.\n\n"
+            "Pauses at --select-pages and --review-alignment for user input.\n"
+            "For materials with addresses, run `pipeline geo` afterwards."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -349,6 +352,37 @@ def _review(args: argparse.Namespace) -> None:
     _exec(cmd)
 
 
+def _parser_geo() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="pipeline geo",
+        description=(
+            "Geocode extracted entries and build an interactive HTML map.\n\n"
+            "Run after `pipeline run`/`guided`/`extract` on materials whose "
+            "entries carry address or city/state fields. Requires the geo "
+            "extra (uv sync --extra geo); address-level geocoding uses "
+            "GOOGLE_MAPS_API_KEY if set, with Nominatim as city-level fallback."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("source", help="Output directory (e.g. output/my_vol/)")
+    p.add_argument("--model", "-m", metavar="MODEL", default=None,
+                   help="Model slug identifying which entries CSV to geocode "
+                        "(auto-detected if omitted)")
+    p.add_argument("--no-map", action="store_true",
+                   help="Geocode only; skip building the HTML map")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print commands without executing")
+    return p
+
+
+def _geo(args: argparse.Namespace) -> None:
+    cmd = [_MAIN, args.source, "--geocode"]
+    if not args.no_map: cmd.append("--map")
+    if args.model:      cmd += ["--ocr-model", args.model]
+    if args.dry_run:    cmd.append("--dry-run")
+    _exec(cmd)
+
+
 def _parser_postprocess() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pipeline postprocess",
@@ -393,17 +427,19 @@ _SUBPARSERS = {
     "ocr":         (_parser_ocr,         _ocr),
     "review":      (_parser_review,      _review),
     "extract":     (_parser_extract,     _extract),
+    "geo":         (_parser_geo,         _geo),
     "postprocess": (_parser_postprocess, _postprocess),
 }
 
 _DESCRIPTIONS = {
     "run":         "Download, OCR, extract, build explorer (one-shot automated)",
-    "guided":      "Human-in-loop: page selection + alignment review + full pipeline",
+    "guided":      "Human-in-loop: pipeline run plus page selection + alignment review",
     "ingest":      "Download IIIF images for a collection or item",
     "calibrate":   "Select sample pages + generate OCR/NER prompts (once per collection type)",
     "ocr":         "Run Surya OCR + Gemini OCR + align bboxes",
     "review":      "Interactive Flask UI to correct alignment mismatches",
     "extract":     "Extract structured entries + build HTML explorer",
+    "geo":         "Geocode entries + build interactive map (needs address fields)",
     "postprocess": "Fix entries, combine volumes, build explorer (post-extraction)",
 }
 
