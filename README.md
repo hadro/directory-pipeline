@@ -41,7 +41,7 @@ Requires `GEMINI_API_KEY`. Can run on the [free tier](#costs) — no billing req
 
 ## What you get
 
-A CSV where every row is one extracted entry. Field names are driven entirely by your NER prompt — no code changes necessary for a new document or volume of the same type:
+A CSV where every row is one extracted entry. Field names are driven entirely by your NER prompt — no code changes necessary for a new document or volume of the same type. An example entry from a travel guide:
 
 | name | address | city | state | category | canvas_fragment |
 |---|---|---|---|---|---|
@@ -63,6 +63,13 @@ Two published collections built with this pipeline:
 
 - **[Tulsa city directories — 1921](https://hadro.github.io/tulsa-city-directories/1921#about)** — a Polk-style city directory.
 - **[The Negro Motorist Green Book explorer](https://hadro.github.io/green-books/explorer#about)** — the full run of Green Book volumes.
+
+<p>
+  <a href="https://hadro.github.io/tulsa-city-directories/1921#about"><img src="docs/screenshots/tulsa-city-directory-entry.png" width="49%" alt="Tulsa 1921 city directory explorer: entry detail with a crop of the source scan highlighting the matched line"></a>
+  <a href="https://hadro.github.io/green-books/explorer#about"><img src="docs/screenshots/green-books-entry.png" width="49%" alt="Green Book explorer: faceted entry list with a detail panel showing cross-year listings and a location map"></a>
+</p>
+
+*Entry detail views from the published explorers. Left: each Tulsa entry renders the exact line from the source scan via its `canvas_fragment` URI. Right: a Green Book establishment with its listing history across volumes.*
 
 > Both explorers received additional front-end design work beyond what the pipeline generates. The pipeline produces the entry CSVs, IIIF manifests, and a baseline HTML explorer; these published sites build on that output.
 
