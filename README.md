@@ -26,6 +26,10 @@ pipeline calibrate https://archive.org/details/ldpd_11290437_000/
 
 # Automated run — produces the entries CSV + browsable HTML explorer
 pipeline run       https://archive.org/details/ldpd_11290437_000/
+
+# Or the human-in-the-loop version of the same run: adds page scoping,
+# #xywh= bounding boxes, and interactive alignment review (needs GPU or Apple Silicon)
+pipeline guided    https://archive.org/details/ldpd_11290437_000/
 ```
 
 **Calibrate once, run many.** `pipeline calibrate` is a one-time step per collection type: it opens a browser UI where you pick 4–10 representative pages, then has Gemini analyze them and write tailored OCR and extraction prompts. For any additional volume in the same series, point to the first volume's NER prompt and skip calibration entirely:
