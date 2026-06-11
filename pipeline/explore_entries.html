@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline Data Explorer — {title_json_safe}</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6/dist/plot.umd.min.js"></script>
+<style>
+*, *::before, *::after {{ box-sizing: border-box; }}
+html, body {{ margin: 0; padding: 0; height: 100%; font-family: system-ui, sans-serif; font-size: 14px; background: #f8f8f6; color: #222; }}
+a {{ color: #1a6ebd; }}
+#app {{ display: flex; height: 100dvh; overflow: hidden; }}
+
+/* ── Sidebar ── */
+#sidebar {{ width: 240px; min-width: 200px; max-width: 300px; background: #fff; border-right: 1px solid #ddd; display: flex; flex-direction: column; overflow: hidden; }}
+#sidebar-header {{ padding: 14px 16px 10px; border-bottom: 1px solid #eee; }}
+#sidebar-header h1 {{ margin: 0 0 5px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #1a6ebd; }}
+#sidebar-header h2 {{ margin: 0 0 2px; font-size: 14px; font-weight: 700; line-height: 1.3; word-break: break-word; }}
+#sidebar-header .sub {{ font-size: 12px; color: #595959; }}
+#volume-wrap {{ margin-top: 10px; display: none; background: #eef3fb; border: 1px solid #5a86b8; border-radius: 5px; padding: 8px 10px; }}
+#volume-select {{ width: 100%; font-size: 12px; padding: 4px 6px; border: 1px solid #767676; border-radius: 4px; background: #fff; color: #333; cursor: pointer; }}
+#sidebar-scroll {{ overflow-y: auto; flex: 1; padding: 10px 14px 20px; }}
+
+.facet-group {{ margin-bottom: 14px; }}
+.facet-label {{ font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #555; margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center; }}
+.facet-clear {{ font-size: 11px; font-weight: 400; text-transform: none; color: #1a6ebd; cursor: pointer; letter-spacing: 0; background: none; border: none; padding: 4px 6px; margin: -4px -6px -4px 0; }}
+.facet-item {{ display: flex; align-items: center; gap: 6px; margin-bottom: 3px; cursor: pointer; user-select: none; }}
+.facet-item input[type=checkbox] {{ accent-color: #1a6ebd; cursor: pointer; flex-shrink: 0; }}
+.facet-item .val {{ flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }}
+.facet-item .cnt {{ font-size: 11px; color: #595959; flex-shrink: 0; }}
+.facet-more {{ font-size: 11px; color: #595959; margin-top: 3px; cursor: pointer; background: none; border: none; padding: 6px 4px; margin-left: -4px; text-align: left; }}
+.facet-more:hover {{ color: #1a6ebd; }}
+
+/* ── Main panel ── */
+#main {{ flex: 1; display: flex; flex-direction: column; overflow: hidden; }}
+#toolbar {{ padding: 10px 16px; border-bottom: 1px solid #ddd; background: #fff; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+#search-wrap {{ flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 3px; }}
+#search {{ width: 100%; padding: 6px 10px; border: 1px solid #767676; border-radius: 4px; font-size: 13px; }}
+#search-scope-label {{ font-size: 11px; color: #888; line-height: 1.2; }}
+#count-label {{ font-size: 12px; color: #666; white-space: nowrap; }}
+#clear-filters-btn {{ display: none; padding: 4px 10px; background: #fff; border: 1px solid #c66; border-radius: 4px; cursor: pointer; font-size: 12px; color: #b33; white-space: nowrap; }}
+#clear-filters-btn:hover {{ background: #fff0f0; border-color: #a44; }}
+#clear-filters-btn:focus-visible {{ outline: 2px solid #1a6ebd; outline-offset: 2px; }}
+#export-btn {{ padding: 5px 12px; background: #1a6ebd; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; }}
+#export-btn:hover {{ background: #155a9e; }}
+#random-btn {{ padding: 5px 12px; background: #fff; border: 1px solid #767676; border-radius: 4px; cursor: pointer; font-size: 12px; color: #595959; white-space: nowrap; }}
+#random-btn:hover {{ border-color: #1a6ebd; color: #1a6ebd; }}
+#random-btn:focus-visible {{ outline: 2px solid #1a6ebd; outline-offset: 2px; }}
+#meta-strip {{ margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; flex-shrink: 0; }}
+.meta-chip {{ font-size: 11px; background: #f0f0ee; border: 1px solid #ddd; border-radius: 10px; padding: 2px 8px; color: #555; white-space: nowrap; }}
+.meta-link {{ color: #1a6ebd; text-decoration: none; }}
+.meta-link:hover {{ background: #e0e8ff; border-color: #1a6ebd; }}
+
+#charts-row {{ padding: 10px 16px 0; display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; border-bottom: 1px solid #eee; background: #fff; }}
+#charts-row.collapsed {{ display: none; }}
+#charts-toggle {{ padding: 4px 10px; background: none; border: 1px solid #767676; border-radius: 4px; cursor: pointer; font-size: 12px; color: #595959; white-space: nowrap; }}
+#charts-toggle:hover {{ border-color: #222; color: #222; }}
+.chart-block {{ display: flex; flex-direction: column; }}
+.chart-block h3 {{ margin: 0 0 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #555; }}
+
+thead tr.filter-row th {{ position: sticky; top: 33px; background: #eef2f6; padding: 3px 6px; border-top: 2px solid #c4d4e8; border-bottom: 1px solid #ddd; }}
+.col-filter-input {{ width: 100%; font-size: 11px; padding: 2px 5px; border: 1px solid #767676; border-radius: 3px; box-sizing: border-box; }}
+.col-filter-input:focus {{ outline: 2px solid #1a6ebd; outline-offset: 0; border-color: #1a6ebd; }}
+
+#content {{ flex: 1; display: flex; overflow: hidden; }}
+
+/* ── Table ── */
+#table-wrap {{ flex: 1; overflow-y: auto; }}
+table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+thead th {{ position: sticky; top: 0; background: #f0f0ee; border-bottom: 2px solid #ddd; padding: 7px 10px; text-align: left; font-weight: 600; white-space: nowrap; cursor: pointer; user-select: none; }}
+thead th:hover {{ background: #e4e4e2; }}
+thead th[aria-sort="none"]::after {{ content: " ↕"; color: #bbb; font-size: 10px; }}
+thead th.sorted-asc::after {{ content: " ↑"; color: #1a6ebd; }}
+thead th.sorted-desc::after {{ content: " ↓"; color: #1a6ebd; }}
+tbody tr {{ border-bottom: 1px solid #eee; cursor: pointer; }}
+tbody tr:hover {{ background: #f5f8ff; }}
+tbody tr.selected {{ background: #ddeeff; }}
+td {{ padding: 6px 10px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+td.source-cell {{ text-align: center; }}
+.src-btn {{ background: #f0f0f0; border: 1px solid #767676; border-radius: 3px; padding: 2px 7px; cursor: pointer; font-size: 11px; color: #333; white-space: nowrap; }}
+.src-btn:hover {{ background: #fff; color: #1a6ebd; border-color: #1a6ebd; }}
+#no-results {{ padding: 40px; text-align: center; color: #595959; font-size: 14px; display: none; }}
+#no-results p {{ margin: 6px 0 0; font-size: 12px; }}
+#no-results button {{ margin-top: 14px; padding: 5px 14px; background: #1a6ebd; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }}
+#no-results button:hover {{ background: #155a9e; }}
+.table-end-sentinel td {{ text-align: center; color: #595959; font-size: 12px; padding: 14px; border-top: 1px solid #ddd; }}
+mark {{ background: #ffe066; color: inherit; padding: 0 1px; border-radius: 2px; }}
+.detail-col {{ text-align: center; width: 28px; padding: 4px; }}
+.detail-col-head {{ width: 28px; padding: 4px; text-align: center; }}
+.detail-btn {{ background: none; border: none; cursor: pointer; font-size: 13px; color: #aaa; padding: 2px 4px; border-radius: 3px; }}
+.detail-btn:hover, tbody tr:hover .detail-btn {{ color: #1a6ebd; background: #eef3fb; }}
+tbody tr.selected .detail-btn {{ color: #1a6ebd; }}
+.skip-link {{ position: absolute; top: -40px; left: 0; background: #1a6ebd; color: #fff; padding: 6px 12px; z-index: 1000; text-decoration: none; font-size: 13px; border-radius: 0 0 4px 0; }}
+.skip-link:focus {{ top: 0; }}
+
+/* ── Detail panel ── */
+#detail {{ width: 560px; min-width: 480px; max-width: 640px; background: #fff; border-left: 1px solid #ddd; overflow-y: auto; display: none; }}
+#detail.open {{ display: block; }}
+#detail-inner {{ padding: 14px; }}
+#detail-inner h2 {{ margin: 0 0 10px; font-size: 14px; font-weight: 700; line-height: 1.3; }}
+#detail-thumb {{ width: 100%; min-height: 80px; object-fit: contain; background: #f5f5f5; border-radius: 4px; margin-bottom: 10px; display: block; border: 1px solid #ddd; }}
+.detail-fields {{ display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 12px; }}
+.df-key {{ color: #666; font-weight: 600; white-space: nowrap; }}
+.df-val {{ word-break: break-word; }}
+.detail-source {{ margin-top: 12px; }}
+.detail-source a {{ font-size: 12px; }}
+#detail-close {{ float: right; background: none; border: none; font-size: 18px; cursor: pointer; color: #595959; line-height: 1; padding: 6px 8px; margin: -6px -8px 0 0; }}
+#detail-close:hover {{ color: #333; }}
+#detail-close:focus-visible {{ outline: 2px solid #1a6ebd; outline-offset: 2px; border-radius: 2px; }}
+#mobile-header {{ display: none; }}
+
+/* ── Mobile (≤640 px) ───────────────────────────────────────────────────── */
+@media (max-width: 640px) {{
+  #sidebar {{
+    position: fixed; top: 0; left: 0;
+    width: 85vw; max-width: 300px; height: 100dvh;
+    z-index: 200; min-width: 0;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: 2px 0 12px rgba(0,0,0,0.18);
+  }}
+  #app.sidebar-open #sidebar {{ transform: translateX(0); }}
+  #sidebar-backdrop {{
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.35); z-index: 199;
+  }}
+  #app.sidebar-open #sidebar-backdrop {{ display: block; }}
+  #filter-btn {{
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 10px; background: none;
+    border: 1px solid #767676; border-radius: 4px;
+    cursor: pointer; font-size: 13px; color: #595959;
+    white-space: nowrap; flex-shrink: 0;
+  }}
+  #table-wrap {{ overflow-x: auto; }}
+  #detail {{
+    position: fixed; inset: 0;
+    width: 100%; max-width: 100%; min-width: 0;
+    height: 100dvh; z-index: 300;
+    overflow-y: auto; border-left: none;
+  }}
+  #detail-close {{ font-size: 24px; padding: 4px 8px; }}
+  #meta-strip {{ margin-left: 0; order: 3; width: 100%; }}
+  #mobile-header {{
+    display: block; padding: 8px 12px 6px;
+    background: #fff; border-bottom: 1px solid #eee;
+  }}
+  #mobile-title {{
+    font-size: 13px; font-weight: 700; line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }}
+  #mobile-sub {{ font-size: 11px; color: #595959; margin-bottom: 4px; }}
+  #mobile-volume-select {{
+    display: none; width: 100%; font-size: 12px;
+    padding: 4px 6px; border: 1px solid #767676; border-radius: 4px;
+    background: #fff; color: #333; margin-top: 4px;
+  }}
+  #mobile-volume-select.visible {{ display: block; }}
+  .col-filter-input {{ padding: 8px 6px; min-height: 44px; font-size: 13px; }}
+  .facet-item {{ padding: 4px 0; }}
+  .src-btn {{ padding: 8px 10px; font-size: 13px; }}
+  #clear-filters-btn, #export-btn, #charts-toggle {{ padding: 8px 14px; font-size: 13px; }}
+}}
+</style>
+</head>
+<body>
+<a href="#search" class="skip-link">Skip to search</a>
+<div id="app">
+
+<!-- Sidebar -->
+<div id="sidebar">
+  <div id="sidebar-header">
+    <h1><a href="https://github.com/hadro/directory-pipeline" target="_blank" style="color:inherit;text-decoration:none;">Pipeline Data Explorer</a></h1>
+    <h2 id="doc-title"></h2>
+    <div class="sub" id="doc-sub"></div>
+    <div id="volume-wrap">
+      <label for="volume-select" style="display:block;font-size:11px;color:#595959;margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">Select volume</label>
+      <select id="volume-select"></select>
+    </div>
+  </div>
+  <div id="sidebar-scroll">
+    <div id="fill-rate-section">
+      <div class="facet-label" style="margin-bottom:4px;">Field coverage</div>
+      <p style="font-size:11px;color:#777;margin:0 0 6px;line-height:1.4;">Less than 100% means not every entry from the source scans had that field or value.</p>
+      <div id="fill-rate-chart"></div>
+    </div>
+    <hr style="margin:12px 0; border:none; border-top:1px solid #eee;">
+    <div id="facet-controls"></div>
+  </div>
+</div>
+<div id="sidebar-backdrop" aria-hidden="true"></div>
+
+<!-- Main -->
+<div id="main">
+  <div id="mobile-header">
+    <div id="mobile-title"></div>
+    <div id="mobile-sub"></div>
+    <select id="mobile-volume-select" aria-label="Select volume"></select>
+  </div>
+  <div id="toolbar">
+    <button id="filter-btn" style="display:none" aria-label="Open filters" aria-expanded="false" aria-controls="sidebar">&#9776; Filters</button>
+    <div id="search-wrap">
+      <input id="search" type="search" placeholder="Search all fields (name, address, city…)" autocomplete="off" aria-label="Search all fields">
+      <small id="search-scope-label">Searches name, address, city, and all other fields</small>
+    </div>
+    <span id="count-label" aria-live="polite" aria-atomic="true"></span>
+    <button id="clear-filters-btn" aria-label="Clear all filters">× Clear filters</button>
+    <div id="meta-strip"></div>
+    <button id="charts-toggle" aria-expanded="true" aria-controls="charts-row">Hide summary ▴</button>
+    <button id="export-btn">Export CSV</button>
+    <button id="random-btn" title="Open a random entry from the current results">Random entry</button>
+  </div>
+  <div id="charts-row"></div>
+  <div id="content">
+    <div id="table-wrap">
+      <table id="results-table">
+        <thead id="table-head"></thead>
+        <tbody id="table-body"></tbody>
+      </table>
+      <div id="no-results">
+        No entries match the current filters.
+        <p>Try removing filters or adjusting your search.</p>
+        <button id="clear-all-btn">Clear all filters</button>
+      </div>
+    </div>
+    <div id="detail">
+      <div id="detail-inner">
+        <button id="detail-close" aria-label="Close detail panel">×</button>
+        <h2 id="detail-title"></h2>
+        <a id="detail-thumb-link" target="_blank"><img id="detail-thumb" alt="" style="display:none;cursor:pointer"></a>
+        <div class="detail-fields" id="detail-fields"></div>
+        <div class="detail-source" id="detail-source"></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+const ALL_INITIAL_ENTRIES = {entries_json};
+const VOLUMES     = {volumes_json};
+const FIELD_META  = {field_meta_json};
+const CANVAS_MAP  = {canvas_map_json};
+const DOC_TITLE   = {title_json};
+const DOC_META    = {doc_meta_json};
+const VIEWER_URL  = {viewer_url_json};
+const MANIFEST_URL = {manifest_url_json};
+const FULL_PAGE_THUMBS = {full_page_thumbs_json};
+let activeManifestUrl = MANIFEST_URL;
+let ALL_ENTRIES = ALL_INITIAL_ENTRIES;
+
+// ── Field display-name and value-label overrides ──────────────────────────
+const FIELD_LABELS = {{
+  "is_new_firm": "New listing",
+  "is new firm": "New listing",
+  "volume_year": "Year",
+  "canvas_fragment": "Source",
+}};
+const VALUE_LABELS = {{
+  "True": "Yes",
+  "False": "No",
+  "true": "Yes",
+  "false": "No",
+}};
+
+// ── State ──────────────────────────────────────────────────────────────────
+let currentDocMeta = DOC_META;
+const facetState = {{}};   // {{fieldName: Set<value>}}
+let searchQuery = "";
+let sortCol = null;
+let sortDir = 1;  // 1 = asc, -1 = desc
+let selectedIdx = null;
+let _detailOpener = null;
+let _pushNextHistory = false;  // set to true before renderAll() to push a history entry
+let colFilters = {{}};  // fieldName → filter string
+const showAllFacets = new Set();  // field names with expanded value list
+try {{ const _s = sessionStorage.getItem('showAllFacets'); if (_s) JSON.parse(_s).forEach(n => showAllFacets.add(n)); }} catch(e) {{}}
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+document.getElementById("doc-title").textContent = DOC_META.title || DOC_TITLE;
+document.getElementById("doc-sub").textContent =
+    ALL_ENTRIES.length.toLocaleString() + " entries";
+document.getElementById("mobile-title").textContent = DOC_META.title || DOC_TITLE;
+document.getElementById("mobile-sub").textContent =
+    ALL_ENTRIES.length.toLocaleString() + " entries";
+
+// Metadata strip in top-right toolbar
+function renderMetaStrip(meta) {{
+  const parts = [];
+  if (meta.date)         parts.push(`<span class="meta-chip">${{meta.date}}</span>`);
+  if (meta.institution)  parts.push(`<span class="meta-chip">${{meta.institution}}</span>`);
+  if (meta.genre)        parts.push(`<span class="meta-chip">${{meta.genre}}</span>`);
+  if (meta.homepage_url)
+    parts.push(`<a class="meta-chip meta-link" href="${{meta.homepage_url}}" target="_blank">Item page ↗</a>`);
+  const strip = document.getElementById("meta-strip");
+  if (strip) strip.innerHTML = parts.join("");
+}}
+renderMetaStrip(DOC_META);
+
+let facetFields = FIELD_META.filter(f => f.type === "facet");
+let displayFields = FIELD_META.filter(f => f.type !== "id");
+
+// Init facet state
+facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
+
+// ── Load a volume by label (data + UI reset, no render) ──────────────────
+function loadVolume(label) {{
+  const vol = VOLUMES[label];
+  if (!vol) return;
+  ALL_ENTRIES = vol.rows;
+  facetFields = vol.field_meta.filter(f => f.type === "facet");
+  displayFields = vol.field_meta.filter(f => f.type !== "id");
+  Object.keys(facetState).forEach(k => delete facetState[k]);
+  facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
+  searchQuery = "";
+  sortCol = null;
+  sortDir = 1;
+  selectedIdx = null;
+  colFilters = {{}};
+  showAllFacets.clear();
+  try {{ sessionStorage.removeItem('showAllFacets'); }} catch(e) {{}}
+  document.getElementById("search").value = "";
+  document.getElementById("detail").classList.remove("open");
+  document.getElementById("doc-title").textContent = label;
+  document.getElementById("doc-sub").textContent =
+    ALL_ENTRIES.length.toLocaleString() + " entries";
+  document.getElementById("mobile-title").textContent = label;
+  document.getElementById("mobile-sub").textContent =
+    ALL_ENTRIES.length.toLocaleString() + " entries";
+  currentDocMeta = vol.doc_meta || {{}};
+  activeManifestUrl = currentDocMeta.manifest_url || MANIFEST_URL;
+  renderMetaStrip(currentDocMeta);
+  renderFillRate();
+}}
+
+// ── Volume selector ─────────────────────────────────────────────────────────
+(function () {{
+  const volLabels = Object.keys(VOLUMES);
+  if (volLabels.length === 0) return;
+  const wrap = document.getElementById("volume-wrap");
+  const sel  = document.getElementById("volume-select");
+  wrap.style.display = "block";
+  volLabels.forEach(label => {{
+    const opt = document.createElement("option");
+    opt.value = label;
+    opt.textContent = label + "  (" + VOLUMES[label].rows.length.toLocaleString() + ")";
+    sel.appendChild(opt);
+  }});
+  // Set h1, mobile title, and meta strip to first volume on load
+  document.getElementById("doc-title").textContent = volLabels[0];
+  document.getElementById("mobile-title").textContent = volLabels[0];
+  currentDocMeta = VOLUMES[volLabels[0]].doc_meta || {{}};
+  activeManifestUrl = currentDocMeta.manifest_url || MANIFEST_URL;
+  renderMetaStrip(currentDocMeta);
+
+  // Build mobile volume select
+  const msel = document.getElementById("mobile-volume-select");
+  volLabels.forEach(label => {{
+    const opt = document.createElement("option");
+    opt.value = label; opt.textContent = label;
+    msel.appendChild(opt);
+  }});
+  msel.classList.add("visible");
+  msel.addEventListener("change", () => {{
+    sel.value = msel.value;
+    sel.dispatchEvent(new Event("change"));
+  }});
+
+  sel.addEventListener("change", () => {{
+    loadVolume(sel.value);
+    document.getElementById("mobile-volume-select").value = sel.value;
+    renderAll();
+  }});
+}})();
+
+// ── Filtering ──────────────────────────────────────────────────────────────
+function getFiltered() {{
+  const q = searchQuery.trim().toLowerCase();
+  return ALL_ENTRIES.filter(row => {{
+    // Search filter
+    if (q) {{
+      const haystack = displayFields.map(f => (row[f.name] || "")).join(" ").toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }}
+    // Facet filters
+    for (const f of facetFields) {{
+      const sel = facetState[f.name];
+      if (sel.size === 0) continue;
+      if (!sel.has(row[f.name] || "")) return false;
+    }}
+    // Column header filters
+    for (const [col, val] of Object.entries(colFilters)) {{
+      if (!val) continue;
+      if (!(row[col] || "").toLowerCase().includes(val.toLowerCase())) return false;
+    }}
+    return true;
+  }});
+}}
+
+// ── Sort ───────────────────────────────────────────────────────────────────
+function getSorted(rows) {{
+  if (!sortCol) return rows;
+  return [...rows].sort((a, b) => {{
+    const av = (a[sortCol] || "").toLowerCase();
+    const bv = (b[sortCol] || "").toLowerCase();
+    return av < bv ? -sortDir : av > bv ? sortDir : 0;
+  }});
+}}
+
+// ── Search match highlighting ─────────────────────────────────────────────
+function escapeHtml(str) {{
+  const t = document.createElement("span");
+  t.textContent = str;
+  return t.innerHTML;
+}}
+function highlightMatch(text, query) {{
+  if (!query || !text) return document.createTextNode(text || "");
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return document.createTextNode(text);
+  const span = document.createElement("span");
+  span.innerHTML =
+    escapeHtml(text.slice(0, idx)) +
+    "<mark>" + escapeHtml(text.slice(idx, idx + query.length)) + "</mark>" +
+    escapeHtml(text.slice(idx + query.length));
+  return span;
+}}
+
+// ── Canvas page extraction ─────────────────────────────────────────────────
+function canvasId(row) {{
+  const cf = row.canvas_fragment || "";
+  return cf.includes("#") ? cf.split("#")[0] : cf;
+}}
+
+// ── Render: table body only (preserves thead / focus) ──────────────────────
+function renderTableBody() {{
+  const filtered = getFiltered();
+  const sorted   = getSorted(filtered);
+
+  document.getElementById("count-label").textContent =
+    `${{sorted.length.toLocaleString()}} of ${{ALL_ENTRIES.length.toLocaleString()}} entries`;
+
+  const tbody = document.getElementById("table-body");
+  tbody.innerHTML = "";
+  sorted.slice(0, 2000).forEach(row => {{
+    const tr = document.createElement("tr");
+    const isSelected = ALL_ENTRIES.indexOf(row) === selectedIdx;
+    if (isSelected) tr.classList.add("selected");
+    tr.setAttribute("tabindex", "0");
+    tr.setAttribute("aria-selected", isSelected ? "true" : "false");
+    tr.dataset.idx = ALL_ENTRIES.indexOf(row);
+    const q = searchQuery.trim().toLowerCase();
+    displayFields.forEach(f => {{
+      const td = document.createElement("td");
+      const cellText = row[f.name] || "";
+      td.title = cellText;
+      td.appendChild(highlightMatch(cellText, q));
+      tr.appendChild(td);
+    }});
+    const tdSrc = document.createElement("td");
+    tdSrc.className = "source-cell";
+    if (row.canvas_fragment) {{
+      const btn = document.createElement("button");
+      btn.className = "src-btn";
+      btn.textContent = "View page ↗";
+      btn.title = "Open original digitized page image";
+      btn.addEventListener("click", e => {{
+        e.stopPropagation();
+        openSource(row.canvas_fragment);
+      }});
+      tdSrc.appendChild(btn);
+    }}
+    tr.appendChild(tdSrc);
+    const rowHandler = () => {{
+      selectedIdx = ALL_ENTRIES.indexOf(row);
+      _detailOpener = tr;
+      showDetail(row);
+      renderTableBody();
+    }};
+    tr.addEventListener("click", rowHandler);
+    tr.addEventListener("keydown", e => {{
+      if (e.key === "Enter" || e.key === " ") {{ e.preventDefault(); rowHandler(); }}
+    }});
+    const tdDetail = document.createElement("td");
+    tdDetail.className = "detail-col";
+    const detailBtn = document.createElement("button");
+    detailBtn.className = "detail-btn";
+    detailBtn.setAttribute("aria-label", "Open entry details");
+    detailBtn.setAttribute("tabindex", "-1");
+    detailBtn.textContent = "▸";
+    detailBtn.addEventListener("click", e => {{ e.stopPropagation(); rowHandler(); }});
+    tdDetail.appendChild(detailBtn);
+    tr.appendChild(tdDetail);
+    tbody.appendChild(tr);
+  }});
+
+  // End-of-results sentinel
+  if (sorted.length > 0) {{
+    const sentinelTr = document.createElement("tr");
+    sentinelTr.className = "table-end-sentinel";
+    const sentinelTd = document.createElement("td");
+    sentinelTd.colSpan = displayFields.length + 1;
+    const cap = sorted.length > 2000
+      ? `Showing first 2,000 of ${{sorted.length.toLocaleString()}} entries`
+      : `Showing all ${{sorted.length.toLocaleString()}} entries`;
+    sentinelTd.textContent = cap;
+    sentinelTr.appendChild(sentinelTd);
+    tbody.appendChild(sentinelTr);
+  }}
+
+  const noResults = document.getElementById("no-results");
+  noResults.style.display = sorted.length === 0 ? "block" : "none";
+}}
+
+// ── Render: table head (sort row + filter row) ──────────────────────────────
+function renderTableHead() {{
+  const head = document.getElementById("table-head");
+  head.innerHTML = "";
+
+  // Sort row
+  const tr = document.createElement("tr");
+  displayFields.forEach(f => {{
+    const th = document.createElement("th");
+    th.textContent = FIELD_LABELS[f.name] || f.name.replace(/_/g, " ");
+    // Add explanation tooltip for the "codes" column
+    if (f.name === "codes") {{
+      const info = document.createElement("span");
+      info.textContent = " ⓘ";
+      info.title = "Classification codes from the directory’s key — e.g. L = Lager brewery, P = Porter/Ale brewery, M = Maltster, B-D = Brewery & Distillery, followed by a size class (1–6)";
+      info.style.cssText = "cursor:help;font-size:11px;color:#888;font-weight:400;";
+      info.addEventListener("click", e => e.stopPropagation());
+      th.appendChild(info);
+    }}
+    th.dataset.col = f.name;
+    th.setAttribute("tabindex", "0");
+    if (sortCol === f.name) {{
+      th.className = sortDir > 0 ? "sorted-asc" : "sorted-desc";
+      th.setAttribute("aria-sort", sortDir > 0 ? "ascending" : "descending");
+    }} else {{
+      th.setAttribute("aria-sort", "none");
+    }}
+    const sortHandler = () => {{
+      if (sortCol === f.name) sortDir = -sortDir;
+      else {{ sortCol = f.name; sortDir = 1; }}
+      renderTableHead();
+      renderTableBody();
+    }};
+    th.addEventListener("click", sortHandler);
+    th.addEventListener("keydown", e => {{
+      if (e.key === "Enter" || e.key === " ") {{ e.preventDefault(); sortHandler(); }}
+    }});
+    tr.appendChild(th);
+  }});
+  const thSrc = document.createElement("th");
+  thSrc.textContent = "Source";
+  tr.appendChild(thSrc);
+  const thDetail = document.createElement("th");
+  thDetail.className = "detail-col-head";
+  thDetail.setAttribute("aria-label", "Open details");
+  tr.appendChild(thDetail);
+  head.appendChild(tr);
+
+  // Filter row — inputs call renderTableBody only, preserving focus
+  const filterRow = document.createElement("tr");
+  filterRow.className = "filter-row";
+  displayFields.forEach(f => {{
+    const fth = document.createElement("th");
+    if (f.type === "facet" && f.top_values.length > 0) {{
+      const sel = document.createElement("select");
+      sel.className = "col-filter-input";
+      sel.setAttribute("aria-label", `Filter by ${{f.name.replace(/_/g, " ")}}`);
+      const opt0 = document.createElement("option");
+      opt0.value = ""; opt0.textContent = "(all)";
+      sel.appendChild(opt0);
+      // Only show values present in the current filtered result set
+      const presentVals = new Set(getFiltered().map(r => r[f.name] || "").filter(Boolean));
+      if (colFilters[f.name] && !presentVals.has(colFilters[f.name])) colFilters[f.name] = "";
+      const visibleVals = f.top_values.filter(([val]) => presentVals.has(val));
+      visibleVals.forEach(([val]) => {{
+        const opt = document.createElement("option");
+        opt.value = val; opt.textContent = val || "(empty)";
+        if (colFilters[f.name] === val) opt.selected = true;
+        sel.appendChild(opt);
+      }});
+      sel.addEventListener("change", () => {{ colFilters[f.name] = sel.value; renderTableBody(); renderFacetSidebar(); renderCharts(); syncFilterUI(); }});
+      fth.appendChild(sel);
+    }} else {{
+      const inp = document.createElement("input");
+      inp.type = "text"; inp.className = "col-filter-input"; inp.placeholder = "filter…";
+      inp.setAttribute("aria-label", `Filter by ${{f.name.replace(/_/g, " ")}}`);
+      inp.value = colFilters[f.name] || "";
+      inp.addEventListener("input", () => {{ colFilters[f.name] = inp.value; renderTableBody(); renderFacetSidebar(); renderCharts(); syncFilterUI(); }});
+      fth.appendChild(inp);
+    }}
+    filterRow.appendChild(fth);
+  }});
+  filterRow.appendChild(document.createElement("th"));  // Source column
+  filterRow.appendChild(document.createElement("th"));  // Details column
+  head.appendChild(filterRow);
+}}
+
+// ── Render: table (head + body) ─────────────────────────────────────────────
+function renderTable() {{
+  renderTableHead();
+  renderTableBody();
+}}
+
+// ── Resolve canvas_fragment → human-browseable viewer URL ──────────────────
+function viewerUrl(canvas_fragment) {{
+  if (!canvas_fragment) return "";
+  const cid = canvas_fragment.includes("#") ? canvas_fragment.split("#")[0] : canvas_fragment;
+
+  // CANVAS_MAP entry[3] is a pre-built viewer URL (e.g. NYPL Digital Collections)
+  const entry = CANVAS_MAP[cid];
+  if (entry && entry[3]) return entry[3];
+
+  // Internet Archive: https://iiif.archive.org/iiif/{{identifier}}${{page}}/canvas
+  const iaMatch = cid.match(/https:\/\/iiif\.archive\.org\/iiif\/([^$]+)\$(\d+)\/canvas/);
+  if (iaMatch) {{
+    return `https://archive.org/details/${{iaMatch[1]}}/page/n${{iaMatch[2]}}/mode/2up`;
+  }}
+
+  // Library of Congress: https://www.loc.gov/item/{{id}}/canvas/{{num}}
+  const locMatch = cid.match(/https:\/\/www\.loc\.gov\/item\/([^/]+)\/canvas\/(\d+)/);
+  if (locMatch) {{
+    if (currentDocMeta && currentDocMeta.resource_url) {{
+      return currentDocMeta.resource_url.replace(/\/?$/, "/") + `?sp=${{parseInt(locMatch[2])}}`;
+    }}
+    // Derive resource URL + correct per-volume page number from CANVAS_MAP service ID.
+    // Service ID format: https://tile.loc.gov/image-services/iiif/service:rbc:lcrbmrp:t8073:001
+    // → resource lcrbmrp.t8073, sp=1 (not the global canvas number, which spans volumes).
+    const mapEntry = CANVAS_MAP[cid];
+    if (mapEntry && mapEntry[0]) {{
+      const svcId = mapEntry[0].split("/").pop();
+      const svcMatch = svcId.match(/^service:(?:[^:]+):([^:]+):([^:]+):(\d+)$/);
+      if (svcMatch) {{
+        return `https://www.loc.gov/resource/${{svcMatch[1]}}.${{svcMatch[2]}}/?sp=${{parseInt(svcMatch[3])}}`;
+      }}
+    }}
+    return `https://www.loc.gov/resource/${{locMatch[1]}}/?sp=${{parseInt(locMatch[2])}}`;
+  }}
+
+  // Fall back to the raw canvas URI
+  return canvas_fragment;
+}}
+
+function openSource(canvas_fragment) {{
+  const url = viewerUrl(canvas_fragment);
+  if (url) window.open(url, "_blank");
+}}
+
+// ── IIIF Content State deep-link ────────────────────────────────────────────
+function contentStateUrl(canvas_fragment) {{
+  const mUrl = activeManifestUrl || MANIFEST_URL;
+  if (!VIEWER_URL || !mUrl || !canvas_fragment) return "";
+  const cid = canvas_fragment.includes("#") ? canvas_fragment.split("#")[0] : canvas_fragment;
+  if (!cid) return "";
+  const state = {{
+    "@context": "http://iiif.io/api/presentation/3/context.json",
+    "type": "Annotation",
+    "motivation": "contentState",
+    "target": {{
+      "id": canvas_fragment,
+      "type": "Canvas",
+      "partOf": [{{"id": mUrl, "type": "Manifest"}}]
+    }}
+  }};
+  // base64url (RFC 4648 §5): standard base64 with + → -, / → _, padding stripped
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
+  const encoded = b64.replace(/[+]/g, "-").replace(/[/]/g, "_").replace(/=+$/, "");
+  return VIEWER_URL.replace(/\/$/, "") + "?iiif-content=" + encoded;
+}}
+
+// ── Detail panel ───────────────────────────────────────────────────────────
+function thumbUrl(row) {{
+  const cf = row.canvas_fragment || "";
+  if (!cf) {{
+    // No canvas fragment — fall back to the local page image (full page, no crop)
+    return row.image ? row.image : "";
+  }}
+  const cid = cf.includes("#") ? cf.split("#")[0] : cf;
+  const svc = CANVAS_MAP[cid];
+  if (!svc) return "";
+  if (!FULL_PAGE_THUMBS && cf.includes("#xywh=")) {{
+    const xywh = cf.split("#xywh=")[1].split(",").map(Number);
+    if (xywh.length !== 4 || xywh[2] <= 0 || xywh[3] <= 0) return "";
+    const [cw, ch] = [svc[1], svc[2]];
+    if (!cw || !ch) return "";
+    const padV = Math.max(xywh[3], 60), tw = 800;
+    // Ensure the crop is at least 600px wide so narrow Surya detections
+    // (e.g. short names in classified directories) show enough context.
+    const minW = 600;
+    const padH = Math.max(40, Math.ceil((minW - xywh[2]) / 2));
+    const rx = Math.max(0, xywh[0] - padH);
+    const ry = Math.max(0, xywh[1] - padV);
+    const rw = (xywh[0] + xywh[2] + padH) - rx;
+    const rh = (xywh[1] + xywh[3] + padV) - ry;
+    const xp = (rx / cw * 100).toFixed(4);
+    const yp = (ry / ch * 100).toFixed(4);
+    const wp = (rw / cw * 100).toFixed(4);
+    const hp = (rh / ch * 100).toFixed(4);
+    return `${{svc[0]}}/pct:${{xp}},${{yp}},${{wp}},${{hp}}/${{tw}},/0/default.jpg`;
+  }}
+  return `${{svc[0]}}/full/400,/0/default.jpg`;
+}}
+
+function showDetail(row) {{
+  const panel = document.getElementById("detail");
+  panel.classList.add("open");
+
+  const nameField = displayFields.find(f => f.name.includes("name") || f.name.includes("title"));
+  document.getElementById("detail-title").textContent =
+    (nameField && row[nameField.name]) || "(entry)";
+
+  const entryName = (nameField && row[nameField.name]) || "entry";
+  const img = document.getElementById("detail-thumb");
+  const thumbLink = document.getElementById("detail-thumb-link");
+  const url = thumbUrl(row);
+  const csUrl = contentStateUrl(row.canvas_fragment);
+  if (url) {{
+    img.src = url;
+    img.alt = `Scan showing ${{entryName}}`;
+    img.style.display = "block";
+    img.onerror = () => {{ img.style.display = "none"; }};
+    thumbLink.href = csUrl || viewerUrl(row.canvas_fragment) || "#";
+    thumbLink.title = "View this entry highlighted in the original scan";
+    thumbLink.setAttribute("aria-label", `View ${{entryName}} in source document`);
+  }} else {{
+    img.style.display = "none";
+    img.alt = "";
+    thumbLink.removeAttribute("href");
+    thumbLink.removeAttribute("aria-label");
+  }}
+
+  const fields = document.getElementById("detail-fields");
+  fields.innerHTML = "";
+  displayFields.forEach(f => {{
+    const val = row[f.name] || "";
+    if (!val) return;
+    const k = document.createElement("div");
+    k.className = "df-key";
+    k.textContent = FIELD_LABELS[f.name] || f.name.replace(/_/g, " ");
+    const v = document.createElement("div");
+    v.className = "df-val";
+    v.textContent = VALUE_LABELS[val] || val;
+    fields.appendChild(k);
+    fields.appendChild(v);
+  }});
+
+  const src = document.getElementById("detail-source");
+  if (row.canvas_fragment) {{
+    const links = [];
+    const srcUrl = viewerUrl(row.canvas_fragment);
+    if (srcUrl) links.push(`<a href="${{srcUrl}}" target="_blank">Open source page ↗</a>`);
+    const csUrl = contentStateUrl(row.canvas_fragment);
+    if (csUrl) links.push(`<a href="${{csUrl}}" target="_blank">View in source document ↗</a>`);
+    src.innerHTML = links.join(" · ");
+  }} else {{
+    src.innerHTML = "";
+  }}
+  document.getElementById("detail-close").focus();
+}}
+
+document.getElementById("detail-close").addEventListener("click", () => {{
+  document.getElementById("detail").classList.remove("open");
+  const prevIdx = selectedIdx;
+  selectedIdx = null;
+  renderTable();
+  if (prevIdx !== null) {{
+    const prevRow = document.querySelector('#table-body tr[data-idx="' + prevIdx + '"]');
+    if (prevRow) prevRow.focus();
+  }}
+}});
+
+// ── Render: facet sidebar ──────────────────────────────────────────────────
+function renderFacetSidebar() {{
+  const container = document.getElementById("facet-controls");
+  container.innerHTML = "";
+
+  // Build live counts from the currently-filtered dataset so sidebar counts
+  // always reflect column filters and global search, not just static top_values.
+  const filteredForCounts = getFiltered();
+  const liveCount = {{}};
+  facetFields.forEach(f => {{
+    liveCount[f.name] = {{}};
+    filteredForCounts.forEach(r => {{
+      const v = r[f.name] || "";
+      liveCount[f.name][v] = (liveCount[f.name][v] || 0) + 1;
+    }});
+  }});
+
+  facetFields.forEach(f => {{
+    const grp = document.createElement("div");
+    grp.className = "facet-group";
+
+    const lbl = document.createElement("div");
+    lbl.className = "facet-label";
+    const labelText = document.createElement("span");
+    labelText.textContent = FIELD_LABELS[f.name] || f.name.replace(/_/g, " ");
+    lbl.appendChild(labelText);
+    if (facetState[f.name].size > 0) {{
+      const clr = document.createElement("button");
+      clr.className = "facet-clear";
+      clr.textContent = "clear";
+      clr.setAttribute("aria-label", `Clear ${{f.name.replace(/_/g, " ")}} filter`);
+      clr.addEventListener("click", () => {{
+        _pushNextHistory = true;
+        facetState[f.name].clear();
+        renderAll();
+      }});
+      lbl.appendChild(clr);
+    }}
+    grp.appendChild(lbl);
+
+    const showAll = showAllFacets.has(f.name);
+    const topN = showAll ? f.top_values.length : Math.min(10, f.top_values.length);
+    f.top_values.slice(0, topN).forEach(([val, cnt]) => {{
+      const item = document.createElement("label");
+      item.className = "facet-item";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = facetState[f.name].has(val);
+      cb.addEventListener("change", () => {{
+        _pushNextHistory = true;
+        if (cb.checked) facetState[f.name].add(val);
+        else facetState[f.name].delete(val);
+        renderAll();
+      }});
+      const valSpan = document.createElement("span");
+      valSpan.className = "val";
+      valSpan.textContent = VALUE_LABELS[val] || val || "(empty)";
+      valSpan.title = VALUE_LABELS[val] || val;
+      const cntSpan = document.createElement("span");
+      cntSpan.className = "cnt";
+      cntSpan.textContent = (liveCount[f.name][val] || 0).toLocaleString();
+      item.appendChild(cb);
+      item.appendChild(valSpan);
+      item.appendChild(cntSpan);
+      grp.appendChild(item);
+    }});
+
+    if (!showAll && f.top_values.length > 10) {{
+      const more = document.createElement("button");
+      more.className = "facet-more";
+      more.textContent = `+ ${{f.top_values.length - 10}} more…`;
+      more.setAttribute("aria-label", `Show ${{f.top_values.length - 10}} more ${{f.name.replace(/_/g, " ")}} values`);
+      more.addEventListener("click", () => {{
+        showAllFacets.add(f.name);
+        try {{ sessionStorage.setItem('showAllFacets', JSON.stringify([...showAllFacets])); }} catch(e) {{}}
+        renderFacetSidebar();
+      }});
+      grp.appendChild(more);
+    }}
+    container.appendChild(grp);
+  }});
+}}
+
+// ── Render: fill-rate chart ────────────────────────────────────────────────
+function renderFillRate() {{
+  const el = document.getElementById("fill-rate-chart");
+  const data = FIELD_META
+    .filter(f => f.type !== "id")
+    .map(f => ({{ name: f.name.replace(/_/g, " "), fill: f.fill_rate }}))
+    .sort((a, b) => b.fill - a.fill);
+
+  const plot = Plot.plot({{
+    width: 200, height: data.length * 16 + 20,
+    marginLeft: 100, marginRight: 10, marginTop: 4, marginBottom: 16,
+    x: {{ domain: [0, 1], label: null, tickFormat: "%", ticks: 2 }},
+    y: {{ label: null }},
+    marks: [
+      Plot.barX(data, {{
+        x: "fill", y: "name",
+        fill: d => d.fill >= 0.8 ? "#59a14f" : d.fill >= 0.4 ? "#f28e2b" : "#e15759",
+        sort: {{ y: "x", reverse: true }}
+      }}),
+      Plot.text(data, {{
+        x: "fill", y: "name",
+        text: d => (d.fill * 100).toFixed(0) + "%",
+        dx: 4, frameAnchor: "left",
+        fontSize: 9, fill: "#444",
+      }}),
+      Plot.ruleX([0]),
+    ],
+    style: {{ fontSize: "11px" }},
+  }});
+  el.innerHTML = "";
+  el.appendChild(plot);
+}}
+
+// ── Render: facet bar charts ───────────────────────────────────────────────
+function renderCharts() {{
+  const row = document.getElementById("charts-row");
+  row.innerHTML = "";
+
+  const filtered = getFiltered();
+
+  facetFields.slice(0, 4).forEach(f => {{
+    // Count filtered values
+    const counts = {{}};
+    filtered.forEach(r => {{
+      const v = r[f.name] || "(empty)";
+      counts[v] = (counts[v] || 0) + 1;
+    }});
+    const data = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 15)
+      .map(([v, c]) => ({{ v, c }}));
+
+    if (data.length === 0) return;
+
+    const block = document.createElement("div");
+    block.className = "chart-block";
+    const h3 = document.createElement("h3");
+    h3.textContent = FIELD_LABELS[f.name] || f.name.replace(/_/g, " ");
+    block.appendChild(h3);
+
+    const barHeight = 18;
+    const plot = Plot.plot({{
+      width: 220,
+      height: data.length * barHeight + 24,
+      marginLeft: 110, marginRight: 30, marginTop: 2, marginBottom: 20,
+      x: {{ label: null, grid: false }},
+      y: {{ label: null, tickSize: 0, type: "band" }},
+      marks: [
+        Plot.barX(data, {{
+          x: "c", y: "v",
+          fill: "#aac4e6",
+          sort: {{ y: "x", reverse: true }},
+          title: d => `${{d.v}}: ${{d.c}}`,
+          rx: 2,
+        }}),
+        Plot.text(data, {{
+          x: "c", y: "v", text: d => d.c.toString(),
+          dx: 4, frameAnchor: "left",
+          fontSize: 10, fill: "#555",
+        }}),
+      ],
+      style: {{ fontSize: "11px" }},
+    }});
+    block.appendChild(plot);
+    row.appendChild(block);
+  }});
+}}
+
+// ── Export CSV ─────────────────────────────────────────────────────────────
+document.getElementById("export-btn").addEventListener("click", () => {{
+  const btn = document.getElementById("export-btn");
+  btn.disabled = true;
+  btn.textContent = "Exporting…";
+  const filtered = getSorted(getFiltered());
+  const cols = FIELD_META.map(f => f.name);
+  const lines = [cols.map(c => JSON.stringify(c || "")).join(",")];
+  filtered.forEach(row => {{
+    lines.push(cols.map(c => JSON.stringify(row[c] || "")).join(","));
+  }});
+  const blob = new Blob([lines.join("\n")], {{ type: "text/csv" }});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = (DOC_TITLE || "entries").replace(/\s+/g, "_") + "_filtered.csv";
+  a.click();
+  setTimeout(() => {{ btn.disabled = false; btn.textContent = "Export CSV"; }}, 600);
+}});
+
+// ── Clear all filters (empty-state button) ─────────────────────────────────
+document.getElementById("clear-all-btn").addEventListener("click", () => {{
+  _pushNextHistory = true;
+  Object.values(facetState).forEach(s => s.clear());
+  colFilters = {{}};
+  sortCol = null;
+  sortDir = 1;
+  showAllFacets.clear();
+  try {{ sessionStorage.removeItem('showAllFacets'); }} catch(e) {{}}
+  searchQuery = "";
+  document.getElementById("search").value = "";
+  renderAll();
+}});
+
+// ── Charts toggle ──────────────────────────────────────────────────────────
+document.getElementById("charts-toggle").addEventListener("click", () => {{
+  const row = document.getElementById("charts-row");
+  const btn = document.getElementById("charts-toggle");
+  const collapsed = row.classList.toggle("collapsed");
+  btn.textContent = collapsed ? "Show summary ▾" : "Hide summary ▴";
+  btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+}});
+
+// ── Mobile sidebar toggle ──────────────────────────────────────────────────
+(function () {{
+  const filterBtn = document.getElementById("filter-btn");
+  const backdrop  = document.getElementById("sidebar-backdrop");
+  const app       = document.getElementById("app");
+  function openSidebar()  {{ app.classList.add("sidebar-open");    filterBtn.setAttribute("aria-expanded", "true");  }}
+  function closeSidebar() {{ app.classList.remove("sidebar-open"); filterBtn.setAttribute("aria-expanded", "false"); }}
+  filterBtn.addEventListener("click", () => app.classList.contains("sidebar-open") ? closeSidebar() : openSidebar());
+  backdrop.addEventListener("click", closeSidebar);
+  document.getElementById("facet-controls").addEventListener("change", () => {{
+    if (window.innerWidth <= 640) closeSidebar();
+  }});
+}})();
+
+// ── Search input ───────────────────────────────────────────────────────────
+let searchTimer;
+document.getElementById("search").addEventListener("input", e => {{
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {{
+    searchQuery = e.target.value;
+    renderAll();
+  }}, 180);
+}});
+
+// ── Sync filter UI: URL hash + clear-filters button visibility ───────────
+function syncFilterUI() {{
+  try {{
+    if (_pushNextHistory) {{ history.pushState(null, "", stateToHash()); _pushNextHistory = false; }}
+    else history.replaceState(null, "", stateToHash());
+  }} catch(e) {{}}
+  const anyActive = !!searchQuery ||
+    Object.values(colFilters).some(v => v) ||
+    Object.values(facetState).some(s => s.size > 0);
+  document.getElementById("clear-filters-btn").style.display = anyActive ? "inline-block" : "none";
+}}
+
+document.getElementById("clear-filters-btn").addEventListener("click", () => {{
+  _pushNextHistory = true;
+  Object.values(facetState).forEach(s => s.clear());
+  colFilters = {{}};
+  sortCol = null;
+  sortDir = 1;
+  showAllFacets.clear();
+  try {{ sessionStorage.removeItem('showAllFacets'); }} catch(e) {{}}
+  searchQuery = "";
+  document.getElementById("search").value = "";
+  renderAll();
+}});
+
+// ── URL hash state (shareable filtered links) ─────────────────────────────
+function stateToHash() {{
+  const params = new URLSearchParams();
+  const volLabels = Object.keys(VOLUMES);
+  if (volLabels.length > 1) {{
+    const sel = document.getElementById("volume-select");
+    if (sel) {{
+      const idx = volLabels.indexOf(sel.value);
+      if (idx > 0) params.set("vol", idx);
+    }}
+  }}
+  if (searchQuery) params.set("q", searchQuery);
+  if (sortCol) params.set("sort", sortCol + ":" + (sortDir > 0 ? "asc" : "desc"));
+  for (const [col, val] of Object.entries(colFilters)) {{
+    if (val) params.set("cf_" + col, val);
+  }}
+  for (const [field, valSet] of Object.entries(facetState)) {{
+    if (valSet.size) params.set("f_" + field, [...valSet].join("|"));
+  }}
+  const str = params.toString();
+  return str ? "#" + str : location.pathname + location.search;
+}}
+
+function applyHashState() {{
+  const raw = location.hash.slice(1);
+  if (!raw) return;
+  const params = new URLSearchParams(raw);
+
+  // Volume: load data + reset filters, then apply overrides below
+  if (params.has("vol")) {{
+    const volLabels = Object.keys(VOLUMES);
+    const idx = parseInt(params.get("vol"), 10);
+    if (idx > 0 && idx < volLabels.length) {{
+      const label = volLabels[idx];
+      loadVolume(label);
+      const sel = document.getElementById("volume-select");
+      if (sel) sel.value = label;
+      const msel = document.getElementById("mobile-volume-select");
+      if (msel) msel.value = label;
+    }}
+  }}
+
+  // Search query
+  const q = params.get("q");
+  if (q) {{
+    searchQuery = q;
+    const el = document.getElementById("search");
+    if (el) el.value = q;
+  }}
+
+  // Sort
+  const sort = params.get("sort");
+  if (sort && sort.includes(":")) {{
+    const [col, dir] = sort.split(":");
+    sortCol = col;
+    sortDir = dir === "desc" ? -1 : 1;
+  }}
+
+  // Column filters
+  for (const [key, val] of params.entries()) {{
+    if (key.startsWith("cf_") && val) colFilters[key.slice(3)] = val;
+  }}
+
+  // Facet filters
+  for (const [key, val] of params.entries()) {{
+    if (key.startsWith("f_")) {{
+      const field = key.slice(2);
+      if (facetState[field]) val.split("|").forEach(v => {{ if (v) facetState[field].add(v); }});
+    }}
+  }}
+}}
+
+// ── Render all ─────────────────────────────────────────────────────────────
+function renderAll() {{
+  // Auto-close the detail panel whenever filters/search change so users
+  // never see a stale record juxtaposed against a new result set.
+  document.getElementById("detail").classList.remove("open");
+  selectedIdx = null;
+  renderFacetSidebar();
+  renderCharts();
+  renderTable();
+  syncFilterUI();
+}}
+
+renderFillRate();
+if (window.innerWidth <= 640) {{
+  document.getElementById("charts-row").classList.add("collapsed");
+  const _ctBtn = document.getElementById("charts-toggle");
+  _ctBtn.textContent = "Show summary ▾";
+  _ctBtn.setAttribute("aria-expanded", "false");
+}}
+
+// ── Random entry ────────────────────────────────────────────────────────────
+document.getElementById("random-btn").addEventListener("click", () => {{
+  const pool = getSorted(getFiltered());
+  if (!pool.length) return;
+  const r = pool[Math.floor(Math.random() * pool.length)];
+  selectedIdx = ALL_ENTRIES.indexOf(r);
+  _detailOpener = null;
+  showDetail(r);
+  renderTableBody();
+}});
+
+// ── Back/forward navigation via popstate ────────────────────────────────────
+window.addEventListener("popstate", function () {{
+  // Reset all filter state to empty before re-reading URL
+  Object.values(facetState).forEach(s => s.clear());
+  colFilters = {{}};
+  sortCol = null;
+  sortDir = 1;
+  searchQuery = "";
+  const searchEl = document.getElementById("search");
+  if (searchEl) searchEl.value = "";
+  showAllFacets.clear();
+  // Re-apply filters from new URL hash
+  applyHashState();
+  renderAll();  // closes detail panel
+  // Re-open detail if ?cf= is present in the new URL
+  const cf = new URLSearchParams(location.search).get("cf");
+  if (cf) {{
+    const match = ALL_ENTRIES.find(r => r.canvas_fragment === cf);
+    if (match) {{
+      selectedIdx = ALL_ENTRIES.indexOf(match);
+      showDetail(match);
+      renderTableBody();
+    }}
+  }}
+}});
+
+applyHashState();
+renderAll();
+</script>
+</body>
+</html>
