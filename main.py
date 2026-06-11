@@ -918,6 +918,24 @@ def main() -> None:
     if "compare_ocr" in enabled and len(args.models) < 2:
         parser.error("--compare-ocr requires at least 2 models via --models.")
 
+    # Preflight: stages backed by optional extras fail fast with an install
+    # hint before any work starts. Without this, a missing dependency surfaces
+    # as a mid-run per-stage warning and downstream stages (e.g. align_ocr
+    # after a failed surya_ocr) run against nothing.
+    if not args.dry_run:
+        import importlib.util
+        missing = [sd for sd in STAGES
+                   if sd.name in enabled and sd.requires
+                   and importlib.util.find_spec(sd.requires) is None]
+        if missing:
+            for sd in missing:
+                print(
+                    f"Error: {sd.flag} requires the '{sd.requires}' package, "
+                    f"which is not installed.\n  Install with: {sd.install_hint}",
+                    file=sys.stderr,
+                )
+            sys.exit(1)
+
     # Warn: --slug with multiple targets is ambiguous
     if args.slug:
         targets_raw = load_targets(args.source)

@@ -47,10 +47,10 @@ _OUTPUT_SLUG_RE = re.compile(r"\boutput/([^/\s]+)")
 # Stage definitions
 # ---------------------------------------------------------------------------
 
-# UI metadata only (label, group, optional-package gating). The main.py flag
-# and interactivity for pipeline stages come from the shared registry
-# (pipeline/stages.py) so they cannot drift from the orchestrator.
-# 'requires': optional Python package — if missing, stage button is disabled in the UI.
+# UI metadata only (label, group). The main.py flag, interactivity, and
+# optional-package gating ('requires' / 'install_hint' — if the package is
+# missing, the stage button is disabled in the UI) come from the shared
+# registry (pipeline/stages.py) so they cannot drift from the orchestrator.
 # Stages with no registry entry (flag=None) are app-only and launch their
 # 'script' / 'collection_script' directly instead of going through main.py.
 from pipeline.stages import STAGE_BY_NAME as _REGISTRY  # noqa: E402
@@ -60,15 +60,13 @@ STAGES = [
     {"name": "download",           "label": "Download",           "group": "ingest",    "script": None},
     {"name": "select_pages",       "label": "Select pages",       "group": "calibrate", "script": None},
     {"name": "generate_prompts",   "label": "Generate prompts",   "group": "calibrate", "script": None},
-    {"name": "surya_ocr",          "label": "Surya OCR",          "group": "ocr",       "script": None,
-     "requires": "surya", "install_hint": "uv sync --extra gpu"},
+    {"name": "surya_ocr",          "label": "Surya OCR",          "group": "ocr",       "script": None},
     {"name": "gemini_ocr",         "label": "Gemini OCR",         "group": "ocr",       "script": None},
     {"name": "align_ocr",          "label": "Align OCR",          "group": "ocr",       "script": None},
     {"name": "review_alignment",   "label": "Review alignment",   "group": "review",    "script": None},
     {"name": "extract_entries",    "label": "Extract entries",    "group": "extract",   "script": None},
     {"name": "explore",            "label": "Explore",            "group": "extract",   "script": None},
-    {"name": "geocode",            "label": "Geocode",            "group": "extract",   "script": None,
-     "requires": "geopy", "install_hint": "uv sync --extra geo"},
+    {"name": "geocode",            "label": "Geocode",            "group": "extract",   "script": None},
     {"name": "map",                "label": "Map",                "group": "extract",   "script": None},
     {"name": "postprocess",        "label": "Postprocess",        "group": "extract",   "collection_script": "pipeline/postprocess.py"},
     {"name": "export_annotations", "label": "Export annotations", "group": "iiif",      "script": "pipeline/iiif/export_annotations.py"},
@@ -80,6 +78,9 @@ for _s in STAGES:
     _reg = _REGISTRY.get(_s["name"])
     _s["flag"] = _reg.flag if _reg else None
     _s["interactive"] = _reg.interactive if _reg else False
+    if _reg and _reg.requires:
+        _s["requires"] = _reg.requires
+        _s["install_hint"] = _reg.install_hint
 
 STAGE_BY_NAME = {s["name"]: s for s in STAGES}
 

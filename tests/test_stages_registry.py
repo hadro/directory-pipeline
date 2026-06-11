@@ -65,6 +65,19 @@ def test_module_path_mapping():
     assert STAGE_BY_NAME["loc_csv"].module == "sources.loc_collection_csv"
 
 
+def test_optional_extra_stages_declare_requirements():
+    # Stages backed by an optional extra: main.py preflights these and the
+    # dashboard disables their buttons when the package is missing.
+    requires = {s.name: s.requires for s in STAGES if s.requires}
+    assert requires == {
+        "surya_detect": "surya",
+        "surya_ocr": "surya",
+        "geocode": "geopy",
+    }
+    # A requirement without an install hint would produce a useless error.
+    assert all(s.install_hint for s in STAGES if s.requires)
+
+
 def test_known_stage_order_prefix():
     # Source stages must come first and explore last — downstream stages
     # depend on this fixed execution order.

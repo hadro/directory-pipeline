@@ -50,6 +50,8 @@ class StageDef:
     model_mode: "str | None" = None
     model_flag: str = "--model"
     opts: tuple = ()
+    requires: "str | None" = None  # importable package from an optional extra
+    install_hint: str = ""         # how to install it, e.g. "uv sync --extra gpu"
 
     @property
     def module(self) -> str:
@@ -71,6 +73,7 @@ STAGES: "list[StageDef]" = [
         "surya_detect", "pipeline/surya_detect.py", "--surya-detect",
         declarative=True,
         opts=(Opt("force", "--force", kind="switch"),),
+        requires="surya", install_hint="uv sync --extra gpu",
     ),
     StageDef(
         "detect_columns", "pipeline/detect_columns.py", "--detect-columns",
@@ -86,6 +89,7 @@ STAGES: "list[StageDef]" = [
         "surya_ocr", "pipeline/run_surya_ocr.py", "--surya-ocr",
         declarative=True,
         opts=(Opt("batch_size", "--batch-size", when="not_none"),),
+        requires="surya", install_hint="uv sync --extra gpu",
     ),
     StageDef(
         "gemini_ocr", "pipeline/run_gemini_ocr.py", "--gemini-ocr",
@@ -133,7 +137,8 @@ STAGES: "list[StageDef]" = [
         ),
     ),
     StageDef("geocode", "pipeline/geo/geocode_entries.py", "--geocode",
-             declarative=True, model_mode="fan_out"),
+             declarative=True, model_mode="fan_out",
+             requires="geopy", install_hint="uv sync --extra geo"),
     StageDef("map", "pipeline/geo/map_entries.py", "--map",
              declarative=True, model_mode="fan_out"),
     StageDef("explore", "pipeline/explore_entries.py", "--explore",
