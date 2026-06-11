@@ -15,8 +15,8 @@ Every new collection type needs a one-time calibration step that generates tailo
 pipeline ingest https://archive.org/details/ldpd_11290437_000/
 
 # Step 2: Calibrate — opens the page selector in your browser (pick 4–10
-#         representative pages, click "Save", press Ctrl+C), then has Gemini
-#         generate tailored OCR + NER prompts from your selection.
+#         representative pages, click "Done — continue pipeline"), then has
+#         Gemini generate tailored OCR + NER prompts from your selection.
 pipeline calibrate https://archive.org/details/ldpd_11290437_000/
 
 # Step 3: Run the pipeline — prompts are auto-discovered from the output directory

@@ -1053,13 +1053,25 @@ def process_item(
     scope = _load_scope(item_dir)
 
     aligned_files = sorted(item_dir.glob(f"*_{aligned_slug}_aligned.json"))
-    if scope is not None:
+    if scope is not None and aligned_files:
         aligned_suffix = f"_{aligned_slug}_aligned.json"
-        aligned_files = [f for f in aligned_files
-                         if Path(f.name[: -len(aligned_suffix)]).stem in scope
-                         or f.name[: -len(aligned_suffix)] in scope]
-        if not aligned_files:
-            _log(f"  Warning: scope filter (included_pages.txt) matched no aligned files in {item_dir}")
+        in_scope = [f for f in aligned_files
+                    if Path(f.name[: -len(aligned_suffix)]).stem in scope
+                    or f.name[: -len(aligned_suffix)] in scope]
+        if not in_scope:
+            _log(
+                f"  Warning: scope filter (included_pages.txt) excluded all "
+                f"{len(aligned_files)} aligned file(s) in {item_dir} — check that "
+                f"its filenames match the *_aligned.json stems (extension or "
+                f"prefix mismatch?). Falling back to text-only extraction "
+                f"(no bounding boxes)."
+            )
+        aligned_files = in_scope
+    elif not aligned_files and not quiet:
+        _log(
+            f"  Note: no *_{aligned_slug}_aligned.json files in {item_dir} — "
+            f"alignment has not been run; extracting text-only (no bounding boxes)."
+        )
     if not aligned_files:
         # Fallback: read raw Gemini text files (no bounding boxes)
         txt_suffix = f"_{aligned_slug}"

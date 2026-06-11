@@ -25,7 +25,6 @@ import re
 import socketserver
 import sys
 import threading
-import time
 import webbrowser
 from pathlib import Path
 
@@ -97,9 +96,17 @@ class _SaveHandler(http.server.SimpleHTTPRequestHandler):
     """Serve images from item_dir and accept POSTs to write selection files."""
     save_path: Path   # selection.txt
     scope_path: Path  # included_pages.txt
+    done_event: "threading.Event | None" = None  # set by POST /done → server exits
 
     def do_POST(self):
-        if self.path in ("/save", "/save-scope"):
+        if self.path == "/done":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok": true}')
+            if type(self).done_event is not None:
+                type(self).done_event.set()
+        elif self.path in ("/save", "/save-scope"):
             length = int(self.headers.get("Content-Length", 0))
             try:
                 body = json.loads(self.rfile.read(length))
@@ -159,6 +166,7 @@ def generate_html(
     images: list[Path],
     save_url: str | None = None,
     save_scope_url: str | None = None,
+    done_url: str | None = None,
 ) -> Path:
     """Write select_pages.html into item_dir and return its path."""
     fnames = [p.name for p in images]
@@ -176,6 +184,7 @@ def generate_html(
         images_json        = json.dumps(fnames),
         save_url_json      = json.dumps(save_url),
         save_scope_url_json = json.dumps(save_scope_url),
+        done_url_json      = json.dumps(done_url),
         preselected_json   = json.dumps(preselected),
         prescoped_excl_json = json.dumps(prescoped_excl),
         save_sample_label  = save_sample_label,
@@ -300,28 +309,30 @@ def main() -> None:
         else:
             _SaveHandler.save_path  = item_dir / "selection.txt"
             _SaveHandler.scope_path = item_dir / "included_pages.txt"
+            _SaveHandler.done_event = done = threading.Event()
             handler = functools.partial(_SaveHandler, directory=str(item_dir))
             with socketserver.TCPServer(("127.0.0.1", 0), handler) as server:
                 server.allow_reuse_address = True
                 port = server.server_address[1]
                 save_url       = f"http://127.0.0.1:{port}/save"
                 save_scope_url = f"http://127.0.0.1:{port}/save-scope"
+                done_url       = f"http://127.0.0.1:{port}/done"
 
-                out_path = generate_html(item_dir, images, save_url, save_scope_url)
+                out_path = generate_html(item_dir, images, save_url, save_scope_url, done_url)
                 url = f"http://127.0.0.1:{port}/select_pages.html"
                 print(f"Serving: {url}  ({len(images)} pages)", file=sys.stderr)
-                print("Press Ctrl+C when done.", file=sys.stderr)
+                print("Click “Done” in the browser when finished (or press Ctrl+C).", file=sys.stderr)
 
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
                 webbrowser.open(url)
 
                 try:
-                    while True:
-                        time.sleep(1)
+                    while not done.wait(1):
+                        pass
                 except KeyboardInterrupt:
-                    server.shutdown()
                     print("", file=sys.stderr)
+                server.shutdown()
 
 
 if __name__ == "__main__":

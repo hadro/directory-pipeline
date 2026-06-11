@@ -114,6 +114,7 @@
     .btn:disabled {{ opacity: .35; cursor: default; }}
     .btn-primary  {{ background: #2563eb; color: #fff; }}
     .btn-scope    {{ background: #15803d; color: #fff; }}
+    .btn-done     {{ background: #0f766e; color: #fff; }}
     .btn-secondary {{ background: #475569; color: #fff; }}
     .btn-clear    {{ background: #64748b; color: #fff; font-size: 12px; }}
 
@@ -261,12 +262,15 @@
   <button class="btn btn-secondary" onclick="copyToClipboard()" id="copy-btn" disabled>Copy filenames</button>
   <button class="btn btn-primary"   onclick="saveSelection()" id="dl-btn"   disabled id="dl-sample-btn">{save_sample_label}</button>
   <button class="btn btn-scope"     onclick="saveScope()"     id="scope-btn" style="display:none;">{save_scope_label}</button>
+  <button class="btn btn-done"      onclick="finishUp()"      id="done-btn"  style="display:none;"
+          title="Save the current selection, stop the page-selection server, and continue the pipeline">Done — continue pipeline</button>
 </footer>
 
 <script>
   const IMAGES        = {images_json};
   const SAVE_URL      = {save_url_json};
   const SAVE_SCOPE_URL = {save_scope_url_json};
+  const DONE_URL      = {done_url_json};
   const PRESELECTED   = new Set({preselected_json});
   const PRESCOPED_EXCL = new Set({prescoped_excl_json}); // filenames to EXCLUDE initially
   const MIN_SEL = 4;
@@ -509,6 +513,34 @@
     URL.revokeObjectURL(a.href);
   }}
 
+  // ── Done: save, stop the server, let the pipeline continue ─────────
+  function scopeTouched() {{
+    if (scopeExcluded.size !== PRESCOPED_EXCL.size) return true;
+    for (const f of scopeExcluded) if (!PRESCOPED_EXCL.has(f)) return true;
+    return false;
+  }}
+
+  async function finishUp() {{
+    const n = sampleSelected.size;
+    if (n === 0) {{
+      if (!confirm("No sample pages selected — prompt generation needs selection.txt.\nFinish anyway?")) return;
+    }} else if (n < MIN_SEL || n > MAX_SEL) {{
+      if (!confirm(n + " sample page(s) selected; 4–10 are recommended.\nFinish anyway?")) return;
+    }}
+    try {{
+      if (n > 0) await saveSelection();
+      if (scopeTouched()) await saveScope();
+      await fetch(DONE_URL, {{method: "POST"}});
+    }} catch (e) {{
+      console.warn("Finish failed — is the server still running?", e);
+      return;
+    }}
+    document.querySelectorAll("button").forEach(b => b.disabled = true);
+    const btn = document.getElementById("done-btn");
+    btn.textContent = "Finished ✓ — you can close this tab";
+    btn.disabled = true;
+  }}
+
   function copyToClipboard() {{
     const text = currentTab === 'sample'
       ? [...sampleSelected].join("\n")
@@ -520,6 +552,10 @@
       setTimeout(() => btn.textContent = orig, 1500);
     }});
   }}
+
+  // The Done button only makes sense when a live server is on the other end
+  // (not in the static --no-open HTML, where there is nothing to stop).
+  if (DONE_URL) document.getElementById("done-btn").style.display = "";
 
   // Initial status render
   updateStatus();
