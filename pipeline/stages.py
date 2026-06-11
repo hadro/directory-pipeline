@@ -124,6 +124,7 @@ STAGES: "list[StageDef]" = [
     StageDef(
         "review_alignment", "pipeline/review_alignment.py", "--review-alignment",
         interactive=True, declarative=True, model_mode="first",
+        opts=(Opt("no_open", "--no-open", kind="switch"),),
     ),
     StageDef(
         "extract_entries", "pipeline/extract_entries.py", "--extract-entries",

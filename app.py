@@ -223,13 +223,16 @@ STAGE_ARG_DEFS: dict[str, list[dict]] = {
 _MODEL_ARG_NAMES = {"model", "aligned_model"}
 
 # Registry opts deliberately not exposed as dashboard fields:
-#   gemini_ocr.ocr_prompt  — prompt file is auto-discovered from output/{slug}/
-#   extract_entries.flex   — on by default in main.py, and a checkbox cannot
-#                            express --no-flex (bool args only emit the flag)
-#   extract_entries.mode   — text vs. aligned mode is auto-detected per volume
+#   gemini_ocr.ocr_prompt       — prompt file is auto-discovered from output/{slug}/
+#   extract_entries.flex        — on by default in main.py, and a checkbox cannot
+#                                 express --no-flex (bool args only emit the flag)
+#   extract_entries.mode        — text vs. aligned mode is auto-detected per volume
+#   review_alignment.no_open    — auto-opening the review UI is the desired
+#                                 behavior when launched from the dashboard too
 _UNEXPOSED_OPTS: dict[str, set] = {
     "gemini_ocr": {"ocr_prompt"},
     "extract_entries": {"flex", "mode"},
+    "review_alignment": {"no_open"},
 }
 
 

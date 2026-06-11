@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import threading
+import webbrowser
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -455,6 +456,11 @@ def main() -> None:
         default="127.0.0.1",
         help="Host to bind to (default: 127.0.0.1)",
     )
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Don't open the review UI in a browser automatically",
+    )
     args = parser.parse_args()
 
     OUTPUT_ROOT = Path(args.output_dir)
@@ -470,6 +476,11 @@ def main() -> None:
     _load_surya()
     print("Models ready.", flush=True)
     print(f"Alignment review server — http://{args.host}:{args.port}", flush=True)
+    if not args.no_open:
+        # 0.0.0.0 binds all interfaces but isn't a browsable address itself.
+        open_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host
+        url = f"http://{open_host}:{args.port}"
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     app.run(host=args.host, port=args.port, debug=False, use_reloader=False)
 
 

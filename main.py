@@ -429,6 +429,35 @@ def build_stage_args(
     return None
 
 
+def preflight_requirements(enabled: "set[str]", find_spec=None) -> "tuple[list, str]":
+    """Check optional-extra dependencies for the enabled stages.
+
+    Returns (missing_stage_defs, install_cmd). install_cmd is a single
+    `uv sync` invocation naming every extra this run needs *plus* any extra
+    whose package is already installed: uv sync is exact, so syncing one
+    extra removes the others' packages — per-stage hints would send users
+    ping-ponging between `--extra gpu` and `--extra geo` forever.
+    """
+    if find_spec is None:
+        import importlib.util
+        find_spec = importlib.util.find_spec
+    missing = [sd for sd in STAGES
+               if sd.name in enabled and sd.requires
+               and find_spec(sd.requires) is None]
+    if not missing:
+        return [], ""
+    extras: list[str] = []
+    for sd in STAGES:
+        if not sd.requires or "--extra" not in sd.install_hint:
+            continue
+        extra = sd.install_hint.split("--extra", 1)[1].split()[0]
+        if extra in extras:
+            continue
+        if sd.name in enabled or find_spec(sd.requires) is not None:
+            extras.append(extra)
+    return missing, "uv sync " + " ".join(f"--extra {e}" for e in extras)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -923,17 +952,15 @@ def main() -> None:
     # as a mid-run per-stage warning and downstream stages (e.g. align_ocr
     # after a failed surya_ocr) run against nothing.
     if not args.dry_run:
-        import importlib.util
-        missing = [sd for sd in STAGES
-                   if sd.name in enabled and sd.requires
-                   and importlib.util.find_spec(sd.requires) is None]
+        missing, install_cmd = preflight_requirements(enabled)
         if missing:
             for sd in missing:
                 print(
                     f"Error: {sd.flag} requires the '{sd.requires}' package, "
-                    f"which is not installed.\n  Install with: {sd.install_hint}",
+                    "which is not installed.",
                     file=sys.stderr,
                 )
+            print(f"  Install with: {install_cmd}", file=sys.stderr)
             sys.exit(1)
 
     # Warn: --slug with multiple targets is ambiguous
