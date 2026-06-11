@@ -54,6 +54,7 @@ _OUTPUT_SLUG_RE = re.compile(r"\boutput/([^/\s]+)")
 # Stages with no registry entry (flag=None) are app-only and launch their
 # 'script' / 'collection_script' directly instead of going through main.py.
 from pipeline.stages import STAGE_BY_NAME as _REGISTRY  # noqa: E402
+from pipeline.state import read_state  # noqa: E402
 
 STAGES = [
     {"name": "download",           "label": "Download",           "group": "ingest",    "script": None},
@@ -216,6 +217,48 @@ STAGE_ARG_DEFS: dict[str, list[dict]] = {
     ],
 }
 
+# Orchestrator-level model fields, handled by the model_mode/--model plumbing in
+# _build_cmd rather than by per-stage registry Opts.
+_MODEL_ARG_NAMES = {"model", "aligned_model"}
+
+# Registry opts deliberately not exposed as dashboard fields:
+#   gemini_ocr.ocr_prompt  — prompt file is auto-discovered from output/{slug}/
+#   extract_entries.flex   — on by default in main.py, and a checkbox cannot
+#                            express --no-flex (bool args only emit the flag)
+#   extract_entries.mode   — text vs. aligned mode is auto-detected per volume
+_UNEXPOSED_OPTS: dict[str, set] = {
+    "gemini_ocr": {"ocr_prompt"},
+    "extract_entries": {"flex", "mode"},
+}
+
+
+def _stage_arg_drift() -> list[str]:
+    """Cross-check STAGE_ARG_DEFS against the stage registry (pipeline/stages.py).
+
+    Returns drift descriptions: registry Opts the dashboard neither exposes nor
+    lists in _UNEXPOSED_OPTS, and dashboard args with no registry Opt behind
+    them. Keeps the UI metadata here from silently drifting from the
+    orchestrator when a stage gains or renames an option.
+    """
+    problems: list[str] = []
+    for s in STAGES:
+        reg = _REGISTRY.get(s["name"])
+        if not reg or not reg.declarative:
+            continue
+        registry_attrs = {o.attr for o in reg.opts if not o.from_ctx}
+        ui_names = {d["name"] for d in STAGE_ARG_DEFS.get(s["name"], [])}
+        missing = registry_attrs - ui_names - _UNEXPOSED_OPTS.get(s["name"], set())
+        unknown = ui_names - registry_attrs - _MODEL_ARG_NAMES
+        if missing:
+            problems.append(f"{s['name']}: registry opts missing from STAGE_ARG_DEFS: {sorted(missing)}")
+        if unknown:
+            problems.append(f"{s['name']}: STAGE_ARG_DEFS args with no registry Opt: {sorted(unknown)}")
+    return problems
+
+
+for _p in _stage_arg_drift():
+    print(f"WARNING: stage arg drift — {_p}", file=sys.stderr)
+
 # Brief per-stage descriptions shown at the top of each arg panel.
 STAGE_HINTS: dict[str, str] = {
     "download":          "Fetches IIIF images to output/{slug}/. Also writes manifest.json, needed for image thumbnails.",
@@ -340,22 +383,26 @@ def _find_uuid_dirs(output_dir: Path) -> list[Path]:
 def _check_stage_done(item: dict) -> dict[str, bool]:
     """Return {stage_name: done_bool} for all stages of an item."""
     od = _resolve_output_dir(item)
+    # Read pipeline_state.json once per check, not once per stage.
+    state = read_state(od) if od else {}
     # Use same model resolution as _build_cmd so completion checks stay in sync.
     model = (
-        _read_pipeline_model(od)
+        state.get("ner_model")
+        or state.get("ocr_model")
         or item.get("model")
         or DEFAULT_MODEL
     )
+    completed = set(state.get("stages_completed") or [])
     item_id = item["id"]
 
     results: dict[str, bool] = {}
     for s in STAGES:
         name = s["name"]
-        results[name] = _stage_done(name, od, model, item_id)
+        results[name] = _stage_done(name, od, model, item_id, completed)
     return results
 
 
-def _stage_done(stage: str, od: Path | None, model: str, item_id: int) -> bool:
+def _stage_done(stage: str, od: Path | None, model: str, item_id: int, completed: set) -> bool:
     if not od or not od.exists():
         # Before the output dir exists, nothing can be done.
         if stage == "review_alignment":
@@ -380,12 +427,14 @@ def _stage_done(stage: str, od: Path | None, model: str, item_id: int) -> bool:
         "surya_ocr":         lambda: bool(list(od.glob("**/*_surya.json"))),
         "gemini_ocr":        lambda: bool(list(od.glob(f"**/*_{model}.txt"))),
         "align_ocr":         lambda: bool(list(od.glob(f"**/*_{model}_aligned.json"))),
-        # review_alignment: any aligned JSON with a manually-confirmed line is sufficient.
-        "review_alignment":  lambda: bool([
+        # review_alignment: any aligned JSON with a manually-confirmed line is
+        # sufficient. The cheap DB record is checked first so a confirmed item
+        # doesn't re-parse every aligned JSON on each status poll.
+        "review_alignment":  lambda: _db_stage_done(stage, item_id) or bool([
             f for f in od.glob(f"**/*_{model}_aligned.json")
             if any(ln.get("confidence") == "manual"
                    for ln in (json.loads(f.read_text(encoding="utf-8")).get("lines") or []))
-        ]) or _db_stage_done(stage, item_id),
+        ]),
         "extract_entries":   lambda: bool(list(od.glob("**/entries_*.csv"))),
         "explore":           lambda: bool(list(od.glob("**/entries_*_explorer.html"))),
         "postprocess":       lambda: (od / "combined.csv").exists() or bool(list(od.glob("**/entries_*_fixed.csv"))),
@@ -403,9 +452,9 @@ def _stage_done(stage: str, od: Path | None, model: str, item_id: int) -> bool:
     except Exception:
         result = False
 
-    # Final fallback: check pipeline_state.json for stages run via the CLI.
+    # Final fallback: stages_completed from pipeline_state.json (CLI runs).
     if not result:
-        result = _pipeline_state_stage_done(od, stage)
+        result = stage in completed
 
     return result
 
@@ -418,20 +467,6 @@ def _db_stage_done(stage: str, item_id: int) -> bool:
             (item_id, stage)
         ).fetchone()
     return row is not None
-
-
-def _pipeline_state_stage_done(od: Path | None, stage: str) -> bool:
-    """Check pipeline_state.json for stages completed via the CLI outside the dashboard."""
-    if not od:
-        return False
-    state_file = od / "pipeline_state.json"
-    if not state_file.exists():
-        return False
-    try:
-        state = json.loads(state_file.read_text(encoding="utf-8"))
-        return stage in (state.get("stages_completed") or [])
-    except Exception:
-        return False
 
 
 def _item_status(item: dict) -> dict[str, str]:
@@ -601,14 +636,8 @@ def _read_pipeline_model(od: Path | None) -> str | None:
     """Read the OCR/NER model from pipeline_state.json if present."""
     if not od:
         return None
-    state_file = od / "pipeline_state.json"
-    if not state_file.exists():
-        return None
-    try:
-        state = json.loads(state_file.read_text(encoding="utf-8"))
-        return state.get("ner_model") or state.get("ocr_model")
-    except Exception:
-        return None
+    state = read_state(od)
+    return state.get("ner_model") or state.get("ocr_model")
 
 
 def _build_cmd(
