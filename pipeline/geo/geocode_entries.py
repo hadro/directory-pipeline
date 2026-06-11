@@ -35,10 +35,15 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-from geopy.geocoders import Nominatim, GoogleV3
+
+try:
+    from geopy.geocoders import Nominatim, GoogleV3
+    from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+except ImportError as exc:
+    print(f"Error: {exc}\nInstall with: uv sync --extra geo", file=sys.stderr)
+    sys.exit(1)
 
 load_dotenv()
-from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
 from utils.models import DEFAULT_OCR_MODEL
 

@@ -27,7 +27,7 @@ Output
   output_dir/columns_report.csv  (same fields as detect_columns.py)
 
 Requirements
-  pip install surya-ocr
+  uv sync --extra gpu
 
 Usage
 -----
@@ -245,7 +245,7 @@ def main() -> None:
         from surya.detection import DetectionPredictor
     except ImportError as exc:
         print(
-            f"Error: {exc}\nInstall with: pip install surya-ocr",
+            f"Error: {exc}\nInstall with: uv sync --extra gpu",
             file=sys.stderr,
         )
         sys.exit(1)

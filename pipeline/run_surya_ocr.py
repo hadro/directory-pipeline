@@ -12,9 +12,8 @@ the script is safe to re-run.
 Surya processes images in batches for GPU/MPS efficiency.  Reduce --batch-size
 if you hit out-of-memory errors.
 
-Requires surya-ocr:
-    pip install surya-ocr
-    uv add surya-ocr
+Requires surya-ocr (the `gpu` extra):
+    uv sync --extra gpu
 
 Output JSON schema per image:
     {
@@ -86,7 +85,7 @@ def main() -> None:
     except ImportError as exc:
         print(
             f"Error: {exc}\n"
-            "Install with:  pip install surya-ocr  (or: uv add surya-ocr)",
+            "Install with:  uv sync --extra gpu",
             file=sys.stderr,
         )
         sys.exit(1)

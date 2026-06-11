@@ -30,7 +30,7 @@ from pathlib import Path
 try:
     from PIL import Image, ImageDraw, ImageFont
 except ImportError:
-    print("Error: Pillow is required. Install with: uv add pillow", file=sys.stderr)
+    print("Error: Pillow is required (a core dependency). Run: uv sync", file=sys.stderr)
     sys.exit(1)
 
 # ---------------------------------------------------------------------------

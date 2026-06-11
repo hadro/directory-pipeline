@@ -48,18 +48,18 @@ select = ["F", "E9"]
 
 [project.optional-dependencies]
 # Heavy GPU-dependent OCR models (Surya).
-# Install with: pip install -e ".[gpu]"
+# Install with: uv sync --extra gpu
 gpu = [
     "surya-ocr>=0.17.1",
     "transformers>=4.56.1,<5.0",
 ]
 # Geocoding and map generation.
-# Install with: pip install -e ".[geo]"
+# Install with: uv sync --extra geo
 geo = [
     "geopy>=2.4",
 ]
 # Everything.
-# Install with: pip install -e ".[all]"
+# Install with: uv sync --all-extras
 all = [
     "directory-pipeline[gpu,geo]",
 ]

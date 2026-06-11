@@ -51,7 +51,7 @@ try:
     from PIL import Image
 except ImportError:
     print(
-        "Error: Pillow is required. Install with: uv add pillow",
+        "Error: Pillow is required (a core dependency). Run: uv sync",
         file=sys.stderr,
     )
     sys.exit(1)
