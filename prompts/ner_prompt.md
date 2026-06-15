@@ -40,4 +40,5 @@ Each entry in the `"entries"` array should contain the fields most meaningful fo
 4. **Heading transitions mid-page:** When a new heading appears mid-page (e.g., a new state or category name), every entry after that heading belongs to the *new* heading's context — not the prior-page context value. `prior_context` only covers entries that appear *before* the first heading change on the current page. Do not carry the old context past a visible heading boundary.
 5. Do **not** add or infer information not present in the source text.
 6. If a record spans a page boundary, extract what is present on the current page.
-7. Return **only** valid JSON. No markdown code fences. No explanatory text.
+7. **Sentinel tokens:** the source text may contain the literal tokens `[illegible]` (text present but unreadable) or `[blank]` (no text). When a field's value in the source is one of these, copy the token verbatim into that field. Never invent a value to replace it. A field that is simply *absent* from an entry stays empty — do **not** fill it with a sentinel token.
+8. Return **only** valid JSON. No markdown code fences. No explanatory text.

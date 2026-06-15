@@ -525,11 +525,19 @@ def flag_name_eq_address(name: str, address: str) -> bool:
 # 5b. Hallucination detection — same-page field repetition
 # ---------------------------------------------------------------------------
 
+# Reserved sentinel tokens (the prompts/ machine contract): a value the model
+# deliberately marked as unreadable/empty rather than a real datum. Recognized
+# here so they are never mistaken for actual data or for hallucination repeats.
+# See prompts/README.md → "Sentinel tokens".
+SENTINEL_TOKENS: frozenset[str] = frozenset({"[illegible]", "[blank]"})
+
 # Values injected by NER when a field is absent; these repeat legitimately.
+# Sentinel tokens are folded in so e.g. a page full of "[illegible]" proprietors
+# is not flagged as hallucinated.
 _NER_PLACEHOLDER_VALUES: frozenset[str] = frozenset({
     "n/a", "na", "none", "unknown", "not specified", "not available",
     "rates on request", "on request",
-})
+}) | SENTINEL_TOKENS
 
 # Fields that carry proprietor/manager info across the various volume schemas.
 # Each schema uses different column names; we check all of them.

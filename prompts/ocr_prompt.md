@@ -9,7 +9,8 @@ Transcribe the text on this page exactly as it is printed:
 - Preserve original capitalization
 - Output each printed line as one line of output; preserve blank lines between sections
 - Include page numbers and running headers or footers if present
-- For text that is degraded, blurred, or partially obscured, transcribe your best reading — do not skip words, insert placeholders, or leave gaps
+- For text that is degraded, blurred, or partially obscured, transcribe your best reading — do not skip words or leave gaps
+- Only when a span is genuinely impossible to read after a best-effort attempt, write the literal token `[illegible]` in its place. If a region truly contains no text, write `[blank]`. Use these two tokens exactly as written — do not invent other placeholders.
 
 ## Scope
 
