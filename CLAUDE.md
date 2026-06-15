@@ -4,15 +4,15 @@ Extracts structured CSVs from digitized historical directories (city directories
 
 ## Active work: simplification plan
 
-A multi-session refactor plan lives at `docs/refactor-plan.md` (created 2026-06-09). If asked to "work on the refactor/simplification plan" or pick up cleanup work, read that file first — it has task-by-task instructions, verification ground rules, and a session log to update.
+A multi-session refactor plan lives at `docs/plans/refactor-plan.md` (created 2026-06-09; **local-only — not currently committed to this repo**). If asked to "work on the refactor/simplification plan" or pick up cleanup work, read that file first — it has task-by-task instructions, verification ground rules, and a session log to update. If it is absent from a fresh clone, it is on the local working copy; commit it into `docs/plans/` to share.
 
 ## Future direction: local open models
 
-A strategy doc for replacing the Gemini OCR/NER steps with local open models (Chandra, NuExtract3, Qwen3.5, GLiNER) via Hugging Face uv-scripts — plus a cost comparison and a phased roadmap — lives at `docs/huggingface-uv-scripts.md` (created 2026-06-15). Read it before starting any local-model backend work; implementation is deferred to a future session.
+A strategy doc for replacing the Gemini OCR/NER steps with local open models (Chandra, NuExtract3, Qwen3.5, GLiNER) via Hugging Face uv-scripts — plus a cost comparison and a phased roadmap — lives at `docs/plans/huggingface-uv-scripts.md` (created 2026-06-15). Read it before starting any local-model backend work; implementation is deferred to a future session.
 
 ## Planned work: automatic section detection
 
-A phased implementation plan for a `detect_sections` stage — auto-drafts `sections.txt` for multi-section city directories (alphabetical / street / classified / frontmatter) so per-section NER prompts route correctly — lives at `docs/section-detection-plan.md` (created 2026-06-15). The consumer side (`utils/section_utils.py` + `extract_entries.py`) already exists; only the producer is missing. Read it before starting section-detection work; best implemented locally where the gitignored `output/` data is on disk.
+A phased implementation plan for a `detect_sections` stage — auto-drafts `sections.txt` for multi-section city directories (alphabetical / street / classified / frontmatter) so per-section NER prompts route correctly — lives at `docs/plans/section-detection-plan.md` (created 2026-06-15). The consumer side (`utils/section_utils.py` + `extract_entries.py`) already exists; only the producer is missing. Read it before starting section-detection work; best implemented locally where the gitignored `output/` data is on disk.
 
 ## Setup
 

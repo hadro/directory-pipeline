@@ -1,5 +1,7 @@
 # Strategy: Hugging Face uv-scripts + Open Models for the Directory Pipeline
 
+**Status:** Planned — Phase 0 decision record; implementation deferred to a future session.
+
 > **What this is:** a strategy/recommendations doc (no code yet) for replacing the
 > Gemini OCR/NER steps with local open models, and for adjacent uv-scripts opportunities.
 > It surveys models, gives an explicit cost comparison, and lays out a phased

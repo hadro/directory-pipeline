@@ -1,5 +1,7 @@
 # Plan: automatic section detection for multi-section directories
 
+**Status:** Planned — Phase 0 not yet started; best implemented in a local session.
+
 > **What this is:** an implementation plan (no code yet) for a `detect_sections`
 > stage that analyzes a volume's per-page OCR output and drafts a `sections.txt`
 > marking the structural sections of a city directory (alphabetical name list,
@@ -275,7 +277,7 @@ a `section_type` enum classification. Two interchangeable backends, gated so the
 deterministic core never depends on either:
 - **Cheap now:** one Gemini `flash-lite` call per ambiguous page (OCR already exists —
   you're just labeling). Fractions of a cent for the handful of transition pages.
-- **Local (per `docs/huggingface-uv-scripts.md`):** the NuExtract3 `image_type` enum
+- **Local (per `docs/plans/huggingface-uv-scripts.md`):** the NuExtract3 `image_type` enum
   idea generalizes directly to a `section_type` enum — page-level classification is the
   cheapest possible VLM task. Register it the same way a local OCR/NER backend would.
 
