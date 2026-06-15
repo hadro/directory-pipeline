@@ -157,7 +157,7 @@ pipeline review output/<vol>/    # optional: fix unmatched lines interactively
 
 ## Costs
 
-A single ~80-page volume costs roughly **~$0.30 in Gemini API charges with `--flex`** or **$0.60** at standard rates, and can run within the free tier's daily quota (~15–20 minutes at 15 RPM). See [docs/costs.md](docs/costs.md) for a full breakdown including platform costs (Surya OCR on Mac, Colab, and GPU).
+A single \~80-page volume costs roughly **~$0.30 in Gemini API charges with `--flex`** or **$0.60** at standard rates, and can run within the free tier's daily quota (~15–20 minutes at 15 RPM). See [docs/costs.md](docs/costs.md) for a full breakdown including platform costs (Surya OCR on Mac, Colab, and GPU).
 
 ---
 
