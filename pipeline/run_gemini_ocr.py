@@ -350,7 +350,13 @@ def main() -> None:
         type=int,
         default=4,
         metavar="N",
-        help="Number of parallel API requests (default: 4)",
+        help=(
+            "Number of parallel API requests (default: 4). Vision APIs tend to "
+            "throttle sustained high parallelism by stalling rather than returning "
+            "429, so if runs hang, lower this (2 is a safe floor) rather than "
+            "raising it. Re-runs are cheap: completed pages (existing .txt) are "
+            "skipped, so an interrupted run resumes where it left off."
+        ),
     )
     parser.add_argument(
         "--prompt-file",
