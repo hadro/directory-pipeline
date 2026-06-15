@@ -47,6 +47,7 @@ Stages always execute in fixed order regardless of flag order. All stages are op
 | `--gemini-ocr` | Gemini text extraction | `*_{model}.txt` |
 | `--align-ocr` | NW alignment of Gemini text to Surya bboxes | `*_aligned.json` |
 | `--review-alignment` | Interactive Flask UI to fix bad alignments | updates `*_aligned.json` |
+| `--export-alto` | Aligned OCR → ALTO v3 XML (Solr / IIIF Content Search) | `*.alto.xml` |
 | `--extract-entries` | NER → structured entries | `entries_{model}.csv` |
 | `--geocode` | Geocode entries | `*_geocoded.csv` |
 | `--map` | Leaflet HTML map | `entries_*_geocoded.html` |

@@ -122,6 +122,14 @@ STAGES: "list[StageDef]" = [
         ),
     ),
     StageDef(
+        "export_alto", "pipeline/export_alto.py", "--export-alto",
+        declarative=True, model_mode="fan_out",
+        opts=(
+            Opt("line_strings", "--line-strings", kind="switch"),
+            Opt("force", "--force", kind="switch"),
+        ),
+    ),
+    StageDef(
         "review_alignment", "pipeline/review_alignment.py", "--review-alignment",
         interactive=True, declarative=True, model_mode="first",
         opts=(Opt("no_open", "--no-open", kind="switch"),),

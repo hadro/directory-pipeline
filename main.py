@@ -25,6 +25,7 @@ command line:
   --compare-ocr     pipeline/compare_ocr.py           (side-by-side model comparison; accepts "surya" token)
   --align-ocr       pipeline/align_ocr.py             (NW alignment of Gemini text to Surya bboxes)
   --visualize       pipeline/visualize_alignment.py   (draw alignment boxes on images → *_viz.jpg)
+  --export-alto     pipeline/export_alto.py           (aligned OCR → ALTO v3 XML → *.alto.xml)
   --review-alignment pipeline/review_alignment.py     (interactive UI to correct unmatched entries → *_aligned.json)
   --extract-entries pipeline/extract_entries.py        (extract structured entries from aligned OCR)
   --geocode         pipeline/geo/geocode_entries.py    (geocode entries to lat/lon)
@@ -563,6 +564,12 @@ def main() -> None:
         help="Draw alignment bounding boxes on images and save *_viz.jpg (see --ocr-model / --models)",
     )
     stages.add_argument(
+        "--export-alto",
+        dest="export_alto",
+        action="store_true",
+        help="Export aligned OCR to ALTO v3 XML (*.alto.xml) for Solr / IIIF Content Search (see --ocr-model / --models)",
+    )
+    stages.add_argument(
         "--detect-spreads",
         dest="detect_spreads",
         action="store_true",
@@ -827,6 +834,12 @@ def main() -> None:
         dest="no_text",
         action="store_true",
         help="For --visualize: draw boxes only, skip Gemini text labels on images.",
+    )
+    opts.add_argument(
+        "--line-strings",
+        dest="line_strings",
+        action="store_true",
+        help="For --export-alto: emit one ALTO String per whole line instead of estimating word boxes.",
     )
     opts.add_argument(
         "--no-open",
