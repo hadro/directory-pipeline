@@ -20,7 +20,6 @@ Point-in-time roadmaps. Implementation is deferred per each file's `Status:` lin
 - [plans/section-detection-plan.md](plans/section-detection-plan.md) — auto-draft `sections.txt` for multi-section directories so per-section NER prompts route correctly. *Status: Planned.*
 - [plans/huggingface-uv-scripts.md](plans/huggingface-uv-scripts.md) — replace the Gemini OCR/NER steps with local open models via Hugging Face uv-scripts. *Status: Planned.*
 - [plans/aws-migration-plan.md](plans/aws-migration-plan.md) — port the pipeline to run entirely on AWS (Bedrock + Location Service). *Status: Planned.*
-- `plans/refactor-plan.md` — multi-session simplification/cleanup plan. **Local-only — not committed to this repo** (referenced as Active work in `CLAUDE.md`). Commit your local copy into `docs/plans/` to share it, or drop the reference.
 
 ## Assets
 - `screenshots/` — images embedded in the README and docs.
