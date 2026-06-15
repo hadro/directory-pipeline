@@ -38,6 +38,8 @@ from utils.models import DEFAULT_OCR_MODEL as DEFAULT_MODEL
 
 # Matches the first segment of a UUID (8 hex chars)
 _UUID_RE = re.compile(r"([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+# Matches the identifier in an Internet Archive details/item URL
+_IA_ID_RE = re.compile(r"archive\.org/(?:details|metadata)/([^/?#]+)", re.I)
 # Matches any http://127.0.0.1:PORT/... URL in subprocess output
 _SERVER_URL_RE = re.compile(r"http://127\.0\.0\.1:\d+\S*")
 # Matches output/slug in subprocess output (slug has no slashes)
@@ -69,6 +71,7 @@ STAGES = [
     {"name": "geocode",            "label": "Geocode",            "group": "extract",   "script": None},
     {"name": "map",                "label": "Map",                "group": "extract",   "script": None},
     {"name": "postprocess",        "label": "Postprocess",        "group": "extract",   "collection_script": "pipeline/postprocess.py"},
+    {"name": "export_alto",        "label": "Export ALTO XML",    "group": "iiif",      "script": "pipeline/export_alto.py"},
     {"name": "export_annotations", "label": "Export annotations", "group": "iiif",      "script": "pipeline/iiif/export_annotations.py"},
     {"name": "export_entry_boxes", "label": "Export entry boxes", "group": "iiif",      "script": "pipeline/iiif/export_entry_boxes.py"},
     {"name": "build_ranges",       "label": "Build ranges",       "group": "iiif",      "script": "pipeline/iiif/build_ranges.py"},
@@ -196,6 +199,15 @@ STAGE_ARG_DEFS: dict[str, list[dict]] = {
         {"name": "no_combine", "flag": "--no-combine", "type": "bool", "label": "No combine",
          "default": False,
          "hint": "Skip the combine step. Use this for single-volume directories that don't need merging."},
+    ],
+    "export_alto": [
+        {"name": "model", "flag": "--model", "type": "str",  "label": "Model",
+         "default": DEFAULT_MODEL, "placeholder": "",
+         "hint": "OCR model slug whose aligned JSON files to serialize to ALTO v3 XML for Solr / IIIF Content Search."},
+        {"name": "line_strings", "flag": "--line-strings", "type": "bool", "label": "Line strings", "default": False,
+         "hint": "Emit one ALTO String per whole line instead of estimating per-word boxes."},
+        {"name": "force", "flag": "--force", "type": "bool", "label": "Force", "default": False,
+         "hint": "Overwrite existing .alto.xml files."},
     ],
     "export_annotations": [
         {"name": "model", "flag": "--model", "type": "str",  "label": "Model",
@@ -347,13 +359,31 @@ def _get_item(item_id: int) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _detect_output_dir(url: str) -> Path | None:
-    """Find the output dir for a URL by matching the UUID8 in output/ dir names."""
-    m = _UUID_RE.search(url)
-    if m and OUTPUT_ROOT.exists():
-        uuid8 = m.group(1).lower()
-        for d in OUTPUT_ROOT.iterdir():
-            if d.is_dir() and uuid8 in d.name.lower():
-                return d
+    """Find the output dir for a URL.
+
+    Tries, in order: a UUID8 from the URL matched against dir names
+    (LoC-style identifiers), an archive.org identifier matched against dir
+    names (IA slugs embed the identifier), and finally the source_url that
+    main.py records in each dir's pipeline_state.json (any source type).
+    """
+    if not OUTPUT_ROOT.exists():
+        return None
+
+    idents: list[str] = []
+    if m := _UUID_RE.search(url):
+        idents.append(m.group(1).lower())
+    if m := _IA_ID_RE.search(url):
+        idents.append(m.group(1).lower())
+
+    dirs = [d for d in OUTPUT_ROOT.iterdir() if d.is_dir()]
+    for d in dirs:
+        if any(ident in d.name.lower() for ident in idents):
+            return d
+
+    norm = url.rstrip("/")
+    for d in dirs:
+        if read_state(d).get("source_url", "").rstrip("/") == norm:
+            return d
     return None
 
 
