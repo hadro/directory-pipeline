@@ -6,6 +6,10 @@ Extracts structured CSVs from digitized historical directories (city directories
 
 A multi-session refactor plan lives at `docs/refactor-plan.md` (created 2026-06-09). If asked to "work on the refactor/simplification plan" or pick up cleanup work, read that file first — it has task-by-task instructions, verification ground rules, and a session log to update.
 
+## Future direction: local open models
+
+A strategy doc for replacing the Gemini OCR/NER steps with local open models (Chandra, NuExtract3, Qwen3.5, GLiNER) via Hugging Face uv-scripts — plus a cost comparison and a phased roadmap — lives at `docs/huggingface-uv-scripts.md` (created 2026-06-15). Read it before starting any local-model backend work; implementation is deferred to a future session.
+
 ## Setup
 
 ```bash
