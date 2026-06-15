@@ -17,6 +17,8 @@ Confidence tiers
 ----------------
   line   — matched with line-level bboxes from Surya
   manual — user-confirmed in --review-alignment
+  crop   — per-line crop OCR (no NW alignment); same aligned-JSON shape with
+           "method": "linecrop" (produced by an experimental line-crop tool)
 
 Output JSON
 -----------
@@ -839,6 +841,134 @@ def _build_line_aligned_lines(
 
 
 # ---------------------------------------------------------------------------
+# Canvas-fragment resolution (shared by NW align and line-crop fallback)
+# ---------------------------------------------------------------------------
+
+def resolve_fragment_fn(
+    image_path: Path, img_w: int, img_h: int
+) -> tuple["callable", dict]:
+    """Build the canvas_fragment() closure and resolve canvas metadata for an image.
+
+    Returns ``(fragment_fn, meta)`` where ``fragment_fn(bbox)`` maps a
+    pixel-space bbox to a ``canvas_uri#xywh=…`` fragment string, and ``meta`` is
+    a dict with keys ``canvas_uri``, ``canvas_width``, ``canvas_height``, and
+    ``coords_from_fallback`` (all already coerced to ``value or None``).
+
+    Used by :func:`align_image`; factored out so any alternative line source
+    (e.g. a per-line crop OCR path) can reuse the identical scaling and emit
+    canvas-space coordinates from the same Surya pixel bboxes.
+
+    Resolution rules (unchanged from the original inline logic):
+
+    * Natural image dimensions are fetched from the IIIF ``info.json`` so output
+      coords land in image pixel space (Mirador maps ``xywh`` directly there).
+    * A near-square ``info.json`` response for a clearly non-square downloaded
+      image is treated as a server placeholder and replaced with the downloaded
+      dimensions.
+    * On ``info.json`` failure, fall back to the manifest canvas size (warning
+      loudly if that too is square).
+    * Split ``_left`` / ``_right`` images read their ``_split.json`` sidecar so
+      crop coords are translated back to full-spread space before scaling.
+    """
+    stem = image_path.stem
+    image_id = _extract_image_id(image_path.name)
+    manifest_path = image_path.parent / "manifest.json"
+    canvas_uri, canvas_w, canvas_h = load_canvas_info(manifest_path, image_id)
+
+    # Fetch natural image dimensions so canvas_fragment outputs native pixel
+    # coords (Mirador maps xywh directly to image pixel space).
+    nat_w, nat_h = (0, 0)
+    coords_from_fallback = False
+    if canvas_uri:
+        nat_w, nat_h = _get_natural_dims(canvas_uri)
+    # Sanity-check: some NYPL images return a square placeholder (e.g.
+    # 2560×2560) from info.json even though the actual image is portrait or
+    # landscape.  Detect this by comparing the info.json aspect ratio to the
+    # downloaded image's aspect ratio.  If info.json returned a nearly-square
+    # result but the downloaded image is clearly non-square (ratio differs by
+    # more than 15 %), treat it as a bad response and fall back to downloaded
+    # image dimensions so coordinates land in the right place.
+    if nat_w and nat_h and img_w and img_h:
+        nat_ratio = nat_w / nat_h
+        img_ratio = img_w / img_h
+        _is_square = abs(nat_ratio - 1.0) < 0.02          # info.json ≈ square
+        _img_non_square = abs(img_ratio - 1.0) > 0.15     # downloaded image is not
+        if _is_square and _img_non_square:
+            _log(
+                f"  *** WARNING: {image_path.name}: info.json returned a square"
+                f" ({nat_w}x{nat_h}) but the downloaded image is non-square"
+                f" ({img_w}x{img_h}, ratio={img_ratio:.3f}). This is likely a"
+                f" server-side placeholder. Falling back to downloaded image"
+                f" dimensions for canvas coordinates."
+            )
+            nat_w, nat_h = img_w, img_h
+            coords_from_fallback = True
+    if not nat_w:
+        nat_w, nat_h = canvas_w, canvas_h
+        coords_from_fallback = True
+        if canvas_w and canvas_w == canvas_h:
+            _log(
+                f"  *** WARNING: {image_path.name}: info.json fetch failed after retries."
+                f" Falling back to manifest canvas size ({canvas_w}x{canvas_h}), which is"
+                f" SQUARE — almost certainly a placeholder. Bounding-box coordinates will"
+                f" be in the wrong space. Re-run --align-ocr --force once the network is"
+                f" stable, or run tools/rescale_canvas_fragments.py to fix in place."
+            )
+
+    # For split images (_left / _right), read the sidecar to get the
+    # x_offset that maps split-image coordinates back to full-spread
+    # canvas coordinates before any canvas-vs-download scaling.
+    split_x_offset = 0
+    split_y_offset = 0
+    full_img_w = img_w   # width of the full downloaded image pre-split
+    full_img_h = img_h
+    for _suffix in ("_left", "_right"):
+        if stem.endswith(_suffix):
+            _split_json = image_path.with_name(
+                f"{stem[: -len(_suffix)]}_split.json"
+            )
+            if _split_json.exists():
+                try:
+                    _sidecar = json.loads(
+                        _split_json.read_text(encoding="utf-8")
+                    )
+                    full_img_w = _sidecar.get("original_width", img_w)
+                    full_img_h = _sidecar.get("original_height", img_h)
+                    _side = _suffix.lstrip("_")
+                    for _page in _sidecar.get("pages", []):
+                        if _page.get("side") == _side:
+                            split_x_offset = _page.get("x_offset", 0)
+                            split_y_offset = _page.get("y_offset", 0)
+                            break
+                except Exception:
+                    pass
+            break
+
+    def fragment(bbox: list[int]) -> str:
+        if not canvas_uri:
+            return ""
+        # Translate split-image pixel coords to full-spread coords,
+        # then scale to canvas space (handles download-resolution caps).
+        offset_bbox = [
+            bbox[0] + split_x_offset,
+            bbox[1] + split_y_offset,
+            bbox[2] + split_x_offset,
+            bbox[3] + split_y_offset,
+        ]
+        return _canvas_fragment(
+            canvas_uri, offset_bbox, full_img_w, full_img_h, nat_w, nat_h
+        )
+
+    meta = {
+        "canvas_uri": canvas_uri or None,
+        "canvas_width": nat_w or None,
+        "canvas_height": nat_h or None,
+        "coords_from_fallback": coords_from_fallback or None,
+    }
+    return fragment, meta
+
+
+# ---------------------------------------------------------------------------
 # Per-image alignment
 # ---------------------------------------------------------------------------
 
@@ -907,93 +1037,7 @@ def align_image(
             gemini_lines.append(_ln)
 
         # IIIF canvas info ----------------------------------------------------
-        image_id = _extract_image_id(image_path.name)
-        manifest_path = image_path.parent / "manifest.json"
-        canvas_uri, canvas_w, canvas_h = load_canvas_info(manifest_path, image_id)
-
-        # Fetch natural image dimensions so canvas_fragment outputs native pixel
-        # coords (Mirador maps xywh directly to image pixel space).
-        nat_w, nat_h = (0, 0)
-        coords_from_fallback = False
-        if canvas_uri:
-            nat_w, nat_h = _get_natural_dims(canvas_uri)
-        # Sanity-check: some NYPL images return a square placeholder (e.g.
-        # 2560×2560) from info.json even though the actual image is portrait or
-        # landscape.  Detect this by comparing the info.json aspect ratio to the
-        # downloaded image's aspect ratio.  If info.json returned a nearly-square
-        # result but the downloaded image is clearly non-square (ratio differs by
-        # more than 15 %), treat it as a bad response and fall back to downloaded
-        # image dimensions so coordinates land in the right place.
-        if nat_w and nat_h and img_w and img_h:
-            nat_ratio = nat_w / nat_h
-            img_ratio = img_w / img_h
-            _is_square = abs(nat_ratio - 1.0) < 0.02          # info.json ≈ square
-            _img_non_square = abs(img_ratio - 1.0) > 0.15     # downloaded image is not
-            if _is_square and _img_non_square:
-                _log(
-                    f"  *** WARNING: {image_path.name}: info.json returned a square"
-                    f" ({nat_w}x{nat_h}) but the downloaded image is non-square"
-                    f" ({img_w}x{img_h}, ratio={img_ratio:.3f}). This is likely a"
-                    f" server-side placeholder. Falling back to downloaded image"
-                    f" dimensions for canvas coordinates."
-                )
-                nat_w, nat_h = img_w, img_h
-                coords_from_fallback = True
-        if not nat_w:
-            nat_w, nat_h = canvas_w, canvas_h
-            coords_from_fallback = True
-            if canvas_w and canvas_w == canvas_h:
-                _log(
-                    f"  *** WARNING: {image_path.name}: info.json fetch failed after retries."
-                    f" Falling back to manifest canvas size ({canvas_w}x{canvas_h}), which is"
-                    f" SQUARE — almost certainly a placeholder. Bounding-box coordinates will"
-                    f" be in the wrong space. Re-run --align-ocr --force once the network is"
-                    f" stable, or run tools/rescale_canvas_fragments.py to fix in place."
-                )
-
-        # For split images (_left / _right), read the sidecar to get the
-        # x_offset that maps split-image coordinates back to full-spread
-        # canvas coordinates before any canvas-vs-download scaling.
-        split_x_offset = 0
-        split_y_offset = 0
-        full_img_w = img_w   # width of the full downloaded image pre-split
-        full_img_h = img_h
-        for _suffix in ("_left", "_right"):
-            if stem.endswith(_suffix):
-                _split_json = image_path.with_name(
-                    f"{stem[: -len(_suffix)]}_split.json"
-                )
-                if _split_json.exists():
-                    try:
-                        _sidecar = json.loads(
-                            _split_json.read_text(encoding="utf-8")
-                        )
-                        full_img_w = _sidecar.get("original_width", img_w)
-                        full_img_h = _sidecar.get("original_height", img_h)
-                        _side = _suffix.lstrip("_")
-                        for _page in _sidecar.get("pages", []):
-                            if _page.get("side") == _side:
-                                split_x_offset = _page.get("x_offset", 0)
-                                split_y_offset = _page.get("y_offset", 0)
-                                break
-                    except Exception:
-                        pass
-                break
-
-        def fragment(bbox: list[int]) -> str:
-            if not canvas_uri:
-                return ""
-            # Translate split-image pixel coords to full-spread coords,
-            # then scale to canvas space (handles download-resolution caps).
-            offset_bbox = [
-                bbox[0] + split_x_offset,
-                bbox[1] + split_y_offset,
-                bbox[2] + split_x_offset,
-                bbox[3] + split_y_offset,
-            ]
-            return _canvas_fragment(
-                canvas_uri, offset_bbox, full_img_w, full_img_h, nat_w, nat_h
-            )
+        fragment, canvas_meta = resolve_fragment_fn(image_path, img_w, img_h)
 
         # NW alignment --------------------------------------------------------
         result_lines, unmatched_gemini = _build_line_aligned_lines(
@@ -1017,10 +1061,10 @@ def align_image(
         result = {
             "image": image_path.name,
             "model": model,
-            "canvas_uri": canvas_uri or None,
-            "canvas_width": nat_w or None,
-            "canvas_height": nat_h or None,
-            "coords_from_fallback": coords_from_fallback or None,
+            "canvas_uri": canvas_meta["canvas_uri"],
+            "canvas_width": canvas_meta["canvas_width"],
+            "canvas_height": canvas_meta["canvas_height"],
+            "coords_from_fallback": canvas_meta["coords_from_fallback"],
             "surya_median_confidence": round(surya_median_conf, 4) if surya_median_conf is not None else None,
             "needs_review": needs_review,
             "possible_column_merge": possible_column_merge,
