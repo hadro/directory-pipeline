@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Export aligned OCR JSON to ALTO v3 XML — standard OCR coordinate markup.
 
-For each ``{stem}_{model}_aligned.json`` produced by ``align_ocr.py`` (or the
-``run_linecrop_ocr.py`` fallback), write a sibling ``{stem}_{model}.alto.xml`` in
-ALTO v3 format. ALTO is the LOC standard for OCR text-with-coordinates, so the
+For each ``{stem}_{model}_aligned.json`` produced by ``align_ocr.py``, write a
+sibling ``{stem}_{model}.alto.xml`` in ALTO v3 format. ALTO is the LOC standard for OCR text-with-coordinates, so the
 output drops straight into Solr, IIIF Content Search, Mirador, and Universal
 Viewer with no custom glue — the pipeline already has everything ALTO needs
 (line text + bounding boxes).
