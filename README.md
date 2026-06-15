@@ -168,6 +168,8 @@ A single \~80-page volume costs roughly **~$0.30 in Gemini API charges with `--f
 - [Costs](docs/costs.md) — API and platform cost breakdown
 - [Key design decisions](docs/key-design-decisions.md) — architecture and technical notes
 - [Prior work](docs/prior-work.md) — related research and citations
+- [Documentation index](docs/README.md) — full map of all docs (reference + plans)
+- [Plans](docs/plans/) — point-in-time roadmaps: section detection, local open models, AWS migration
 
 
 ## Key design decisions

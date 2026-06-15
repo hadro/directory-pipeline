@@ -1,5 +1,7 @@
 # Plan: Run directory-pipeline entirely on AWS
 
+**Status:** Planned — decisions captured; implementation deferred.
+
 ## Context
 
 The directory-pipeline currently depends on two Google services: **Gemini** (multimodal OCR,
