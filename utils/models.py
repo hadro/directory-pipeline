@@ -20,6 +20,14 @@ DEFAULT_OCR_MODEL = "gemini-3.1-flash-lite"
 # Default model for NER entry extraction (--extract-entries).
 DEFAULT_NER_MODEL = "gemini-3.1-flash-lite"
 
+# Local (free, on-device) OCR backends — see pipeline/run_local_ocr.py.
+# Default Chandra checkpoint (8-bit MLX weights for Apple Silicon).
+DEFAULT_LOCAL_OCR_MODEL = "mlx-community/chandra-ocr-2-8bit-mlx"
+# Stable filename/state slug per engine. The slug is fixed per engine (not derived
+# from the checkpoint) so output filenames stay clean and downstream discovery is
+# unaffected by quantization suffixes.
+LOCAL_OCR_SLUGS = {"chandra": "chandra-ocr-2", "vision": "apple-vision"}
+
 # More capable model for one-off generation/review tasks
 # (--generate-prompts, analysis/review_entries.py).
 DEFAULT_PROMPT_MODEL = "gemini-3-flash-preview"
@@ -41,8 +49,11 @@ def model_slug(model: str) -> str:
 _ALIGNED_RX = re.compile(r"_([^_]+)_aligned\.json$")
 
 # Bare .txt names are ambiguous (*_surya.txt, included_pages.txt, …), so the
-# model match requires the "gemini-" prefix.
-_TXT_RX = re.compile(r"_(gemini-[^_]+)\.txt$")
+# model match requires a known OCR-backend prefix: "gemini-" (Gemini), "chandra-"
+# (local Chandra VLM), or "apple-" (local Apple Vision). Keeping an explicit
+# allow-list — rather than a fully generic _([^_]+)\.txt$ — preserves the
+# exclusion of _surya.txt / included_pages.txt etc.
+_TXT_RX = re.compile(r"_((?:gemini|chandra|apple)-[^_]+)\.txt$")
 
 
 def discover_ocr_slug(output_root: Path) -> str | None:

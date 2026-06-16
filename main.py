@@ -22,6 +22,7 @@ command line:
   --detect-columns  pipeline/detect_columns.py        (pixel-projection column detection → columns_report.csv)
   --surya-ocr       pipeline/run_surya_ocr.py         (Surya OCR → *_surya.json line bboxes + *_surya.txt)
   --gemini-ocr      pipeline/run_gemini_ocr.py        (Gemini OCR)
+  --local-ocr       pipeline/run_local_ocr.py         (free on-device OCR: Chandra MLX or Apple Vision; see --ocr-engine)
   --compare-ocr     pipeline/compare_ocr.py           (side-by-side model comparison; accepts "surya" token)
   --align-ocr       pipeline/align_ocr.py             (NW alignment of Gemini text to Surya bboxes)
   --visualize       pipeline/visualize_alignment.py   (draw alignment boxes on images → *_viz.jpg)
@@ -88,7 +89,7 @@ from sources.loc_utils import _resource_url_to_item_url, loc_slug
 from sources.ia_utils import _extract_ia_identifier, _fetch_ia_info, _make_ia_slug
 from pipeline.state import write_state, record_stage
 from pipeline.stages import STAGES, STAGE_BY_NAME, build_declarative_args
-from utils.models import DEFAULT_OCR_MODEL
+from utils.models import DEFAULT_OCR_MODEL, LOCAL_OCR_SLUGS
 
 # Stage order, flags, and declarative argv specs live in pipeline/stages.py —
 # the single registry shared with app.py. Stages whose argv needs real logic
@@ -546,6 +547,16 @@ def main() -> None:
         help="Run Gemini OCR on downloaded images (see --ocr-model)",
     )
     stages.add_argument(
+        "--local-ocr",
+        dest="local_ocr",
+        action="store_true",
+        help=(
+            "Run free on-device OCR (Chandra MLX or Apple Vision, see --ocr-engine) "
+            "instead of Gemini. Writes the same text contract for --align-ocr. "
+            "Apple Silicon only; requires `uv sync --extra local-ocr`."
+        ),
+    )
+    stages.add_argument(
         "--compare-ocr",
         dest="compare_ocr",
         action="store_true",
@@ -700,12 +711,23 @@ def main() -> None:
         help=argparse.SUPPRESS,  # hidden alias for --ocr-model
     )
     opts.add_argument(
+        "--ocr-engine",
+        dest="ocr_engine",
+        choices=("chandra", "vision"),
+        default=None,
+        help=(
+            "Local OCR engine for --local-ocr: 'chandra' (Datalab VLM via mlx-vlm, "
+            "best quality, slow) or 'vision' (Apple Vision via ocrmac, fast baseline). "
+            "Defaults to chandra."
+        ),
+    )
+    opts.add_argument(
         "--ocr-prompt",
         dest="ocr_prompt",
         default=None,
         metavar="FILE",
         help=(
-            "OCR system prompt file for --gemini-ocr. "
+            "OCR system prompt file for --gemini-ocr / --local-ocr. "
             "If omitted, looks for ocr_prompt.md in the volume output directory, "
             "then falls back to prompts/ocr_prompt.md (generic default). "
             "Use this to reuse the prompt from another volume in the same series."
@@ -1188,6 +1210,12 @@ def main() -> None:
                 # Record which model was used so downstream scripts don't need --model.
                 if stage == "gemini_ocr" and args.ocr_model:
                     write_state(output_dir, {"ocr_model": args.ocr_model})
+                # Local OCR records its engine slug as the OCR model even when
+                # --ocr-model is unset (unlike Gemini, the model is implicit in
+                # the engine), so downstream align/extract find it via state.
+                if stage == "local_ocr":
+                    engine = args.ocr_engine or "chandra"
+                    write_state(output_dir, {"ocr_model": LOCAL_OCR_SLUGS[engine]})
                 if stage == "extract_entries" and args.ocr_model:
                     write_state(output_dir, {"ner_model": args.ocr_model})
 

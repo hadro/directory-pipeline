@@ -72,6 +72,7 @@ def test_optional_extra_stages_declare_requirements():
     assert requires == {
         "surya_detect": "surya",
         "surya_ocr": "surya",
+        "local_ocr": "mlx_vlm",
         "geocode": "geopy",
     }
     # A requirement without an install hint would produce a useless error.

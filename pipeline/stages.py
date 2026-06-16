@@ -103,6 +103,17 @@ STAGES: "list[StageDef]" = [
             Opt("sections", "--sections", from_ctx=True),
         ),
     ),
+    StageDef(
+        "local_ocr", "pipeline/run_local_ocr.py", "--local-ocr",
+        declarative=True,
+        opts=(
+            Opt("ocr_engine", "--engine", when="not_none"),
+            Opt("workers", "--workers", when="not_none"),
+            Opt("ocr_prompt", "--prompt-file"),
+            Opt("expand_dittos", "--expand-dittos", kind="switch"),
+        ),
+        requires="mlx_vlm", install_hint="uv sync --extra local-ocr",
+    ),
     StageDef("compare_ocr", "pipeline/compare_ocr.py", "--compare-ocr"),
     StageDef(
         "align_ocr", "pipeline/align_ocr.py", "--align-ocr",

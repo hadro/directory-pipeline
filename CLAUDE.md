@@ -49,7 +49,8 @@ Stages always execute in fixed order regardless of flag order. All stages are op
 | `--download` | Fetch IIIF images | `output/{slug}/` images + `manifest.json` |
 | `--surya-ocr` | Surya line-level bbox detection | `*_surya.json` |
 | `--gemini-ocr` | Gemini text extraction | `*_{model}.txt` |
-| `--align-ocr` | NW alignment of Gemini text to Surya bboxes | `*_aligned.json` |
+| `--local-ocr` | Free on-device OCR (Chandra MLX or Apple Vision; see `--ocr-engine`) | `*_{slug}.txt` |
+| `--align-ocr` | NW alignment of OCR text to Surya bboxes | `*_aligned.json` |
 | `--review-alignment` | Interactive Flask UI to fix bad alignments | updates `*_aligned.json` |
 | `--export-alto` | Aligned OCR → ALTO v3 XML (Solr / IIIF Content Search) | `*.alto.xml` |
 | `--extract-entries` | NER → structured entries | `entries_{model}.csv` |
@@ -68,6 +69,15 @@ Full filename contract (who writes/reads every artifact, model auto-detection ru
 - **Batch API** (not yet implemented) — Submit all pages as a single async job; 50% cheaper, up to 24-hour turnaround. Planned for future implementation.
 
 Default model is `gemini-3.1-flash-lite` for both OCR and NER (constants in `utils/models.py`). For higher accuracy use `--ocr-model gemini-2.0-flash`.
+
+## Local OCR (free, on-device — Apple Silicon)
+
+`--local-ocr` replaces the paid Gemini OCR call with a free on-device engine for large overnight batches. It writes the same `{stem}_{slug}.txt` contract, so `--align-ocr` / `--extract-entries` consume it unchanged (Surya still supplies the bbox geometry; only the *text* source changes). Two engines via `--ocr-engine`:
+
+- **`chandra`** (default) — Datalab's Chandra OCR 2, a layout-aware VLM (Qwen3.5-based, same vendor as Surya) run via `mlx-vlm`. Best quality on dense multi-column historical print; follows the OCR prompt's reading-order instruction. Slow on an M2 but designed for overnight runs. Slug: `chandra-ocr-2`.
+- **`vision`** — Apple's native Vision OCR via `ocrmac`. Near-instant and near-zero memory, but traditional OCR (weaker on degraded scans); reading order is reconstructed spatially from its bboxes using the aligner's own `sort_by_reading_order`. Slug: `apple-vision`.
+
+Both are Apple-Silicon / macOS-only: `uv sync --extra local-ocr`. Design + validation plan: `docs/plans/local-ocr-backend.md`.
 
 ## Surya and alignment
 

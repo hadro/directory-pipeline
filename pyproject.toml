@@ -58,8 +58,17 @@ gpu = [
 geo = [
     "geopy>=2.4",
 ]
+# Local (free, on-device) OCR on Apple Silicon — see pipeline/run_local_ocr.py.
+# Chandra OCR 2 via mlx-vlm, and Apple Vision via ocrmac. Both are
+# Apple-Silicon / macOS-only, so this is an opt-in extra (kept out of the
+# default install and CI). Pin exact versions once validated in Phase 1.
+# Install with: uv sync --extra local-ocr
+local-ocr = [
+    "mlx-vlm>=0.1",
+    "ocrmac>=0.3",
+]
 # Everything.
 # Install with: uv sync --all-extras
 all = [
-    "directory-pipeline[gpu,geo]",
+    "directory-pipeline[gpu,geo,local-ocr]",
 ]

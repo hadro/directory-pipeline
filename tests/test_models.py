@@ -53,11 +53,23 @@ def test_discover_aligned_is_model_prefix_agnostic(tmp_path):
     assert discover_ocr_slug(tmp_path) == "chandra-v1"
 
 
-def test_discover_txt_requires_gemini_prefix(tmp_path):
+def test_discover_txt_ignores_non_backend_names(tmp_path):
     # Bare .txt names are ambiguous: surya output and scoping files must not
     # be mistaken for model slugs.
-    _touch(tmp_path, "0001_id_surya.txt", "included_pages.txt", "0001_id_chandra-v1.txt")
+    _touch(tmp_path, "0001_id_surya.txt", "included_pages.txt")
     assert discover_ocr_slug(tmp_path) is None
+
+
+def test_discover_from_local_ocr_txt(tmp_path):
+    # Local OCR backends (chandra-, apple-) are valid .txt slug prefixes
+    # alongside gemini-, while surya/scoping files are still ignored.
+    _touch(tmp_path, "0001_id_surya.txt", "included_pages.txt", "0001_id_chandra-ocr-2.txt")
+    assert discover_ocr_slug(tmp_path) == "chandra-ocr-2"
+
+    _touch(tmp_path, "0002_id_apple-vision.txt")
+    # chandra and apple now both present once each — most_common returns either;
+    # assert it is one of the two recognised backends, never surya/scoping.
+    assert discover_ocr_slug(tmp_path) in {"chandra-ocr-2", "apple-vision"}
 
 
 def test_discover_from_gemini_txt(tmp_path):
