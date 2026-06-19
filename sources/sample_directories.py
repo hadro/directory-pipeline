@@ -98,6 +98,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("master_csv", help="path to master_directories.csv")
     ap.add_argument("-k", "--pages", type=int, default=10, help="sample pages per volume")
+    ap.add_argument("--front", type=int, default=0,
+                    help="ALSO keep the first N canvases (front matter: title page, TOC, "
+                         "abbreviations key) in addition to the -k listing sample")
     ap.add_argument("--width", type=int, default=2000, help="image width px (download_images --width)")
     ap.add_argument("--out-root", default=str(REPO / "output"), help="root for output/<slug>/ dirs")
     ap.add_argument("--source", help="only rows with this source")
@@ -125,6 +128,8 @@ def main(argv=None) -> int:
             manifest = fetch_manifest(_SESSION, url)
             n = len(list(iter_canvases(manifest)))
             idxs = pick_indices(n, r.get("start_page"), r.get("end_page"), args.pages)
+            if args.front:                              # also grab front matter (TOC + abbrev key)
+                idxs = sorted(set(idxs) | set(range(min(args.front, n))))
             print(f"[{slug}] {n} canvases -> sample {len(idxs)} pages: {idxs}", file=sys.stderr)
             if args.dry_run:
                 continue
