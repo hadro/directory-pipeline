@@ -19,6 +19,17 @@ pipeline = "cli.main:main"
 
 [tool.uv]
 package = true
+# Surya (gpu extra) requires transformers <5.0; mlx-vlm 0.6.x (local-ocr extra,
+# for Chandra OCR 2 / qwen3_5) requires transformers >=5.5. They cannot share a
+# single resolution, so they are declared conflicting and installed into
+# separate environments (e.g. `uv sync --extra gpu` vs `uv sync --extra
+# local-ocr`). In practice Surya OCR runs on GPU/Colab while local OCR runs on
+# Apple Silicon, so they are never needed in the same venv.
+conflicts = [
+    [{ extra = "gpu" }, { extra = "local-ocr" }],
+    # `all` aggregates gpu (transformers <5.0), so it conflicts with local-ocr too.
+    [{ extra = "all" }, { extra = "local-ocr" }],
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -61,14 +72,19 @@ geo = [
 # Local (free, on-device) OCR on Apple Silicon — see pipeline/run_local_ocr.py.
 # Chandra OCR 2 via mlx-vlm, and Apple Vision via ocrmac. Both are
 # Apple-Silicon / macOS-only, so this is an opt-in extra (kept out of the
-# default install and CI). Pin exact versions once validated in Phase 1.
-# Install with: uv sync --extra local-ocr
+# default install and CI). Install with: uv sync --extra local-ocr
+# mlx-vlm >=0.6.3 is required: Chandra OCR 2 is a qwen3_5-arch VLM, and that
+# model module first ships in 0.6.x (0.3.x raises "Model type qwen3_5 not
+# supported"). Validated against 0.6.3 in Phase 1.
 local-ocr = [
-    "mlx-vlm>=0.1",
+    "mlx-vlm>=0.6.3",
     "ocrmac>=0.3",
 ]
-# Everything.
-# Install with: uv sync --all-extras
+# Everything that can co-exist in one environment. local-ocr is intentionally
+# excluded: it conflicts with gpu (see [tool.uv] conflicts) and is installed
+# separately with `uv sync --extra local-ocr`. Note `uv sync --all-extras` is
+# unavailable while the conflict is declared — request extras explicitly.
+# Install with: uv sync --extra all
 all = [
-    "directory-pipeline[gpu,geo,local-ocr]",
+    "directory-pipeline[gpu,geo]",
 ]

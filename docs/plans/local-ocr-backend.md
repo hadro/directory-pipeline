@@ -22,7 +22,7 @@ discover OCR purely by the `{stem}_{slug}.txt` filename contract, so a new engin
 that filename is a drop-in with zero downstream changes.
 
 - **Chandra OCR 2 (primary):** 5B Qwen3.5-based layout-aware VLM (Datalab — same vendor as
-  Surya), MLX 8-bit build `mlx-community/chandra-ocr-2-8bit-mlx` (~5–6 GB resident, comfortable
+  Surya), MLX 8-bit build `jwindle47/chandra-ocr-2-8bit-mlx` (pinned revision; ~5–6 GB resident, comfortable
   on 16 GB). As an instruction-following VLM it honors the existing OCR prompt's "left column
   top-to-bottom, then right column; one printed line per output line." Slow on an M2 Air — fine
   for overnight.
@@ -30,6 +30,14 @@ that filename is a drop-in with zero downstream changes.
   memory, free, but traditional OCR (weaker on degraded scans) that returns observations with
   **no semantic column reading order** — reconstructed spatially from its bboxes.
 - **Surya's own `*_surya.txt`** is a third free baseline already produced — worth comparing.
+
+**Considered and rejected for this stage: Datalab Lift (`lift-pdf`, 9B).** Lift is a
+schema-constrained extraction VLM (image + JSON schema → structured JSON), not a plain-text
+OCR engine, so it doesn't fit the `{stem}_{slug}.txt` text-source contract this stage depends
+on — it's a *fused OCR+NER* model and belongs in the NER discussion, not here. It's also
+CUDA-only (no MLX/Metal, no published quant) and 9B (~18 GB BF16), so it won't run at decent
+speed on the 16 GB M2 Air this backend targets. Evaluated instead as an extraction option in
+`huggingface-uv-scripts.md` Part B (option 6), on a rented/HF-Jobs GPU.
 
 **The load-bearing risk is reading-order/alignment, not raw character accuracy** — which is
 exactly what Phase-1 validation checks.

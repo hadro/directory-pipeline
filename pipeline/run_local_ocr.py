@@ -15,7 +15,7 @@ Two engines, selected with ``--engine``:
                      quality on dense, multi-column historical print; follows
                      the OCR prompt's reading-order instruction. Slow on an M2
                      but fine for overnight batches. Needs the 8-bit MLX weights
-                     (default: mlx-community/chandra-ocr-2-8bit-mlx).
+                     (default: jwindle47/chandra-ocr-2-8bit-mlx, pinned revision).
 
   vision             Apple's native Vision OCR via ``ocrmac``. Near-instant and
                      near-zero memory, but a traditional OCR engine (weaker on
@@ -33,7 +33,7 @@ Usage
     python -m pipeline.run_local_ocr output/some_directory
     python -m pipeline.run_local_ocr output/some_directory --engine vision
     python -m pipeline.run_local_ocr output/some_directory --engine chandra \
-        --model mlx-community/chandra-ocr-2-8bit-mlx
+        --model jwindle47/chandra-ocr-2-8bit-mlx
 
 Validation recipe (Phase 1 — eyeball alignment vs the Gemini baseline)::
 
@@ -44,6 +44,7 @@ Validation recipe (Phase 1 — eyeball alignment vs the Gemini baseline)::
 
 import argparse
 import functools
+import html
 import re
 import sys
 import threading
@@ -66,7 +67,11 @@ from pipeline.run_gemini_ocr import (
     _output_issue,
 )
 from utils.image_utils import is_blank_page
-from utils.models import DEFAULT_LOCAL_OCR_MODEL, LOCAL_OCR_SLUGS
+from utils.models import (
+    DEFAULT_LOCAL_OCR_MODEL,
+    DEFAULT_LOCAL_OCR_REVISION,
+    LOCAL_OCR_SLUGS,
+)
 
 _print_lock = threading.Lock()
 
@@ -76,26 +81,73 @@ def _log(msg: str) -> None:
         print(msg, file=sys.stderr)
 
 
-# Chandra defaults to markdown/HTML/JSON output; we want the same plain-text,
-# one-line-per-printed-line contract the aligner expects. Steer it explicitly.
-_CHANDRA_PLAINTEXT_GUARD = (
-    "\n\nIMPORTANT: Return plain text only — no markdown, no HTML, no tables, "
-    "no bullet points, and no code fences. Output each printed line as a single "
-    "line of plain text, in the correct reading order."
-)
-
 
 # --------------------------------------------------------------------------- #
 # Markdown / HTML → plain lines (defensive cleanup for VLM output)
 # --------------------------------------------------------------------------- #
 _HTML_BR_RE = re.compile(r"<\s*br\s*/?\s*>", re.IGNORECASE)
-_HTML_BLOCK_CLOSE_RE = re.compile(r"</\s*(p|div|tr|li|h[1-6])\s*>", re.IGNORECASE)
+# Closing tags that end a printed line. td/th included so multi-column blocks
+# Chandra renders as an HTML <table> (e.g. a two-column advertisement index)
+# split into one line per cell instead of jamming both columns' entries — and
+# their adjacent words — onto a single line.
+_HTML_BLOCK_CLOSE_RE = re.compile(r"</\s*(p|div|tr|td|th|li|h[1-6])\s*>", re.IGNORECASE)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _MD_FENCE_RE = re.compile(r"^\s*```.*$")
 _MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+")
 _MD_BULLET_RE = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)")
 _MD_EMPHASIS_RE = re.compile(r"(\*\*|__|\*|`)(.+?)\1")
 _TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}.*$")
+
+# Decorative horizontal rules a VLM may emit for printed dividers (e.g. a long
+# run of "~~~~" or "----"). Drop them: they carry no text and would otherwise
+# survive as a junk line that pollutes alignment and NER. The char set excludes
+# "." so address dot-leaders are never mistaken for a rule.
+_RULE_CHARS = frozenset("~-=_*—–─━‾¯")
+
+
+def _is_rule_line(line: str) -> bool:
+    s = line.strip().replace(" ", "")
+    return len(s) >= 3 and not any(c.isalnum() for c in s) and all(c in _RULE_CHARS for c in s)
+
+
+# Chandra (mlx-vlm) does not always stop at the <|im_end|> turn boundary: after
+# the real transcription it can re-open an `assistant` turn and partially repeat
+# the page. Everything from the first turn boundary on is spurious, so truncate
+# there. Must run on the raw output *before* _to_plain_lines, because that strips
+# <|im_end|>-style tokens (they look like HTML tags) and would hide the boundary.
+_CHAT_TOKEN_RE = re.compile(r"<\|(?:im_start|im_end|endoftext)\|>")
+_ROLE_LINE_RE = re.compile(r"^\s*(?:assistant|user|system)\s*$", re.IGNORECASE)
+
+
+def _truncate_chat_continuation(text: str) -> str:
+    m = _CHAT_TOKEN_RE.search(text)
+    if m:
+        text = text[: m.start()]
+    out: list[str] = []
+    for line in text.splitlines():
+        if _ROLE_LINE_RE.match(line):
+            break
+        out.append(line)
+    return "\n".join(out)
+
+
+# Chandra wraps illustrations/figures in data-label="Image" blocks and fills them
+# with a VLM-generated description (prose + an <img alt="…"> caption) rather than a
+# transcription of printed words — e.g. "An illustration of a counter show case…".
+# Drop these blocks when deriving the plain text; keep all real-content labels
+# (Text, Caption, *-Header, Table). The full HTML is still saved as a sidecar, so
+# nothing is lost. Assumes Chandra's flat block layout (no <div> nested in a
+# <div>), which holds for its ocr_layout output.
+_DROP_LABELS = ("Image",)
+_DROP_BLOCK_RE = re.compile(
+    r'<div\b[^>]*\bdata-label="(?:' + "|".join(_DROP_LABELS) + r')"[^>]*>.*?</div>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_label_blocks(html: str) -> str:
+    """Remove figure/illustration blocks (see _DROP_LABELS) from Chandra HTML."""
+    return _DROP_BLOCK_RE.sub("", html)
 
 
 def _to_plain_lines(text: str) -> str:
@@ -108,16 +160,24 @@ def _to_plain_lines(text: str) -> str:
     """
     if not text:
         return text
-    # Normalise HTML line breaks to newlines, then drop remaining tags.
+    # Normalise HTML line breaks to newlines, then drop remaining tags. Decode
+    # entities (&amp; → &, &#39; → ') only after tag removal so we never recreate
+    # a tag from escaped angle brackets.
     text = _HTML_BR_RE.sub("\n", text)
     text = _HTML_BLOCK_CLOSE_RE.sub("\n", text)
     text = _HTML_TAG_RE.sub("", text)
+    # Drop a dangling, unclosed tag fragment a truncated generation may leave
+    # (e.g. a trailing "<div data-bbox=\"…" with no closing ">").
+    text = re.sub(r"<[^>]*$", "", text)
+    text = html.unescape(text)
 
     out: list[str] = []
     for raw in text.splitlines():
         line = raw.rstrip()
         if _MD_FENCE_RE.match(line):
             continue  # drop ``` fences entirely
+        if _is_rule_line(line):
+            continue  # drop decorative horizontal rules (~~~~, ----, ____)
         if _TABLE_SEP_RE.match(line) and line.count("-") >= 2 and "|" in line:
             continue  # drop |---|---| table separator rows
         line = _MD_HEADING_RE.sub("", line)
@@ -146,42 +206,100 @@ def _load_chandra(checkpoint: str):
             "(Apple Silicon only.)"
         ) from e
 
+    # Pin the default mirror to a verified commit; a user-supplied --model repo
+    # is loaded at its main revision (revision=None == main for mlx-vlm).
+    revision = (
+        DEFAULT_LOCAL_OCR_REVISION if checkpoint == DEFAULT_LOCAL_OCR_MODEL else None
+    )
+
     config = None
     try:
         from mlx_vlm.utils import load_config
 
-        config = load_config(checkpoint)
+        config = load_config(checkpoint, revision=revision) if revision else load_config(checkpoint)
     except Exception:  # noqa: BLE001 - older/newer mlx-vlm may not expose load_config
         config = None
 
-    model, processor = load(checkpoint)
+    model, processor = load(checkpoint, revision=revision)
     if config is None:
         config = getattr(model, "config", None)
     return model, processor, config
 
 
-def _chandra_ocr(image_path: Path, prompt: str, checkpoint: str, max_tokens: int) -> str:
-    """OCR one page with Chandra (mlx-vlm). Returns plain text in reading order."""
+def _chandra_eos_ids(processor) -> list[int]:
+    """Token ids that should end generation. The checkpoint's configured eos is
+    only <|endoftext|> (end of document), so generation runs past the <|im_end|>
+    turn boundary into a spurious second `assistant` turn — burning the whole
+    token budget and re-emitting the page. Adding <|im_end|> as a stop token ends
+    generation right after the transcription: faster, and no spurious turn to
+    clean up. Derived from the tokenizer so it's not a brittle hardcoded id."""
+    tok = getattr(processor, "tokenizer", processor)
+    fn = getattr(tok, "convert_tokens_to_ids", None)
+    if fn is None:
+        return []
+    ids = []
+    for t in ("<|im_end|>", "<|endoftext|>"):
+        try:
+            tid = fn(t)
+        except Exception:  # noqa: BLE001 - tokenizer API varies across versions
+            continue
+        if isinstance(tid, int) and tid >= 0 and tid not in ids:
+            ids.append(tid)
+    return ids
+
+
+def _chandra_ocr(
+    image_path: Path, prompt: str, checkpoint: str, max_tokens: int
+) -> tuple[str, str]:
+    """OCR one page with Chandra (mlx-vlm). Returns (plain_text, native_html),
+    both in reading order; native_html keeps Chandra's layout markup."""
     from mlx_vlm import generate
     from mlx_vlm.prompt_utils import apply_chat_template
 
     model, processor, config = _load_chandra(checkpoint)
-    formatted = apply_chat_template(processor, config, prompt, num_images=1)
 
-    # mlx-vlm's generate signature has shifted across releases (temp vs
-    # temperature; return type str vs object). Be defensive: pin the working
-    # version once validated, but don't hard-fail on a kwarg rename here.
-    gen_kwargs = dict(max_tokens=max_tokens, verbose=False)
+    # Chandra 2 is Qwen3.5-based: its chat template defaults to emitting a
+    # chain-of-thought <think> block. Left on, the model spends the token budget
+    # "thinking", never terminates its turn cleanly, and degenerates into
+    # repeating the page (and leaking the literal "assistant" role marker).
+    # enable_thinking=False injects an empty <think></think> so it goes straight
+    # to the transcription. Fall back if a processor version rejects the kwarg.
     try:
-        result = generate(model, processor, formatted, [str(image_path)], temperature=0.0, **gen_kwargs)
+        formatted = apply_chat_template(
+            processor, config, prompt, num_images=1, enable_thinking=False
+        )
     except TypeError:
-        try:
-            result = generate(model, processor, formatted, [str(image_path)], temp=0.0, **gen_kwargs)
-        except TypeError:
-            result = generate(model, processor, formatted, [str(image_path)], **gen_kwargs)
+        formatted = apply_chat_template(processor, config, prompt, num_images=1)
 
-    text = result if isinstance(result, str) else getattr(result, "text", str(result))
-    return _to_plain_lines(text)
+    # Greedy (temp=0.0) decoding is repetition-prone on long OCR; a mild
+    # repetition penalty further guards against the loop. mlx-vlm's generate
+    # signature has shifted across releases (temp vs temperature; repetition_
+    # penalty may be unsupported), so apply each kwarg defensively.
+    base = dict(max_tokens=max_tokens, verbose=False)
+    eos_ids = _chandra_eos_ids(processor)
+    if eos_ids:
+        base["eos_tokens"] = eos_ids
+    for extra in (
+        dict(temperature=0.0, repetition_penalty=1.1),
+        dict(temp=0.0, repetition_penalty=1.1),
+        dict(temperature=0.0),
+        dict(temp=0.0),
+        {},
+    ):
+        try:
+            result = generate(model, processor, formatted, [str(image_path)], **base, **extra)
+            break
+        except TypeError:
+            continue
+
+    raw = result if isinstance(result, str) else getattr(result, "text", str(result))
+    # native = de-looped output with Chandra's HTML layout (data-bbox/data-label,
+    # <br/> entry wraps, <h2> headers) intact. Returned alongside the plain text
+    # so the rich structure can be saved once and re-parsed later (figure
+    # filtering, column anchors, entry boundaries) without re-running inference.
+    native = _truncate_chat_continuation(raw)
+    # .txt drops figure-description blocks; .html keeps the full native layout.
+    return _to_plain_lines(_strip_label_blocks(native)), native
 
 
 # --------------------------------------------------------------------------- #
@@ -226,11 +344,16 @@ def _vision_ocr(image_path: Path) -> str:
     return "\n".join(o["text"] for o in ordered)
 
 
-def ocr_page(engine: str, image_path: Path, prompt: str, checkpoint: str, max_tokens: int) -> str:
+def ocr_page(
+    engine: str, image_path: Path, prompt: str, checkpoint: str, max_tokens: int
+) -> tuple[str, str | None]:
+    """Returns (plain_text, native_output). native_output is Chandra's raw layout
+    HTML (saved as a sidecar for richer post-processing) or None for engines that
+    have no richer form than their plain text."""
     if engine == "chandra":
         return _chandra_ocr(image_path, prompt, checkpoint, max_tokens)
     if engine == "vision":
-        return _vision_ocr(image_path)
+        return _vision_ocr(image_path), None
     raise ValueError(f"unknown engine: {engine!r}")
 
 
@@ -258,8 +381,9 @@ def process_image(
     if is_blank_page(image_path):
         return "blank"
 
+    native: str | None = None
     try:
-        text = ocr_page(engine, image_path, system_prompt, checkpoint, max_tokens)
+        text, native = ocr_page(engine, image_path, system_prompt, checkpoint, max_tokens)
     except SystemExit:
         raise  # missing-dependency: abort the whole run, not just this page
     except Exception as exc:  # noqa: BLE001
@@ -276,6 +400,13 @@ def process_image(
         return "failed"
 
     txt_path.write_text(text, encoding="utf-8")
+    # Save the engine's native layout output (Chandra HTML) as a sidecar so its
+    # structure can be re-parsed later without re-running inference. Additive: no
+    # other stage reads it, and the .txt contract is unchanged.
+    if native:
+        (image_path.parent / f"{image_path.stem}_{slug}.html").write_text(
+            native, encoding="utf-8"
+        )
     return "ok"
 
 
@@ -383,7 +514,10 @@ def main() -> None:
         system_prompt = prompt_path.read_text(encoding="utf-8").rstrip()
         if args.expand_dittos:
             system_prompt += _DITTO_INSTRUCTION
-        system_prompt += _CHANDRA_PLAINTEXT_GUARD
+        # NB: we deliberately do NOT append an anti-markdown/HTML guard. Chandra
+        # is trained to emit HTML with data-bbox blocks; suppressing that fights
+        # the model and destabilises generation (image captioning, repetition).
+        # Let it emit its native format and let _to_plain_lines strip the tags.
         if not args.quiet and prompt_path != PROMPT_FILE:
             print(f"Using volume prompt: {prompt_path}", file=sys.stderr)
 

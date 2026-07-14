@@ -21,8 +21,14 @@ DEFAULT_OCR_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_NER_MODEL = "gemini-3.1-flash-lite"
 
 # Local (free, on-device) OCR backends — see pipeline/run_local_ocr.py.
-# Default Chandra checkpoint (8-bit MLX weights for Apple Silicon).
-DEFAULT_LOCAL_OCR_MODEL = "mlx-community/chandra-ocr-2-8bit-mlx"
+# Default Chandra checkpoint (8-bit MLX weights for Apple Silicon). This community
+# mirror is the established 8-bit MLX build of Chandra OCR 2 (qwen3_5, affine
+# 8-bit, group_size 64); its safetensors is byte-identical to the 1qh re-upload.
+# The mlx-community/ namespace does NOT host one. Pinned to a verified commit so
+# the third-party repo can't shift or vanish under us (HF repo-drift risk, see
+# docs/plans/local-ocr-backend.md). Override the repo with --model.
+DEFAULT_LOCAL_OCR_MODEL = "jwindle47/chandra-ocr-2-8bit-mlx"
+DEFAULT_LOCAL_OCR_REVISION = "13039308ea7ac53b29559eb2d500e33217cfab06"
 # Stable filename/state slug per engine. The slug is fixed per engine (not derived
 # from the checkpoint) so output filenames stay clean and downstream discovery is
 # unaffected by quantization suffixes.
