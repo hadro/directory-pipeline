@@ -66,11 +66,11 @@ Alongside the extracted data CSV, `pipeline run` also generates a self-contained
 Two published collections built with this pipeline:
 
 - **[Tulsa city directories — 1921](https://hadro.github.io/tulsa-city-directories/1921#about)** — a Polk-style city directory.
-- **[The Negro Motorist Green Book explorer](https://hadro.github.io/green-books/explorer#about)** — the full run of Green Book volumes.
+- **[The Negro Motorist Green Book and other Black travel guides explorer](https://hadro.github.io/green-books/all-volumes)** — the full run of Green Book volumes plus 22 other travel guides for Black travelers, from 1930-1966.
 
 <p>
   <a href="https://hadro.github.io/tulsa-city-directories/1921#about"><img src="docs/screenshots/tulsa-city-directory-entry.png" width="49%" alt="Tulsa 1921 city directory explorer: entry detail with a crop of the source scan highlighting the matched line"></a>
-  <a href="https://hadro.github.io/green-books/explorer#about"><img src="docs/screenshots/green-books-entry.png" width="49%" alt="Green Book explorer: faceted entry list with a detail panel showing cross-year listings and a location map"></a>
+  <a href="https://hadro.github.io/green-books/all-volumes"><img src="docs/screenshots/green-books-entry.png" width="49%" alt="Green Book explorer: faceted entry list with a detail panel showing cross-year listings and a location map"></a>
 </p>
 
 *Entry detail views from the published explorers. Left: each Tulsa entry renders the exact line from the source scan via its `canvas_fragment` URI. Right: a Green Book establishment with its listing history across volumes.*
