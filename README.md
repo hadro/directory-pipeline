@@ -66,7 +66,7 @@ Alongside the extracted data CSV, `pipeline run` also generates a self-contained
 Two published collections built with this pipeline:
 
 - **[Tulsa city directories — 1921](https://hadro.github.io/tulsa-city-directories/1921#about)** — a Polk-style city directory.
-- **[The Negro Motorist Green Book explorer](https://hadro.github.io/green-books/explorer#about)** — the full run of Green Book volumes.
+- **[The Negro Motorist Green Book and other Black travel guides explorer](https://hadro.github.io/green-books/all-volumes)** — the full run of Green Book volumes plus 22 other travel guides for Black travelers, from 1930-1966.
 
 <p>
   <a href="https://hadro.github.io/tulsa-city-directories/1921#about"><img src="docs/screenshots/tulsa-city-directory-entry.png" width="49%" alt="Tulsa 1921 city directory explorer: entry detail with a crop of the source scan highlighting the matched line"></a>
