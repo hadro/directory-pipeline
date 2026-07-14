@@ -215,12 +215,38 @@ Mattingly's "3.6M names" write-up — see "Prior art" below):
      This applies to options 1–2 as well: consider asking even the prompted models for
      delimited rows and dropping the JSON round-trip.
 
+6. **Lift — Datalab's open schema-extraction VLM (peer of NuExtract3; same vendor as Surya/Chandra).**
+   `datalab-to/lift` (`pip install lift-pdf`, GitHub `datalab-to/lift`) is a **9B Qwen-based
+   vision model with schema-constrained decoding**: you pass a JSON schema + the page(s) and it
+   returns schema-valid JSON in one pass — *fusing OCR and NER into a single call*, like
+   NuExtract3 but larger. Notable strengths: **multi-page documents in one pass, including values
+   that span pages** (relevant to carry-forward city/state headings, though it still has no
+   explicit cross-page state-machine — keep the pipeline's context wrapper). Fits the same
+   "template = `ner_prompt.md` fields, calibrate-once-run-many" pattern as NuExtract3, and maps
+   onto the **entry-as-card** path (feed Surya entry crops + a directory schema). Honest caveats:
+   - **License is more restrictive than NuExtract3.** Code Apache-2.0; **model is Modified
+     OpenRAIL-M** — free for research/personal/startups <$5M, commercial licensing sold
+     separately (same family as Chandra's weights; confirm fit for the green-books distribution).
+     NuExtract3's clean Apache-2.0 is a real advantage if licensing is a blocker.
+   - **Accuracy (their 225-doc / ~11K-field benchmark):** 90.2% field accuracy, 20.9%
+     full-document accuracy, **9.5 s median latency — on NVIDIA data-center GPUs**. Datalab's
+     commercial API hits 95.9% / 44.4%, so the open model trades accuracy for being local.
+   - **Not practical on the M2 Air today.** Repo documents **CUDA only** (H100/A100/L40S/4090/
+     3090/T4; `TORCH_DEVICE=cuda:0`), via vLLM or HF local — **no MLX/Metal path and no published
+     quant**. 9B BF16 ≈ ~18 GB of weights: won't fit an 8 GB Air, tight on 16 GB, and slower than
+     Chandra (already ~4 min/page on M2) with no Apple-optimized runtime. **Watch for a community
+     `mlx-vlm` port or a 4-bit quant** — that's the trigger to revisit. For now it's a **HF-Jobs /
+     rented-GPU contender**, evaluated head-to-head with NuExtract3 on quality, not a local M2 swap.
+
 **Recommendation:** for one-off / first-time collections, make **(2) NuExtract3** the lead
 extraction call (closest match to the task, official HF Jobs recipe, can also OCR),
 prototype **(1) Qwen 3.5** for parity with today's prompt-driven behavior, and use
 **(3) GLiNER** as the fast lightweight option and category-inference upgrade. For a
 collection type you'll run repeatedly or at large volume, plan toward **(5) a fine-tuned
-small Qwen 3.5** — the proven high-volume path. For NuExtract3 keep the trained **JSON
+small Qwen 3.5** — the proven high-volume path. Benchmark **(6) Lift** against NuExtract3 in
+the same Phase-1 round *on a rented/HF-Jobs GPU* (it's a Datalab-vendor peer worth a quality
+read), but treat NuExtract3 as the lead for local/on-device work — Lift has no Apple-Silicon
+path and a more restrictive license. For NuExtract3 keep the trained **JSON
 template** (it's reliable); for *prompted generalists and your own fine-tune*, **switch the
 target to a pipe-delimited row** to cut tokens and retire the partial-JSON crutch. New stages
 (`run_local_ner.py`) register in `pipeline/stages.py` exactly like the Gemini one and
@@ -438,7 +464,10 @@ future session per the phased roadmap above — start with the Phase 1 standalon
 (GitHub README); HF blog "Supercharge your OCR Pipelines with Open Models"; van Strien,
 "Efficient batch inference for LLMs with vLLM + UV Scripts on HF Jobs";
 `numind/NuExtract3` model card (4B, Apache-2.0, Qwen3.5-based); `datalab-to/chandra` +
-`chandra-ocr-2` (Datalab; OpenRAIL-M weights, Apache-2.0 code); `QwenLM/Qwen3-VL` repo +
+`chandra-ocr-2` (Datalab; OpenRAIL-M weights, Apache-2.0 code); `datalab-to/lift`
+(GitHub + `lift-pdf` on PyPI; 9B Qwen-based schema-extraction VLM, Modified OpenRAIL-M weights,
+Apache-2.0 code; 225-doc benchmark 90.2% field / 20.9% full-doc / 9.5 s median latency on GPU);
+`QwenLM/Qwen3-VL` repo +
 "Qwen3-VL Technical Report" (arXiv 2511.21631); W.J.B. Mattingly, "Parsing 3.6 Million
 Historical Names with Small Models" (wjbmattingly.com); Daniel van Strien, "How to turn
 catalogue card images into structured JSON with a 4B open model" (May 2026) + the
