@@ -131,6 +131,7 @@ These scripts operate on already-extracted CSVs — they do not run pipeline sta
 | `fix_entries.py` | Normalize, deduplicate, and patch per-volume CSVs. Key flags: `--all` (all volumes in collection), `--infer-categories` (keyword-based category assignment). Model is auto-detected from `pipeline_state.json`. |
 | `combine_volumes.py` | Merge fixed per-volume CSVs into one combined CSV with `volume_title`, `volume_year` columns added from each `manifest.json`. |
 | `compare_extraction.py` | Compare text-only vs multimodal NER extraction quality. |
+| `compare_alignment.py` | Score/compare OCR-engine alignment quality from `*_aligned.json` (no API, no models). Summary table per engine, or `--baseline`/`--candidate` for a head-to-head regression list. Phase-1 validation tool for the local-OCR backend; `coverage` (matched ÷ total Surya lines) is the real cross-engine signal, `match_rate` a floor check. |
 | `visualize_entries.py` | Draw entry bounding boxes colored by category. |
 | `review_entries.py` | Send extracted CSV to Gemini for systematic data-quality review. |
 | `check_manifest_staleness.py` | Compare cached `manifest.json` against live IIIF manifests to detect canvas-count drift after collection updates. |
