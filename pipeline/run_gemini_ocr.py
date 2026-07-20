@@ -183,6 +183,18 @@ def _output_issue(text: str) -> str:
     return ""
 
 
+def _thinking_config_for(model: str) -> "ThinkingConfig | None":
+    """Return a ThinkingConfig for *model*, or None to use the API default.
+
+    Flash/flash-lite models support thinking_budget=0 (thinking disabled).
+    Pro-tier models only operate in thinking mode and reject budget=0, so
+    they're left on the API's default (dynamic) thinking budget.
+    """
+    if "-pro" in model:
+        return None
+    return ThinkingConfig(thinking_budget=0)
+
+
 def _call_gemini(
     client: genai.Client,
     img_bytes: bytes,
@@ -201,7 +213,7 @@ def _call_gemini(
             system_instruction=system_prompt,
             temperature=temperature,
             media_resolution=media_resolution,
-            thinking_config=ThinkingConfig(thinking_budget=0),
+            thinking_config=_thinking_config_for(model),
             http_options=flex_http_options(service_tier),
         ),
         contents=[Part.from_bytes(data=img_bytes, mime_type="image/jpeg")],
