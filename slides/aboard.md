@@ -261,17 +261,6 @@ https://beefoo.github.io/greenbook-map/
 - IIIF annotation and content state generation
 
 
-
-
----
-
-
-## Other example outputs
-
-- [The Green Books Data Explorer (1933-1966)](https://hadro.github.io/green-books/all-volumes)
-- [Date Explorer for 19th Century brewery guides, extracted from a brewery guide](https://hadro.github.io/brewery-guides/explorer#about)
-
-
 <!-- ---
 
 ## What vibe coding enabled, and what it didn't
