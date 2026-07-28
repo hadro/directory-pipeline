@@ -35,7 +35,7 @@ Takes any item with [a IIIF manifest](https://iiif.io/get-started/how-iiif-works
 ---
 
 ## Top takeaways — what's new here for digital collections?
-- Meta-prompting strategy for custom,b  item-specific OCR and NER prompts based on sample pages
+- Meta-prompting strategy for custom, item-specific OCR and NER prompts based on sample pages
 - Two-pass OCR strategy: old tech for bounding boxes, LLMs for higher-quality OCR, matched via alignment step
     - A critical guard against hallucinations
 
