@@ -80,7 +80,7 @@ We've spent a generation digitizing millions of items, but haven't spent nearly 
 
 The tradeoffs have shifted.
 
-For digtized collections:
+For digitized collections:
 - Data extraction with computers used to be impossible.
 - Then it was doable, but hard and expensive, and not that useful. 
 - Then it was doable, and relatively cheap, but useful only in narrow circumstances. 
