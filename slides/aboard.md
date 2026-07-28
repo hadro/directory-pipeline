@@ -70,7 +70,7 @@ JPGs embedded in HTML is better than nothing -- but only a little bit better.
 
 ---
 
-## 2. It's possible ... we in libraries may have digtized *too much.*
+## 2. It's possible ... we in libraries may have digitized *too much.*
 
 We've spent a generation digitizing millions of items, but haven't spent nearly as much energy making them useful to the people who might appreciate them.
 
