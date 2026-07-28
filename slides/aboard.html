@@ -26,12 +26,12 @@ Josh Hadro<br />
 </foreignObject><foreignObject width="1280" height="720" data-marpit-advanced-background="pseudo"><section lang="en-US" data-marpit-advanced-background="pseudo" style=""></section></foreignObject></svg><svg data-marpit-svg="" viewBox="0 0 1280 720"><foreignObject width="1280" height="720"><section id="5" lang="en-US">
 <h2 id="top-takeaways--whats-new-here-for-digital-collections">Top takeaways — what's new here for digital collections?</h2>
 <ul>
+<li>Meta-prompting strategy for custom,b  item-specific OCR and NER prompts based on sample pages</li>
 <li>Two-pass OCR strategy: old tech for bounding boxes, LLMs for higher-quality OCR, matched via alignment step
 <ul>
 <li>A critical guard against hallucinations</li>
 </ul>
 </li>
-<li>Meta-prompting strategy for custom item-specific OCR and NER prompts based on sample pages</li>
 </ul>
 </section>
 </foreignObject></svg><svg data-marpit-svg="" viewBox="0 0 1280 720"><foreignObject width="1280" height="720"><section lang="en-US" data-marpit-advanced-background="background" data-marpit-advanced-background-split="left" style="--marpit-advanced-background-split:99%;"><div data-marpit-advanced-background-container="true" data-marpit-advanced-background-direction="horizontal"><figure style="background-image:url(&quot;https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fmattpoor.com%2Fwp%2Fwp-content%2Fuploads%2F2016%2F09%2Fnew-york-public-library-logo.png&amp;f=1&amp;nofb=1&amp;ipt=7ebe178d598dc51b8c52f53f46cec635223c1713dc1e3a69a6991f4d90254748?text=A&quot;);background-size:125%;"><figcaption>NYPL logo</figcaption></figure><figure style="background-image:url(&quot;https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Ftse1.mm.bing.net%2Fth%2Fid%2FOIP.bvZnLW3MHY8rA8XBUTtABgHaGo%3Fpid%3DApi&amp;f=1&amp;ipt=e3c1c25c1a8eff2fc5f52b58782f7f3f2919cda0ffd87e0bcd0d50dd1add494b?text=B&quot;);background-size:40%;"><figcaption>IIIF logo</figcaption></figure><figure style="background-image:url(&quot;https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fwww.marefa.org%2Fw%2Fimages%2Fthumb%2Fb%2Fbe%2FLogo_of_the_United_States_Library_of_Congress.svg%2F800px-Logo_of_the_United_States_Library_of_Congress.svg.png&amp;f=1&amp;nofb=1&amp;ipt=e3bb62f2ecc4ed83a0b87890e0c01fccb89ad5ce60d4b6b8f82d06c44cb278f7?text=C&quot;);background-size:contain;"><figcaption>LOC logo</figcaption></figure></div></section></foreignObject><foreignObject width="1%" height="720" x="99%"><section id="6" lang="en-US" data-marpit-advanced-background="content" data-marpit-advanced-background-split="left" style="--marpit-advanced-background-split:99%;"></section>
@@ -91,7 +91,7 @@ Josh Hadro<br />
 </foreignObject></svg><svg data-marpit-svg="" viewBox="0 0 1280 720"><foreignObject width="1280" height="720"><section id="21" lang="en-US">
 <h3 id="basic-pipeline">Basic pipeline</h3>
 <p>    Download files<br />
-→ Select samples and scope*<br />
+→ Select samples pages*<br />
 → Generate OCR + NER prompts<br />
 → Run LLM OCR<br />
 → Extract entry data</p>
@@ -100,14 +100,13 @@ Josh Hadro<br />
 </foreignObject></svg><svg data-marpit-svg="" viewBox="0 0 1280 720"><foreignObject width="1280" height="720"><section id="22" lang="en-US">
 <h3 id="enriched-pipeline">Enriched pipeline</h3>
 <p>    Download files<br />
-→ Select samples and scope*<br />
+→ Select samples pages*<br />
 → Generate OCR + NER prompts<br />
 → Run LLM OCR<br />
 → Run layout detection<br />
 → Match lines<br />
 → Review alignment*<br />
-→ Extract entry data<br />
-→ Align entries to bounding boxes</p>
+→ Extract aligned entry data</p>
 <p><br /><br /><sub>* denotes &quot;human in the loop&quot; step</sub></p>
 </section>
 </foreignObject></svg><svg data-marpit-svg="" viewBox="0 0 1280 720"><foreignObject width="1280" height="720"><section id="23" lang="en-US">

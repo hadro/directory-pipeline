@@ -35,9 +35,10 @@ Takes any item with [a IIIF manifest](https://iiif.io/get-started/how-iiif-works
 ---
 
 ## Top takeaways — what's new here for digital collections?
+- Meta-prompting strategy for custom,b  item-specific OCR and NER prompts based on sample pages
 - Two-pass OCR strategy: old tech for bounding boxes, LLMs for higher-quality OCR, matched via alignment step
     - A critical guard against hallucinations
-- Meta-prompting strategy for custom item-specific OCR and NER prompts based on sample pages
+
 
 
 ---
@@ -151,7 +152,7 @@ https://beefoo.github.io/greenbook-map/
 
 ### Basic pipeline
 &nbsp;&nbsp;&nbsp;&nbsp;Download files 
-→ Select samples and scope* 
+→ Select samples pages* 
 → Generate OCR + NER prompts 
 → Run LLM OCR 
 → Extract entry data
@@ -162,14 +163,13 @@ https://beefoo.github.io/greenbook-map/
 
 ### Enriched pipeline
 &nbsp;&nbsp;&nbsp;&nbsp;Download files 
-→ Select samples and scope* 
+→ Select samples pages* 
 → Generate OCR + NER prompts 
 → Run LLM OCR 
 → Run layout detection 
 → Match lines 
 → Review alignment*  
-→ Extract entry data 
-→ Align entries to bounding boxes 
+→ Extract aligned entry data 
 
 
 <br><br><sub>* denotes "human in the loop" step</sub>
