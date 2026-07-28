@@ -123,7 +123,7 @@ In Kurt Vonnegut's _Player Piano_ from 1952, there's a minor sub-plot about a ba
 
 ---
 
-### Navigating the Green Book 
+### Navigating the Green Book: 2015-2016
 
 https://beefoo.github.io/greenbook-map/
 
@@ -203,9 +203,9 @@ https://beefoo.github.io/greenbook-map/
 
 ## Human-in-the-loop interface examples
 
-<!-- ---
+---
 
-![bg](https://github.com/hadro/directory-pipeline/raw/main/docs/screenshots/web-interface.png) -->
+![bg](https://github.com/hadro/directory-pipeline/raw/main/docs/screenshots/web-interface.png)
 
 
 ---
@@ -217,10 +217,70 @@ https://beefoo.github.io/greenbook-map/
 ![bg](https://github.com/hadro/directory-pipeline/raw/main/docs/screenshots/review-alignment.png)
 
 
-<!-- ---
+---
 
 
-![bg](https://github.com/hadro/directory-pipeline/raw/main/docs/screenshots/ner-in-cli.png) -->
+![bg](https://github.com/hadro/directory-pipeline/raw/main/docs/screenshots/ner-in-cli.png)
+
+
+---
+
+### Meta-prompting for item-specific extraction guidance
+
+```md
+You are a structured data extractor for a digitized historical 
+document. Your goal is to identify and extract discrete records 
+from the transcribed text of "The National Directory of 
+Morticians," a professional registry of funeral homes and 
+directors organized by geography.
+```
+---
+```markdown
+## Your task
+### Entry schema
+Each object in the "entries" array must represent a single 
+business or practitioner. Inherit the geographic context from the 
+headings above the entry. Use the following fields:
+
+- state: The state name (normalized, e.g., "ALABAMA").
+- city: The city name.
+- county: The county name (e.g., "Henry Co.").
+- city_population: The population count listed for that city.
+- business_name: The primary name of the funeral home or mortuary.
+- personnel: Names of specific directors, managers, or partners 
+mentioned (e.g., "Bernie T. Hoff, Mgr.").
+```
+
+---
+
+```markdown
+
+## Rules
+
+1. Extract every distinct funeral service provider listed. If a 
+boxed advertisement and a text listing refer to the same 
+business, merge them into a single entry containing all available 
+details.
+2. Skip page numbers, running headers, and decorative elements. 
+Ignore generic directory filler text (e.g., "Use National 
+Directory of Morticians for Accuracy") and "Publishers Notes."
+3. Normalize headings: If a heading appears as 
+"ARIZONA—Continued", record the state as "ARIZONA".
+4. Heading transitions mid-page: When a new City/County heading 
+appears (e.g., "BIRMINGHAM—Jefferson Co."), every entry following 
+it belongs to that new context. The prior_context only applies to 
+entries appearing before the first heading change on the current 
+page.
+5. If a record spans a page boundary, extract the portion of the 
+record present on the current page. If a listing says "(See Ad. 
+next page)", include that note in the address or a notes field.
+6. Sentinel tokens: If the source text contains [illegible] or 
+[blank], copy those tokens verbatim. If a field is simply not 
+present, leave it as null or an empty string.
+
+Return only valid JSON. No markdown code fences. No explanatory 
+text.
+```
 
 
 ---
