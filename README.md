@@ -125,6 +125,7 @@ export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geo
 | Geocode entries and build a map | `pipeline geo output/<vol>/` |
 | Full pipeline with page scoping + alignment review | `pipeline guided <URL>` |
 | Clean + merge volumes after extraction | `pipeline postprocess output/<collection>/` |
+| Extract one section of a huge volume without downloading it all | `python tools/slice_manifest.py <MANIFEST> --from-id … --to-id … --slug <slug>` [→ details](docs/usage-examples.md#extracting-only-part-of-a-large-volume) |
 | Use pipeline pieces from a notebook or script | `from pipeline.api import iter_canvases, …` [→ details](docs/usage-examples.md#9-using-pieces-as-a-library) |
 | Export W3C/IIIF annotations | `python -m pipeline.iiif.export_annotations` |
 

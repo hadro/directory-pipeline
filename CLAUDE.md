@@ -144,7 +144,9 @@ python analysis/fix_entries.py --all --infer-categories
 
 ## Repair tools (`tools/`)
 
-One-off repair and triage utilities (not pipeline stages): `rescale_canvas_fragments.py`, `patch_canvas_fragments.py`, `review_ocr.py`. See `tools/README.md`.
+One-off repair and triage utilities (not pipeline stages): `rescale_canvas_fragments.py`, `patch_canvas_fragments.py`, `review_ocr.py`, `slice_manifest.py`. See `tools/README.md`.
+
+`slice_manifest.py` is the answer to "I only want one section of an 890-page volume": it writes a synthetic `output/{slug}/manifest.json` containing just the canvases you select, which `main.py` accepts directly as a source (local `.json` paths route to `download_images.py --manifest`). Because that path is also the downstream `manifest.json` lookup used by `extract_entries.py` and `explore_entries.py`, one file serves as source, download cache, and canvas-URI reference. Select by position (`--from`/`--to`) or canvas-URI substring (`--from-id`/`--to-id`); `--list` dumps every canvas with its id and label.
 
 ## Flask dashboard
 

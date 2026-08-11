@@ -66,6 +66,34 @@ python -m pipeline.download_images \
     --output-dir output/my-item
 ```
 
+### Extracting only part of a large volume
+
+When one section of a multi-hundred-page directory is the target — a single trade, a street range, one alphabetical run — `tools/slice_manifest.py` writes a synthetic manifest holding just those canvases, so you download that section instead of the whole volume.
+
+Select by canvas position (`--from`/`--to`, 1-based inclusive) or by a substring of the canvas URI (`--from-id`/`--to-id`). The substring form is usually easier: repository page URLs normally contain the id, and printed page numbers often differ from canvas positions.
+
+```bash
+# Find the range: prints position, canvas id, and label for every canvas
+python tools/slice_manifest.py https://example.org/iiif/vol/manifest.json --list
+
+# Slice it — writes output/london-1841-booksellers/manifest.json
+python tools/slice_manifest.py https://example.org/iiif/vol/manifest.json \
+    --from-id 27074 --to-id 27077 --slug london-1841-booksellers
+
+# Run the pipeline against the sliced manifest (pass --slug: the default would be "manifest")
+python main.py output/london-1841-booksellers/manifest.json \
+    --slug london-1841-booksellers --download --gemini-ocr --extract-entries --explore
+```
+
+Canvas ids and image service URLs are preserved, so `canvas_fragment` values in the resulting CSV still resolve against the source repository's viewer.
+
+If the section is from a collection you have not run before, calibrate first — a few pages make `--select-pages` almost free:
+
+```bash
+python main.py output/london-1841-booksellers/manifest.json \
+    --slug london-1841-booksellers --select-pages --generate-prompts
+```
+
 ---
 
 ## 4. Precision upgrade: bounding boxes per entry

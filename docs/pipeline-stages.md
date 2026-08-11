@@ -51,7 +51,7 @@ output/{slug}/[{item}/]                      one subdir per item (or flat for si
 | File | Written by | Read by |
 |---|---|---|
 | `{slug}.csv` | source-CSV stages | `--download` |
-| `manifest.json` (per item dir) | `--download` | align (canvas URIs/dims), explore, `combine_volumes` |
+| `manifest.json` (per item dir) | `--download`; or `tools/slice_manifest.py` for a page-range subset | align (canvas URIs/dims), explore, `combine_volumes` |
 | `{page:04d}_{image-id}.jpg` | `--download` | all OCR stages, visualize, multimodal extract |
 | `{stem}_surya.json` / `{stem}_surya.txt` | `--surya-ocr` | align / `compare_ocr` (`"surya"` token) |
 | `{stem}_{ocr-model}.txt` | `--gemini-ocr` | align; extract (fallback when no aligned JSON) |
@@ -149,6 +149,46 @@ Cloudflare for non-browser clients. The downloader automatically falls back to t
 LoC item JSON API (`?fo=json`) to build a synthetic IIIF manifest, then downloads
 images from `tile.loc.gov`. The requested download width is capped at the native
 image resolution to avoid upscaling artifacts from the tile pyramid.
+
+#### `tools/slice_manifest.py` — Extract one section of a large volume
+Writes a synthetic manifest holding only a contiguous run of canvases, so `--download`
+fetches that section instead of the whole volume. Aimed at multi-hundred-page
+directories where a single section (one trade, one street range, one alphabetical
+run) is the target.
+
+Output goes to `output/{slug}/manifest.json` — the same path `download_images.py`
+uses as its manifest cache and the same one `extract_entries.py` and
+`explore_entries.py` read for canvas URIs and metadata. So a single file serves as
+source, cache, and downstream reference, and `main.py` accepts it directly as a
+source (local `.json` paths route to manifest mode).
+
+Canvas `@id`/`id`, image service URLs, and dimensions are copied verbatim, so
+`canvas_fragment` values in the resulting CSV still resolve against the source
+repository's viewer. The `structures` array is dropped, since its ranges reference
+canvases that are no longer present.
+
+Select by canvas position (`--from`/`--to`, 1-based inclusive) or by a substring of
+the canvas URI (`--from-id`/`--to-id`) — the latter is easier when you have
+repository page URLs rather than page numbers, and note that printed page numbers
+often differ from canvas positions. `--list` dumps every canvas with its id and label.
+
+```bash
+# By canvas-URI substring (e.g. CONTENTdm item ids taken from page URLs)
+python tools/slice_manifest.py https://example.org/iiif/vol/manifest.json \
+    --from-id 27074 --to-id 27077 --slug london-1841-booksellers
+
+# By position, after finding the range with --list
+python tools/slice_manifest.py https://example.org/iiif/vol/manifest.json --list
+python tools/slice_manifest.py https://example.org/iiif/vol/manifest.json \
+    --from 674 --to 677 --slug london-1841-booksellers
+
+# Then run the pipeline against the sliced manifest
+python main.py output/london-1841-booksellers/manifest.json \
+    --slug london-1841-booksellers --download --gemini-ocr --extract-entries --explore
+```
+
+Pass `--slug` to `main.py` as well — without it the slug would be derived from the
+filename stem (`manifest`).
 
 #### `pipeline/detect_spreads.py` — Spread detection
 Analyzes each image to determine whether it contains two facing pages (a spread
