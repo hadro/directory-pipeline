@@ -42,3 +42,7 @@ Rules of the contract:
 
 Prompts that `--generate-prompts` produced for the Green Book collection — kept
 as reference output, not loaded by any stage.
+
+Also included: the OCR and NER prompts for the *Post Office London Directory,
+1841* booksellers section — a harder case, with dense three-column text and
+per-entry reference marks.
