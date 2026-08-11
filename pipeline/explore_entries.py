@@ -323,6 +323,16 @@ _HTML_TEMPLATE = Path(__file__).with_suffix(".html").read_text(encoding="utf-8")
 # Build canvas thumbnail map (for detail panel)
 # ---------------------------------------------------------------------------
 
+# CONTENTdm IIIF Image service ids look like
+#   https://cdm16445.contentdm.oclc.org/iiif/2/p16445coll4:27074
+#   https://cdm16445.contentdm.oclc.org/iiif/p16445coll4:27074
+# The "{alias}:{id}" final segment is distinctive enough to identify the platform
+# without matching on the contentdm.oclc.org hostname, which institutions alias.
+_CONTENTDM_SERVICE_RE = re.compile(
+    r"^(https?://[^/]+)/iiif/(?:\d+/)?([A-Za-z0-9_]+):(\d+)/?$"
+)
+
+
 def _build_canvas_thumb_map(
     search_root: Path,
 ) -> dict[str, list]:
@@ -347,6 +357,12 @@ def _build_canvas_thumb_map(
                     f"https://digitalcollections.nypl.org/items/{item_uuid}"
                     f"?canvasIndex={i}"
                 )
+            elif (cdm := _CONTENTDM_SERVICE_RE.match(svc_id)):
+                # CONTENTdm canvas URIs are IIIF identifiers, not browseable pages —
+                # opening one returns 404. The item page is a different path built
+                # from the same alias and id.
+                host, alias, item_id = cdm.groups()
+                viewer_url = f"{host}/digital/collection/{alias}/id/{item_id}"
             mapping[canvas["canvas_id"]] = [
                 svc_id,
                 canvas["canvas_width"],
