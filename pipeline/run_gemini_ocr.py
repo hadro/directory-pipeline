@@ -33,7 +33,7 @@ from google import genai
 load_dotenv()
 from google.genai.types import FinishReason, GenerateContentConfig, MediaResolution, Part, ThinkingConfig
 
-from utils.gemini import flex_http_options, generate_with_retry, get_client
+from utils.gemini import flex_http_options, generate_with_retry, get_client, thinking_config_for
 from utils.image_utils import is_blank_page
 from utils.models import DEFAULT_OCR_MODEL, FALLBACK_MODEL, model_slug
 
@@ -183,16 +183,9 @@ def _output_issue(text: str) -> str:
     return ""
 
 
-def _thinking_config_for(model: str) -> "ThinkingConfig | None":
-    """Return a ThinkingConfig for *model*, or None to use the API default.
-
-    Flash/flash-lite models support thinking_budget=0 (thinking disabled).
-    Pro-tier models only operate in thinking mode and reject budget=0, so
-    they're left on the API's default (dynamic) thinking budget.
-    """
-    if "-pro" in model:
-        return None
-    return ThinkingConfig(thinking_budget=0)
+def _thinking_config_for(model: str) -> ThinkingConfig:
+    """Thinking budget for *model* — see utils.gemini.thinking_config_for."""
+    return thinking_config_for(model)
 
 
 def _call_gemini(
@@ -230,6 +223,7 @@ def process_image(
     media_resolution: "MediaResolution | None" = None,
     service_tier: str | None = None,
     fallback_model: str | None = None,
+    skip_blank: bool = True,
 ) -> tuple[str, bool | None]:
     """
     OCR one image via Gemini. Returns (status, success) where status is one of
@@ -247,7 +241,13 @@ def process_image(
     # prompt describes instead of returning nothing. Detect and skip them
     # before spending an API call. No .txt is written, so downstream stages
     # (align, extract) never see the page; re-runs just re-check (cheap).
-    if is_blank_page(image_path):
+    #
+    # The check is a contrast heuristic and it FALSE-POSITIVES on low-contrast
+    # scans: on some NYPL microfilm the darkest pixel is ~106 against a ~217
+    # background, so text never crosses the 0.5x-background threshold and a full
+    # page of entries measures as 0.001% dark. Pass --no-blank-skip when you know
+    # the page has content (evaluation runs, or a volume that scans light).
+    if skip_blank and is_blank_page(image_path):
         return "blank", None
 
     with open(image_path, "rb") as f:
@@ -271,6 +271,15 @@ def process_image(
                 if candidate.safety_ratings:
                     _log(f"  safety_ratings: {candidate.safety_ratings}  [{image_path.name}]")
     else:
+        # Non-empty but cut off at the output ceiling: the tail of the page is
+        # missing. Retrying at a different temperature cannot recover it, so warn
+        # loudly rather than silently writing a short page and reporting success.
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate and candidate.finish_reason == FinishReason.MAX_TOKENS:
+            _log(
+                f"  WARNING: truncated at the output token limit (MAX_TOKENS) — "
+                f"transcription is incomplete ({len(text.splitlines())} lines): {image_path.name}"
+            )
         issue = _output_issue(text)
         needs_retry, reason = bool(issue), issue
 
@@ -426,6 +435,18 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--no-blank-skip",
+        dest="no_blank_skip",
+        action="store_true",
+        help=(
+            "Do not skip pages the blank-page heuristic flags. That heuristic "
+            "measures contrast and false-positives on low-contrast scans (some "
+            "NYPL microfilm reads as 0.001%% dark despite a full page of "
+            "entries), silently dropping real pages. Use when you know the pages "
+            "have content — evaluation runs, or a volume that scans light."
+        ),
+    )
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="Suppress per-file progress output",
@@ -563,7 +584,7 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(process_image, client, img, args.model, img_prompts[img], media_resolution, service_tier, fallback_model): img
+            executor.submit(process_image, client, img, args.model, img_prompts[img], media_resolution, service_tier, fallback_model, not args.no_blank_skip): img
             for img in images
         }
         for future in as_completed(futures):

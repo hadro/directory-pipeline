@@ -54,9 +54,9 @@ from google import genai
 
 
 load_dotenv()
-from google.genai.types import GenerateContentConfig, Part, ThinkingConfig
+from google.genai.types import GenerateContentConfig, Part
 
-from utils.gemini import flex_http_options, generate_with_retry, get_client
+from utils.gemini import flex_http_options, generate_with_retry, get_client, thinking_config_for
 from utils.models import DEFAULT_NER_MODEL, FALLBACK_MODEL, model_slug
 
 # Sparse-page thresholds: pages below BOTH limits are skipped before the NER call.
@@ -224,7 +224,7 @@ def _call_gemini(
             system_instruction=system_prompt,
             temperature=0.0,
             max_output_tokens=65536,
-            thinking_config=ThinkingConfig(thinking_budget=0),
+            thinking_config=thinking_config_for(model),
             http_options=flex_http_options(service_tier),
         ),
         contents=parts,

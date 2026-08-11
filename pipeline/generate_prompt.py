@@ -52,7 +52,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from utils.gemini import get_client
+from utils.gemini import generate_with_retry, get_client
 from utils.models import DEFAULT_PROMPT_MODEL
 
 _DITTO_INSTRUCTION = (
@@ -246,10 +246,12 @@ def _load_images(
 def _call_gemini(client, model: str, meta: str, image_parts: list, quiet: bool) -> str:
     """Send meta-prompt + images to Gemini and return the response text."""
     from google.genai.types import GenerateContentConfig
-    response = client.models.generate_content(
+    response = generate_with_retry(
+        client,
         model=model,
         config=GenerateContentConfig(temperature=0.2),
         contents=[meta] + image_parts,
+        log=(lambda msg: None) if quiet else None,
     )
     return (response.text or "").strip()
 
