@@ -126,6 +126,7 @@ CANONICAL_CATEGORIES: list[str] = [
     "RESTAURANTS",
     "BEAUTY PARLORS",
     "SERVICE STATIONS",
+    "GARAGES",
     "TOURIST HOMES",
     "BARBER SHOPS",
     "TAVERNS",
@@ -290,6 +291,13 @@ def normalize_category(raw: str) -> tuple[str, bool]:
 # 2b. Category inference from business name
 # ---------------------------------------------------------------------------
 
+# Compound phrases specific enough to survive free text, so they are safe to
+# match against note fields as well as names (see _MARKER_RULES).
+_TRAVEL_AGENCY_RULES: list[tuple[re.Pattern, str]] = [
+    (re.compile(r'\btravel (agency|agencies|service|bureau)\b', re.I), "TRAVEL AGENCIES"),
+    (re.compile(r'\btour(ist)? (agency|agencies|bureau)\b',     re.I), "TRAVEL AGENCIES"),
+]
+
 # Ordered keyword rules for name-based category inference.
 # Longer/more-specific phrases come before shorter ones (first match wins).
 _INFER_RULES: list[tuple[re.Pattern, str]] = [
@@ -299,8 +307,19 @@ _INFER_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r'\btourist cabin\b',   re.I), "TOURIST HOMES"),
     (re.compile(r'\btourist camp\b',    re.I), "TOURIST HOMES"),
     (re.compile(r'\bauto court\b',      re.I), "TOURIST HOMES"),
+    (re.compile(r'\bguest house\b',     re.I), "TOURIST HOMES"),
+    (re.compile(r'\bguest home\b',      re.I), "TOURIST HOMES"),
+    (re.compile(r'\bguest cottage\b',   re.I), "TOURIST HOMES"),
     (re.compile(r'\brooming house\b',   re.I), "ROOMING HOUSES"),
     (re.compile(r'\bboarding house\b',  re.I), "ROOMING HOUSES"),
+    # YMCA / YWCA — check YWCA first so the shared "MCA"/"WCA" shapes can't
+    # cross-match, and both before any generic lodging rule.
+    (re.compile(r'\by\.?\s?w\.?\s?c\.?\s?a\.?(\b|$)', re.I), "YWCA"),
+    (re.compile(r'\by\.?\s?m\.?\s?c\.?\s?a\.?(\b|$)', re.I), "YMCA"),
+    # Resorts — the seasonal phrasing is more specific than the bare word.
+    (re.compile(r'\bsummer resort\b',   re.I), "SUMMER RESORTS"),
+    (re.compile(r'\bvacation resort\b', re.I), "VACATION RESORTS"),
+    (re.compile(r'\bresort\b',          re.I), "VACATION RESORTS"),
     # Service stations — multi-word first
     (re.compile(r'\bservice station\b', re.I), "SERVICE STATIONS"),
     (re.compile(r'\bfilling station\b', re.I), "SERVICE STATIONS"),
@@ -343,7 +362,31 @@ _INFER_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r'\bgarage\b',          re.I), "GARAGES"),
     # Tailor shops
     (re.compile(r'\btailor\b',          re.I), "TAILOR SHOPS"),
+    # Travel agencies — bare \btravel\b would match ad copy ("travelling is
+    # the AAA tour", "a pause in travel"), and \btour\b matches it in the
+    # singular; only the plural "TOURS" reads as part of a business name.
+    *_TRAVEL_AGENCY_RULES,
+    (re.compile(r'\btours\b',           re.I), "TRAVEL AGENCIES"),
 ]
+
+# Markers that identify a listing type wherever they appear, including in
+# free-text note fields. Kept separate from _INFER_RULES and anchored tightly,
+# because note fields carry ad slogans: running the full keyword sweep over
+# them mis-categorizes ~6% of ad lines (a hotel's own "FLORIDA'S MOST MODERN
+# RESORT" becomes VACATION RESORTS, a "Hotel 4-9332" phone line becomes HOTELS).
+_MARKER_RULES: list[tuple[re.Pattern, str]] = [
+    # "(Guests)" / "(Guest)" marks a private tourist home. These listings are
+    # person names ("MRS. ROSE ALLEN") that no keyword rule can reach.
+    (re.compile(r'\(\s*guests?\s*\)', re.I), "TOURIST HOMES"),
+    # Multi-word enough to be unambiguous in prose: a note reading "An
+    # International Travel Agency" is a genuine signal, where a bare "Resort"
+    # in the same position usually describes a neighbour, not the entry.
+    *_TRAVEL_AGENCY_RULES,
+]
+
+# Free-text columns that may carry markers, across the various volume schemas.
+# The calibrated travel-guide schema uses `details`; Green Book uses `notes`.
+_NOTE_FIELDS: tuple[str, ...] = ("details", "notes", "description")
 
 # Category values that are candidates for keyword inference (lowercase comparison).
 _INFER_TARGET_CATEGORIES: set[str] = {
@@ -354,9 +397,23 @@ _INFER_TARGET_CATEGORIES: set[str] = {
 
 
 def infer_category_from_name(name: str, notes: str = "") -> str | None:
-    """Return inferred canonical category from name (and notes), or None if no rule matches."""
-    text = name + " " + notes
+    """Return inferred canonical category, or None if no rule matches.
+
+    Two passes with deliberately different scope:
+
+    1. ``_INFER_RULES`` (broad keyword sweep) runs against *name* only. Note
+       fields hold ad slogans and proprietor lines, and sweeping ~45 keyword
+       rules over that prose produces confident-but-wrong categories that
+       nothing downstream will revisit — ``_INFER_TARGET_CATEGORIES`` only
+       revisits empty/General values, so a wrong guess here is permanent.
+    2. ``_MARKER_RULES`` (narrow, anchored) runs against *name* and *notes*,
+       for signals like "(Guests)" that are genuinely recorded in note fields.
+    """
     for pattern, category in _INFER_RULES:
+        if pattern.search(name):
+            return category
+    text = name + " " + notes
+    for pattern, category in _MARKER_RULES:
         if pattern.search(text):
             return category
     return None
@@ -748,7 +805,7 @@ def process_csv(
             if current_cat in _INFER_TARGET_CATEGORIES:
                 inferred = infer_category_from_name(
                     row.get(name_col, ""),
-                    row.get("notes", ""),
+                    " ".join(row.get(f, "") or "" for f in _NOTE_FIELDS),
                 )
                 if inferred:
                     row[category_col] = inferred
