@@ -56,7 +56,10 @@ from utils import iiif_utils
 DEFAULT_WIDTH = 2048
 DEFAULT_DELAY = 0.5   # ~2 requests/second — conservative for institutional servers
 MAX_RETRIES = 5
-RETRYABLE_STATUSES = {429, 503}
+# 5xx gateway errors are included because image servers (e.g. NYPL's Cantaloupe
+# behind nginx) return them transiently when a large derivative times out —
+# the same URL succeeds on retry.
+RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 
 FALLBACK_SIZE = "!760,760"
 
