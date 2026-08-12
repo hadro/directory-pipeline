@@ -5,7 +5,12 @@ description = "Turn a public IIIF archive URL into a structured CSV using Gemini
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "google-genai>=1.0",
+    # 1.21 is the first release with HttpOptions.extra_body, which
+    # utils.gemini.flex_http_options needs to send service_tier — and --flex is
+    # on by default. Below it the resolver is free to pick 1.2.0 (surya-ocr's
+    # openai<2 pin drags httpx back to 0.27, which only old google-genai
+    # accepts) and every OCR/NER call fails on a pydantic extra_forbidden.
+    "google-genai>=1.21",
     "numpy>=1.26",
     "pillow>=10.0",
     "requests>=2.32.5",
