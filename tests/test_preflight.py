@@ -6,7 +6,7 @@ one extra uninstalls the other and sends users ping-ponging between
 `--extra gpu` and `--extra geo`.
 """
 
-from main import preflight_requirements
+from main import interpreter_arch_warning, preflight_requirements
 
 
 def _spec(installed: set):
@@ -51,3 +51,27 @@ def test_stage_without_requires_never_missing():
         {"download", "gemini_ocr", "align_ocr"}, find_spec=_spec(set())
     )
     assert missing == [] and cmd == ""
+
+
+# --- interpreter architecture -------------------------------------------------
+# An Intel Python under Rosetta on Apple Silicon can neither install Surya
+# (no macOS x86_64 torch wheel since 2.2.2) nor use the GPU if torch is forced
+# in from conda-forge. Both failures are silent, so warn on exactly that pair.
+
+
+def test_intel_python_on_apple_silicon_warns():
+    msg = interpreter_arch_warning(machine="x86_64", hw_arm64=True)
+    assert "Rosetta" in msg and "arm64" in msg
+
+
+def test_native_arm64_python_is_silent():
+    assert interpreter_arch_warning(machine="arm64", hw_arm64=True) == ""
+
+
+def test_genuine_intel_mac_is_silent():
+    # Nothing to fix: the hardware really is x86_64, so no Rosetta is involved.
+    assert interpreter_arch_warning(machine="x86_64", hw_arm64=False) == ""
+
+
+def test_linux_x86_64_is_silent():
+    assert interpreter_arch_warning(machine="x86_64", hw_arm64=False) == ""

@@ -432,6 +432,52 @@ def build_stage_args(
     return None
 
 
+def _hw_is_apple_silicon() -> bool:
+    """True if the CPU is Apple Silicon, regardless of the interpreter's arch."""
+    try:
+        out = subprocess.run(
+            ["sysctl", "-n", "hw.optional.arm64"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
+        return False
+    return out.stdout.strip() == "1"
+
+
+def interpreter_arch_warning(machine=None, hw_arm64=None) -> str:
+    """Warn when an Intel Python is running on Apple Silicon hardware.
+
+    macOS runs x86_64 interpreters under Rosetta without complaint, but PyTorch
+    has shipped no macOS x86_64 wheel since 2.2.2 — so `uv sync --extra gpu`
+    cannot resolve Surya at all, and a torch obtained by other means (conda-forge
+    still builds osx-64 from source) runs emulated and CPU-only on a machine
+    with a perfectly good GPU. Both failures are quiet enough to lose a day to.
+
+    Returns "" when the interpreter matches the hardware.
+    """
+    import platform
+
+    if machine is None:
+        machine = platform.machine()
+    if machine != "x86_64":
+        return ""
+    if hw_arm64 is None:
+        hw_arm64 = _hw_is_apple_silicon()
+    if not hw_arm64:
+        return ""  # a genuine Intel Mac — nothing to fix
+    return (
+        "Warning: this is an Intel (x86_64) Python running under Rosetta on an "
+        "Apple Silicon Mac.\n"
+        "  Surya cannot be installed here (no macOS x86_64 PyTorch wheel exists "
+        "since torch 2.2.2),\n"
+        "  and any torch installed by other means runs emulated and CPU-only.\n"
+        "  Fix by using a native arm64 Python:\n"
+        "      uv python install 3.12 && uv sync --extra gpu\n"
+        "  Verify with: python -c \"import platform; print(platform.machine())\"  "
+        "→ should print arm64"
+    )
+
+
 def preflight_requirements(enabled: "set[str]", find_spec=None) -> "tuple[list, str]":
     """Check optional-extra dependencies for the enabled stages.
 
@@ -966,6 +1012,13 @@ def main() -> None:
     # Validate: --compare-ocr needs models
     if "compare_ocr" in enabled and len(args.models) < 2:
         parser.error("--compare-ocr requires at least 2 models via --models.")
+
+    # Preflight: an Intel Python on Apple Silicon makes the install hint below
+    # unfollowable, so say so first — otherwise the user just sees uv fail to
+    # resolve torch and has no way to connect that to their interpreter.
+    _arch_warning = interpreter_arch_warning()
+    if _arch_warning:
+        print(_arch_warning, file=sys.stderr)
 
     # Preflight: stages backed by optional extras fail fast with an install
     # hint before any work starts. Without this, a missing dependency surfaces
