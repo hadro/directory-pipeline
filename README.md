@@ -17,7 +17,8 @@ Built for digitized historical directories — city directories, gazetteers, tra
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync        # installs dependencies and the `pipeline` command
+uv sync                      # creates .venv/ and installs the `pipeline` command
+source .venv/bin/activate    # puts `pipeline` on your PATH (or prefix each command with `uv run`)
 
 # One-time calibration for a new collection type — generates OCR and NER
 # prompts that will work for any item with the same entry structure
@@ -90,7 +91,16 @@ uv sync --extra geo      # add geocoding + map generation
 uv sync --all-extras     # everything
 ```
 
-This installs the `pipeline` command (run `pipeline --help` for all subcommands):
+`uv sync` creates and manages the project's virtual environment in `.venv/` — you don't create one yourself, and you don't need conda. It also installs the `pipeline` command *into that environment*, so reach it one of two ways:
+
+```bash
+uv run pipeline <subcommand> …     # no activation needed; works from a fresh terminal
+source .venv/bin/activate          # or activate once, then run `pipeline` bare
+```
+
+Everything below is written in the bare form; prefix with `uv run` if you haven't activated. The same applies to the underlying `python main.py …` interface.
+
+Run `pipeline --help` for all subcommands:
 
 ```bash
 pipeline run    <URL>          # automated: download → OCR → extract → explore
@@ -111,6 +121,29 @@ Set your API keys (or copy `.env.template` to `.env`):
 ```bash
 export GEMINI_API_KEY=your_key_here
 export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geocoding
+```
+
+### Already have Anaconda?
+
+This project is uv-native — there is no conda environment to install. Let uv manage its own interpreter and leave conda out of the way:
+
+```bash
+uv python install 3.12
+uv sync --extra gpu
+```
+
+Two things bite conda users in particular:
+
+**An Intel Python on an Apple Silicon Mac.** macOS runs x86_64 interpreters under Rosetta silently, and Anaconda's Intel installer is easy to grab by accident. PyTorch has shipped no macOS x86_64 wheel since 2.2.2, so `uv sync --extra gpu` fails to resolve Surya — and a torch installed from conda-forge (which still builds `osx-64` from source) will run emulated and CPU-only on a machine with a perfectly good GPU. `main.py` warns when it detects this. Check yours with:
+
+```bash
+python -c "import platform; print(platform.machine())"   # want: arm64
+```
+
+**Notebooks running on the wrong kernel.** `uv sync` installs into `.venv/`, which is not the conda kernel Jupyter starts with — so imports fail even though the packages are installed. Register the project venv as a kernel and select it from the Kernel menu:
+
+```bash
+uv run python -m ipykernel install --user --name directory-pipeline
 ```
 
 ---

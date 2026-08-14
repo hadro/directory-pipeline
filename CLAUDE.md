@@ -23,7 +23,14 @@ Requires `.env` with `GEMINI_API_KEY` (and optionally `GOOGLE_MAPS_API_KEY`).
 
 ## Running the pipeline
 
-After `uv sync`, a `pipeline` CLI command is available:
+`uv sync` creates and manages the project's virtual environment in `.venv/` — you don't create one yourself, and you don't need conda. It also installs the `pipeline` command *into that environment*, so reach it one of two ways:
+
+```bash
+uv run pipeline <subcommand> …     # no activation needed; works from a fresh terminal
+source .venv/bin/activate          # or activate once, then run `pipeline` bare
+```
+
+Everything below is written in the bare form; prefix with `uv run` if you haven't activated. The same applies to the underlying `python main.py …` interface.
 
 ```bash
 pipeline run    <URL>          # automated: download → OCR → extract → explore
