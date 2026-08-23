@@ -18,6 +18,10 @@ A phased implementation plan for a `detect_sections` stage — auto-drafts `sect
 
 An assessment of [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) — TypeSafe AI's non-generative "System One" model (launched 2026-09-15) that returns calibrated typed decisions (`Noul` / `Choice` / `Score`) instead of text — lives at `docs/plans/jev-evaluation.md` (created 2026-09-20). **Bottom line: Jev cannot do NER or OCR** (it does not generate text, and rejects unconstrained string fields), so it is not a replacement for `extract_entries.py`, the sibling repo's Qwen fine-tune, or anything in the Hugging Face plan. It *is* a candidate for the routing/gating layer: non-entry rejection before NER, `detect_sections` Phase 5 boundary adjudication, and the `_INFER_RULES` category residue. Read it before evaluating any classification-only model backend; nothing is committed to, and the doc proposes one measured shadow run before any wiring.
 
+## Planned work: publication-ready data explorer
+
+A prioritized plan for turning the auto-generated explorer into a deployable data publication — a site emitter (`.nojekyll`, `404.html`, `data/`, `datapackage.json`, Pages workflow), IIIF rights/attribution and pipeline provenance surfacing, an OCR-tolerant search index, table virtualization (the current 2,000-row cap makes later entries unreachable), all-volumes mode, and a map tab — lives at `docs/plans/explorer-improvements.md` (created 2026-08-23). Every proposal is gated on capability detection so the explorer stays source-agnostic. Read it before doing explorer work.
+
 ## Setup
 
 ```bash
