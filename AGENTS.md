@@ -10,6 +10,10 @@ A strategy doc for replacing the Gemini OCR/NER steps with local open models (Ch
 
 A phased implementation plan for a `detect_sections` stage — auto-drafts `sections.txt` for multi-section city directories (alphabetical / street / classified / frontmatter) so per-section NER prompts route correctly — lives at `docs/plans/section-detection-plan.md` (created 2026-06-15). The consumer side (`utils/section_utils.py` + `extract_entries.py`) already exists; only the producer is missing. Read it before starting section-detection work; best implemented locally where the gitignored `output/` data is on disk.
 
+## Planned work: publication-ready data explorer
+
+A prioritized plan for turning the auto-generated explorer into a deployable data publication — a site emitter (`.nojekyll`, `404.html`, `data/`, `datapackage.json`, Pages workflow), IIIF rights/attribution and pipeline provenance surfacing, an OCR-tolerant search index, table virtualization (the current 2,000-row cap makes later entries unreachable), all-volumes mode, and a map tab — lives at `docs/plans/explorer-improvements.md` (created 2026-08-23). Every proposal is gated on capability detection so the explorer stays source-agnostic. Read it before doing explorer work.
+
 ## Setup
 
 ```bash
