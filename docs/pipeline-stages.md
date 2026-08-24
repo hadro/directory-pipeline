@@ -72,6 +72,25 @@ output/{slug}/[{item}/]                      one subdir per item (or flat for si
 | `columns_report.csv` | `--detect-columns` or `--surya-detect` | manual QA |
 | `pipeline_state.json` | `main.py` (after each successful stage) | every downstream script (model auto-detection) |
 
+### OCR text conventions
+
+Two conventions in `{stem}_{ocr-model}.txt` are **contracts the OCR prompt must
+honour**, not stylistic choices — downstream stages parse them, and a prompt that
+omits them silently disables the feature that consumes them.
+
+| Convention | Emitted by | Consumed by |
+|---|---|---|
+| `=== ADVERTISEMENT ===` … `=== END ADVERTISEMENT ===` around each boxed display ad | the OCR prompt | align — lines inside the block are excluded from the anchor set (`_find_anchors(non_anchor_gem_indices=…)`) |
+| `[illegible]` / `[blank]` sentinel tokens | the OCR prompt | extract — copied verbatim into the affected field rather than guessed at |
+
+The advertisement delimiters matter because ad copy routinely repeats a city or
+state name ("ATHENS, ALABAMA" inside a boxed ad). Without the markers such a line
+can be committed as an alignment anchor and pull the rest of the page out of
+order — a single mis-committed anchor is unrecoverable for the remainder of that
+page. Both `prompts/ocr_prompt.md` and the `--generate-prompts` meta-prompt
+instruct on these, so generated and hand-written prompts agree; a prompt written
+by hand for a new collection must include them too.
+
 ### Model auto-detection
 
 Scripts that need to know which model produced existing files resolve it in this

@@ -12,6 +12,20 @@ Transcribe the text on this page exactly as it is printed:
 - For text that is degraded, blurred, or partially obscured, transcribe your best reading — do not skip words or leave gaps
 - Only when a span is genuinely impossible to read after a best-effort attempt, write the literal token `[illegible]` in its place. If a region truly contains no text, write `[blank]`. Use these two tokens exactly as written — do not invent other placeholders.
 
+## Boxed advertisements
+
+Transcribe the text inside boxed display advertisements, and wrap each one in delimiter lines:
+
+```
+=== ADVERTISEMENT ===
+[advertisement text here]
+=== END ADVERTISEMENT ===
+```
+
+Downstream alignment reads these delimiters, so emit them for every boxed display
+advertisement, including ones spanning multiple columns. Do not use them for ordinary
+listings, headings, or editorial notes.
+
 ## Scope
 
 Transcribe only text that clearly belongs to this page. If text from an adjacent page is visible at the edge of the image, do not include it.

@@ -112,11 +112,32 @@ same output line." Note exceptions (full-width headings, index pages, advertisem
 span multiple lines, use of parentheses, em-dashes, etc.
 
 5. **Special content** — Advertisements, illustrations, index pages, maps, \
-or other non-directory content, and how to handle each.
+or other non-directory content, and how to handle each. Whatever else you say \
+about advertisements, the prompt MUST instruct the model to wrap each boxed \
+display advertisement in delimiter lines, reproduced exactly:
+
+```
+=== ADVERTISEMENT ===
+[advertisement text here]
+=== END ADVERTISEMENT ===
+```
+
+This is a fixed pipeline requirement, not a stylistic choice: the alignment stage \
+parses these delimiters to keep advertisement text — which often repeats a city or \
+state name — from being mistaken for a page heading and corrupting the page's \
+alignment. Say that the delimiters apply to every boxed display advertisement, \
+including ones spanning multiple columns, and not to ordinary listings, headings, \
+or editorial notes. Include this instruction even if the sample pages show few \
+advertisements; later pages in the volume may have many.
 
 6. **Transcription instructions** — Reading order (column-by-column vs. \
 row-by-row), how to handle degraded or blurred text, what margin content \
-to include or exclude, whether to preserve blank lines between sections.
+to include or exclude, whether to preserve blank lines between sections. \
+Also instruct the model on the two sentinel tokens the pipeline recognises: \
+write the literal `[illegible]` for a span that is genuinely unreadable after a \
+best-effort attempt, and `[blank]` for a region that truly contains no text — \
+these two exactly, with no other placeholders invented, and never as a substitute \
+for attempting a degraded reading.
 
 7. **Output format** — Plain text only, one printed line per output line, \
 no markdown, no commentary. Restate this clearly in the prompt.
@@ -162,7 +183,13 @@ Write a prompt that specifies:
    the actual content. Choose field names that are clear and meaningful for this \
    document type. Do not force a schema from a different document type onto this one. \
    Always include the heading hierarchy and context elements within the entries \
-   themselves.
+   themselves. \
+   State the field *types* explicitly: every field is a string (a boolean is fine \
+   where one genuinely fits), a field with several values joins them with `"; "`, \
+   and no field is ever a JSON array or a nested object. Entries flatten to CSV \
+   downstream, so an array arrives as a stringified list literal in the cell. Say \
+   that a field with no value is an empty string, never `null`, so the columns stay \
+   consistent across pages.
 
 4. **Extraction rules** — 4–6 rules specific to this volume: what counts as an entry, \
    what to skip (page numbers, headings, decorative elements), how continuation \
