@@ -46,3 +46,12 @@ as reference output, not loaded by any stage.
 Also included: the OCR and NER prompts for the *Post Office London Directory,
 1841* booksellers section — a harder case, with dense three-column text and
 per-entry reference marks.
+
+Also included: the OCR and NER prompts for *The National Directory of
+Morticians* — hand-tuned rather than generated, and the fullest worked example
+of the display-advertisement conventions. The OCR prompt emits the
+`=== ADVERTISEMENT ===` delimiters the aligner depends on; the NER prompt shows
+a merged ad/listing schema that keeps the ad's own payload (`services`,
+`established`, `predecessor`, verbatim `ad_text`) instead of discarding it, and
+declares field types explicitly so multi-valued fields never reach the CSV as
+list literals.
