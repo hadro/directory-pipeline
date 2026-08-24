@@ -402,6 +402,9 @@ def _parser_postprocess() -> argparse.ArgumentParser:
                    help="Skip the combine step (for single-volume directories)")
     p.add_argument("--model", "-m", metavar="MODEL", default=None,
                    help="Override the auto-detected model slug")
+    p.add_argument("--infer-categories", action="store_true",
+                   help="Infer canonical category from entry name where category "
+                        "is 'General', the combined Hotels/Motels heading, or empty")
     p.add_argument("--dry-run", action="store_true",
                    help="Print what would happen without writing any files")
     return p
@@ -409,9 +412,10 @@ def _parser_postprocess() -> argparse.ArgumentParser:
 
 def _postprocess(args: argparse.Namespace) -> None:
     cmd = [_POSTPROCESS, str(args.directory)]
-    if args.no_combine: cmd.append("--no-combine")
-    if args.model:      cmd += ["--model", args.model]
-    if args.dry_run:    cmd.append("--dry-run")
+    if args.no_combine:       cmd.append("--no-combine")
+    if args.model:            cmd += ["--model", args.model]
+    if args.infer_categories: cmd.append("--infer-categories")
+    if args.dry_run:          cmd.append("--dry-run")
     _exec(cmd)
 
 
