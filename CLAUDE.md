@@ -80,6 +80,7 @@ Default model is `gemini-3.1-flash-lite` for both OCR and NER (constants in `uti
 
 - `--surya-ocr` requires GPU or Apple Silicon; slow on CPU
 - `--align-ocr` uses Needleman-Wunsch with city/state headings as anchors; runs a second pass on unmatched lines to catch missed columns
+- Multi-column pages are resolved by `plan_columns()` (coverage-valley gutter detection, any number of columns) and each column is aligned against its own slice of the Gemini text, so a bad anchor can no longer corrupt the rest of the page. Two guards revert to whole-page alignment: an over-large hoisted header group, and a Surya:Gemini line ratio that indicates Gemini read *across* the columns (common in city-directory cross-reference tables)
 - `--review-alignment` is a Flask server — access via `localhost:5000` locally or ngrok/Colab proxy in Colab
 - Aligned JSON confidence values: `"line"` (Surya), `"manual"` (user-confirmed via review UI)
 
