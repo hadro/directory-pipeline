@@ -44,7 +44,12 @@ def _find_model(directory: Path) -> str:
     return DEFAULT_OCR_MODEL
 
 
-def run_fix(directory: Path, model: str, dry_run: bool = False) -> list[Path]:
+def run_fix(
+    directory: Path,
+    model: str,
+    dry_run: bool = False,
+    infer_categories: bool = False,
+) -> list[Path]:
     from analysis.fix_entries import process_csv, _print_stats
 
     pattern = str(directory / f"*/entries_{model}.csv")
@@ -65,7 +70,7 @@ def run_fix(directory: Path, model: str, dry_run: bool = False) -> list[Path]:
             print(f"  [dry-run] fix: {src} → {dst}", file=sys.stderr)
             fixed.append(dst)
             continue
-        stats = process_csv(src, dst)
+        stats = process_csv(src, dst, infer_categories=infer_categories)
         _print_stats(src, stats)
         fixed.append(dst)
     return fixed
@@ -107,6 +112,7 @@ def postprocess(
     no_combine: bool = False,
     dry_run: bool = False,
     model: str | None = None,
+    infer_categories: bool = False,
 ) -> None:
     directory = directory.resolve()
     if not directory.is_dir():
@@ -121,7 +127,9 @@ def postprocess(
 
     # 1. Fix entries
     print("\n[1/3] Fixing entries…", file=sys.stderr)
-    fixed_paths = run_fix(directory, model, dry_run=dry_run)
+    fixed_paths = run_fix(
+        directory, model, dry_run=dry_run, infer_categories=infer_categories
+    )
 
     # 2. Combine volumes (optional)
     combined_csv: Path | None = None
@@ -173,12 +181,21 @@ def main() -> None:
         default=None,
         help="Override the auto-detected model slug.",
     )
+    parser.add_argument(
+        "--infer-categories",
+        action="store_true",
+        help=(
+            "Infer canonical category from entry name for rows whose category "
+            "is 'General', the combined Hotels/Motels heading, or empty."
+        ),
+    )
     args = parser.parse_args()
     postprocess(
         directory=args.directory,
         no_combine=args.no_combine,
         dry_run=args.dry_run,
         model=args.model,
+        infer_categories=args.infer_categories,
     )
 
 
