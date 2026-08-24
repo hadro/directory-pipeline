@@ -57,6 +57,7 @@ load_dotenv()
 from google.genai.types import GenerateContentConfig, Part
 
 from utils.gemini import flex_http_options, generate_with_retry, get_client, thinking_config_for
+from pipeline.state import find_state_dir, record_stage, write_state
 from utils.models import DEFAULT_NER_MODEL, FALLBACK_MODEL, model_slug
 
 # Sparse-page thresholds: pages below BOTH limits are skipped before the NER call.
@@ -1505,6 +1506,13 @@ def main() -> None:
                 f"  → {len(entries)} entries total → {csv_path}",
                 file=sys.stderr,
             )
+
+    # Record the stage so a direct invocation updates pipeline_state.json the
+    # same way an orchestrated run does (main.py is otherwise the only writer).
+    if not args.dry_run:
+        state_dir = find_state_dir(output_root)
+        record_stage(state_dir, "extract_entries")
+        write_state(state_dir, {"ner_model": args.model})
 
     print("Done.", file=sys.stderr)
 
