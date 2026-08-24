@@ -42,6 +42,8 @@ import os
 import sys
 from pathlib import Path
 
+from pipeline.align_ocr import _column_breaks
+
 # Suppress Surya's per-batch tqdm bars
 os.environ.setdefault("SURYA_DISABLE_TQDM", "true")
 os.environ.setdefault("DISABLE_TQDM", "true")
@@ -57,6 +59,11 @@ MIN_OVERLAP_RATIO = 0.3
 # Minimum gap between left- and right-column x1 clusters (as a fraction of
 # page width) needed to declare a 2-column layout.  8 % ≈ 150 px at 1920 px.
 MIN_GUTTER_GAP    = 0.08
+# A reported column must hold at least this fraction of the page's lines, and
+# the reported columns together at least this much of the page.  Mirrors the
+# thresholds in align_ocr.plan_columns so both agree on the column count.
+MIN_COLUMN_FRAC     = 0.10
+MIN_COLUMN_COVERAGE = 0.80
 
 
 # ---------------------------------------------------------------------------
@@ -90,60 +97,75 @@ def _analyze_bboxes(bboxes: list, image_width: int) -> dict:
     """
     Derive column layout from a list of line bboxes (each is [x1, y1, x2, y2]).
 
+    Handles any number of columns.  Gutters come from align_ocr's coverage
+    valley detector — the same one the aligner uses — so the report and the
+    reading order agree about where the columns are.  A layout is accepted
+    when every reported column holds at least MIN_COLUMN_FRAC of the lines,
+    the columns together account for MIN_COLUMN_COVERAGE of them, and adjacent
+    columns overlap vertically by at least MIN_OVERLAP_RATIO (which rejects
+    stacked blocks that merely happen to sit at different x positions).
+
     Returns a dict with the columns_report.csv fields (excluding 'image').
     """
+    single = {
+        "num_columns":        1,
+        "confidence":         "high",
+        "gutter_x_positions": "",
+    }
     if not bboxes:
-        return {
-            "num_columns":        1,
-            "confidence":         "low",
-            "gutter_x_positions": "",
-        }
+        return {**single, "confidence": "low"}
+    if len(bboxes) < 4:
+        return single
 
-    # Find the gutter by the largest gap in x1 values; spanning lines
-    # (bboxes that cross the gutter) are excluded from column analysis.
-    gutter_x = _find_gutter(bboxes, image_width)
-    if gutter_x is None:
-        return {
-            "num_columns":        1,
-            "confidence":         "high",
-            "gutter_x_positions": "",
-        }
+    wrapped = [{"bbox": list(b)} for b in bboxes]
+    breaks  = _column_breaks(wrapped, image_width)
+    if not breaks:
+        return single
 
-    lb = [b for b in bboxes if not (b[0] < gutter_x < b[2]) and b[0] <  gutter_x]
-    rb = [b for b in bboxes if not (b[0] < gutter_x < b[2]) and b[0] >= gutter_x]
+    def col_index(x1: float) -> int:
+        for i, b in enumerate(breaks):
+            if x1 < b:
+                return i
+        return len(breaks)
 
-    if not lb or not rb:
-        return {
-            "num_columns":        1,
-            "confidence":         "high",
-            "gutter_x_positions": "",
-        }
+    # Spanning lines (crossing a gutter) are excluded from the column tally.
+    body = [b for b in bboxes if not any(b[0] < g < b[2] for g in breaks)]
+    if not body:
+        return single
 
-    # Vertical overlap between the two column groups
-    ly1, ly2 = min(b[1] for b in lb), max(b[3] for b in lb)
-    ry1, ry2 = min(b[1] for b in rb), max(b[3] for b in rb)
-    overlap   = max(0.0, min(ly2, ry2) - max(ly1, ry1))
-    span      = max(ly2, ry2) - min(ly1, ry1)
-    overlap_ratio = overlap / span if span > 0 else 0.0
+    counts: dict[int, int] = {}
+    for b in body:
+        ci = col_index(b[0])
+        counts[ci] = counts.get(ci, 0) + 1
+    substantial = sorted(c for c, n in counts.items()
+                         if n / len(body) >= MIN_COLUMN_FRAC)
+    if len(substantial) < 2:
+        return single
+    if sum(counts[c] for c in substantial) / len(body) < MIN_COLUMN_COVERAGE:
+        return single
 
-    if overlap_ratio >= MIN_OVERLAP_RATIO:
-        # Refine gutter: midpoint between actual column content edges
-        left_right_edge = max(b[2] for b in lb)
-        right_left_edge = min(b[0] for b in rb)
-        refined_gutter  = int((left_right_edge + right_left_edge) / 2)
-        confidence = "high" if overlap_ratio >= 0.6 else "medium"
-        return {
-            "num_columns":        2,
-            "confidence":         confidence,
-            "gutter_x_positions": str(refined_gutter),
-        }
-    else:
-        return {
-            "num_columns":        1,
-            "confidence":         "high",
-            "gutter_x_positions": "",
-        }
+    groups = [[b for b in body if col_index(b[0]) == c] for c in substantial]
+    spans  = [(min(b[1] for b in g), max(b[3] for b in g)) for g in groups]
+    overlaps = []
+    for (ay1, ay2), (by1, by2) in zip(spans, spans[1:]):
+        overlap = max(0.0, min(ay2, by2) - max(ay1, by1))
+        total   = max(ay2, by2) - min(ay1, by1)
+        overlaps.append(overlap / total if total > 0 else 0.0)
+    if not overlaps or min(overlaps) < MIN_OVERLAP_RATIO:
+        return single
 
+    # Report the gutters that actually separate the accepted columns, placed at
+    # the midpoint between neighbouring columns' content edges.
+    gutters = [
+        int((max(b[2] for b in left) + min(b[0] for b in right)) / 2)
+        for left, right in zip(groups, groups[1:])
+    ]
+    confidence = "high" if min(overlaps) >= 0.6 else "medium"
+    return {
+        "num_columns":        len(substantial),
+        "confidence":         confidence,
+        "gutter_x_positions": ";".join(str(g) for g in gutters),
+    }
 
 # ---------------------------------------------------------------------------
 # Image selection (mirrors detect_columns.py: prefer split halves)
