@@ -42,7 +42,11 @@ import os
 import sys
 from pathlib import Path
 
-from pipeline.align_ocr import _column_breaks
+from utils.column_utils import (
+    MIN_COLUMN_COVERAGE,
+    MIN_COLUMN_FRAC,
+    column_breaks,
+)
 
 # Suppress Surya's per-batch tqdm bars
 os.environ.setdefault("SURYA_DISABLE_TQDM", "true")
@@ -59,11 +63,6 @@ MIN_OVERLAP_RATIO = 0.3
 # Minimum gap between left- and right-column x1 clusters (as a fraction of
 # page width) needed to declare a 2-column layout.  8 % ≈ 150 px at 1920 px.
 MIN_GUTTER_GAP    = 0.08
-# A reported column must hold at least this fraction of the page's lines, and
-# the reported columns together at least this much of the page.  Mirrors the
-# thresholds in align_ocr.plan_columns so both agree on the column count.
-MIN_COLUMN_FRAC     = 0.10
-MIN_COLUMN_COVERAGE = 0.80
 
 
 # ---------------------------------------------------------------------------
@@ -97,10 +96,11 @@ def _analyze_bboxes(bboxes: list, image_width: int) -> dict:
     """
     Derive column layout from a list of line bboxes (each is [x1, y1, x2, y2]).
 
-    Handles any number of columns.  Gutters come from align_ocr's coverage
-    valley detector — the same one the aligner uses — so the report and the
-    reading order agree about where the columns are.  A layout is accepted
-    when every reported column holds at least MIN_COLUMN_FRAC of the lines,
+    Handles any number of columns.  Gutters and thresholds both come from
+    utils.column_utils — the same ones align_ocr uses to build reading order —
+    so the report and the aligner cannot disagree about where the columns are
+    or how many there were.  A layout is accepted when every reported column
+    holds at least MIN_COLUMN_FRAC of the lines,
     the columns together account for MIN_COLUMN_COVERAGE of them, and adjacent
     columns overlap vertically by at least MIN_OVERLAP_RATIO (which rejects
     stacked blocks that merely happen to sit at different x positions).
@@ -118,7 +118,7 @@ def _analyze_bboxes(bboxes: list, image_width: int) -> dict:
         return single
 
     wrapped = [{"bbox": list(b)} for b in bboxes]
-    breaks  = _column_breaks(wrapped, image_width)
+    breaks  = column_breaks(wrapped, image_width)
     if not breaks:
         return single
 
