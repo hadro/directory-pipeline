@@ -62,6 +62,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from utils import iiif_utils
+from utils.column_utils import (
+    MIN_COLUMN_COVERAGE,
+    MIN_COLUMN_FRAC,
+    column_breaks,
+)
 from utils.models import DEFAULT_OCR_MODEL, model_slug, discover_ocr_slug
 from pipeline.state import find_state_dir, get_ocr_model, record_stage
 
@@ -297,15 +302,6 @@ _READING_ORDER_BAND = 50  # pixels — horizontal band height for y-band sort.
 # column-major sort.
 
 
-# Column detection via coverage valleys.  The page is divided into
-# _COLUMN_VALLEY_BINS vertical bins; each bin counts how many line bboxes
-# cover it.  Body columns show up as plateaus and gutters as valleys, which
-# survives the sparse indented/wrapped lines that defeat a consecutive-x1-gap
-# rule.  A bin is part of a gutter when its coverage falls to
-# _COLUMN_VALLEY_RATIO of the page's peak coverage.
-_COLUMN_VALLEY_BINS  = 32
-_COLUMN_VALLEY_RATIO = 0.55
-
 # A line crossing a gutter is treated as a page-spanning header (emitted ahead
 # of the columns) when it is at least this fraction of page width, or when it
 # sits above the top of every non-first column.  Below this, a gutter-crossing
@@ -322,34 +318,6 @@ _HEADER_MIN_NARROW_WIDTH_FRAC = 0.15
 _HEADER_TOP_BAND_FRAC         = 0.15
 
 
-def _column_breaks(lines: list[dict], page_width: int) -> list[float]:
-    """X positions of the gutters between body columns, left to right."""
-    bin_w = max(page_width // _COLUMN_VALLEY_BINS, 16)
-    n_bins = page_width // bin_w + 1
-    profile = [0] * n_bins
-    for ln in lines:
-        lo = max(0, ln["bbox"][0] // bin_w)
-        hi = min(n_bins - 1, ln["bbox"][2] // bin_w)
-        for b in range(lo, hi + 1):
-            profile[b] += 1
-    peak = max(profile) if profile else 0
-    if peak < 4:
-        return []
-    threshold = peak * _COLUMN_VALLEY_RATIO
-    valleys: list[tuple[int, int]] = []
-    run: list[int] | None = None
-    for i, count in enumerate(profile):
-        if count <= threshold:
-            run = [i, i] if run is None else [run[0], i]
-        elif run is not None:
-            valleys.append((run[0], run[1])); run = None
-    if run is not None:
-        valleys.append((run[0], run[1]))
-    # Valleys touching either edge are the page margins, not gutters.
-    return [((a + b + 1) / 2.0) * bin_w
-            for a, b in valleys if a != 0 and b != n_bins - 1]
-
-
 def plan_columns(
     lines: list[dict], page_width: int
 ) -> "tuple[list[dict], list[list[dict]]] | None":
@@ -361,7 +329,7 @@ def plan_columns(
     """
     if not lines or page_width <= 0:
         return None
-    breaks = _column_breaks(lines, page_width)
+    breaks = column_breaks(lines, page_width)
     if not breaks:
         return None
 
@@ -427,10 +395,10 @@ def plan_columns(
         return None
 
     counts = Counter(col_index(ln["bbox"][0]) for ln in body)
-    substantial = sorted(c for c, n in counts.items() if n / len(body) >= 0.10)
+    substantial = sorted(c for c, n in counts.items() if n / len(body) >= MIN_COLUMN_FRAC)
     if len(substantial) < 2:
         return None
-    if sum(counts[c] for c in substantial) / len(body) < 0.80:
+    if sum(counts[c] for c in substantial) / len(body) < MIN_COLUMN_COVERAGE:
         return None
     columns = [
         sorted([ln for ln in body if col_index(ln["bbox"][0]) == c],
