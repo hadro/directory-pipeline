@@ -1237,12 +1237,15 @@ def main() -> None:
             stage_outcomes[stage] = "ok" if all_ok else "failed"
 
             if all_ok and not args.dry_run:
-                record_stage(output_dir, stage)
-                # Record which model was used so downstream scripts don't need --model.
-                if stage == "gemini_ocr" and args.ocr_model:
-                    write_state(output_dir, {"ocr_model": args.ocr_model})
-                if stage == "extract_entries" and args.ocr_model:
-                    write_state(output_dir, {"ner_model": args.ocr_model})
+                # Record which model was used so downstream scripts don't need
+                # --model, in the same write that appends the stage.
+                updates = {}
+                if args.ocr_model:
+                    if stage == "gemini_ocr":
+                        updates["ocr_model"] = args.ocr_model
+                    elif stage == "extract_entries":
+                        updates["ner_model"] = args.ocr_model
+                record_stage(output_dir, stage, updates=updates)
 
         # Summarise this target
         n_ok    = sum(1 for v in stage_outcomes.values() if v == "ok")
