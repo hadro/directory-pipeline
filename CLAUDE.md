@@ -102,7 +102,7 @@ Run `--select-pages` and `--generate-prompts` once per collection type. For addi
 
 Every row in the CSV has a `canvas_fragment` column — a IIIF URI pointing back to the exact page (with `#xywh=` bounding box if alignment was run). The slug is auto-derived from collection metadata; override with `--slug`.
 
-After each run, `pipeline_state.json` is written to `output/{slug}/` recording the model used and stages completed. Downstream scripts (`align_ocr.py`, `fix_entries.py`) read this automatically — no `--model` flag needed.
+After each run, `pipeline_state.json` is written to `output/{slug}/` recording the model used, the stages completed, and the command line behind the most recent write (`last_run_args`). Both `main.py` and the OCR/align/extract leaf scripts write it, so re-running a single stage directly keeps it current. Downstream scripts (`align_ocr.py`, `fix_entries.py`) read it automatically — no `--model` flag needed.
 
 ## Library use
 

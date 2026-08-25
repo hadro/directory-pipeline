@@ -70,7 +70,7 @@ output/{slug}/[{item}/]                      one subdir per item (or flat for si
 | `sections.txt` | written by hand | `--select-pages`, `--generate-prompts`, `--gemini-ocr`, extract (per-section prompt routing) |
 | `spreads_report.csv` + `{stem}_split.json` | `--detect-spreads` / `--split-spreads` | align (translates bboxes back to full-spread coordinates) |
 | `columns_report.csv` | `--detect-columns` or `--surya-detect` | manual QA |
-| `pipeline_state.json` | `main.py` (after each successful stage) | every downstream script (model auto-detection) |
+| `pipeline_state.json` | `main.py` and the OCR/align/extract leaf scripts (each after a successful run) | every downstream script (model auto-detection) |
 
 ### OCR text conventions
 
@@ -97,7 +97,7 @@ Scripts that need to know which model produced existing files resolve it in this
 order — which is why `--model` is rarely needed after the first run:
 
 1. explicit `--model` / `--aligned-model` flag
-2. `pipeline_state.json` (`ocr_model` / `ner_model` keys, written by `main.py`)
+2. `pipeline_state.json` (`ocr_model` / `ner_model` keys)
 3. filename scan (`utils/models.py: discover_ocr_slug()` and per-script variants)
 4. built-in defaults (`utils/models.py`)
 
@@ -110,9 +110,21 @@ order — which is why `--model` is rarely needed after the first run:
   "ocr_model": "gemini-3.1-flash-lite",
   "ner_model": "gemini-3.1-flash-lite",
   "stages_completed": ["download", "gemini_ocr", "extract_entries"],
-  "last_run": "2026-06-10T14:22:00Z"
+  "last_run": "2026-06-10T14:22:00Z",
+  "last_run_args": "extract_entries.py output/vol1 --mode multimodal --flex"
 }
 ```
+
+Written by `main.py` and by `run_gemini_ocr.py`, `align_ocr.py`, and
+`extract_entries.py` — so re-running one stage directly keeps the file current
+instead of leaving it describing an older run. A leaf script handed an item
+directory walks up to the slug-level file `main.py` writes rather than starting
+a second one beside the images (`pipeline/state.py: find_state_dir()`).
+
+`stages_completed` is append-only and unordered: it records that a stage ran at
+some point, not that its output is still current. `last_run_args` records the
+invocation, since the rest of the schema captures what a stage used rather than
+how it was called.
 
 ---
 
