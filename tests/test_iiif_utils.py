@@ -161,6 +161,10 @@ class TestIterCanvasesV3:
         canvas = list(iter_canvases(v3_manifest))[0]
         assert canvas["max_width"] is None
 
+    def test_label_absent_is_empty_string(self, v3_manifest):
+        canvas = list(iter_canvases(v3_manifest))[0]
+        assert canvas["label"] == ""
+
     def test_empty_items_yields_nothing(self):
         manifest = {
             "@context": "http://iiif.io/api/presentation/3/context.json",
@@ -326,3 +330,64 @@ class TestUpdateAnnotationTargets:
         ann_data = {"items": [{"target": "https://old/canvas/0"}]}
         result = update_annotation_targets(ann_data, canvas_map)
         assert result is ann_data
+
+
+# ---------------------------------------------------------------------------
+# iter_canvases — label extraction
+#
+# The label ships on the yielded dict so callers never have to index back into
+# the raw canvas list by position; a skipped canvas would slide such a lookup
+# permanently out of step (tools/add_page_column.py depends on this).
+# ---------------------------------------------------------------------------
+
+def _v3_with_label(label):
+    return {
+        "@context": "http://iiif.io/api/presentation/3/context.json",
+        "items": [{
+            "id": "https://ex.org/canvas/1",
+            "label": label,
+            "items": [{"items": [{"body": {
+                "service": [{"id": "https://ex.org/iiif/img1"}],
+            }}]}],
+        }],
+    }
+
+
+def _v2_with_label(label):
+    return {
+        "@context": "http://iiif.io/api/presentation/2/context.json",
+        "sequences": [{"canvases": [{
+            "@id": "https://ex.org/canvas/1",
+            "label": label,
+            "images": [{"resource": {"service": {"@id": "https://ex.org/iiif/img1"}}}],
+        }]}],
+    }
+
+
+class TestCanvasLabel:
+    def test_v3_language_map(self):
+        canvas = list(iter_canvases(_v3_with_label({"en": ["Page 12"]})))[0]
+        assert canvas["label"] == "Page 12"
+
+    def test_v3_language_map_non_en_key(self):
+        canvas = list(iter_canvases(_v3_with_label({"none": ["Page 12"]})))[0]
+        assert canvas["label"] == "Page 12"
+
+    def test_v3_empty_language_map(self):
+        assert list(iter_canvases(_v3_with_label({})))[0]["label"] == ""
+
+    def test_v2_plain_string(self):
+        assert list(iter_canvases(_v2_with_label("Page 12")))[0]["label"] == "Page 12"
+
+    def test_v2_value_dict(self):
+        label = {"@value": "Page 12", "@language": "en"}
+        assert list(iter_canvases(_v2_with_label(label)))[0]["label"] == "Page 12"
+
+    def test_v2_list_of_value_dicts(self):
+        label = [{"@value": "Page 12", "@language": "en"}]
+        assert list(iter_canvases(_v2_with_label(label)))[0]["label"] == "Page 12"
+
+    def test_missing_label(self):
+        manifest = _v3_with_label({})
+        del manifest["items"][0]["label"]
+        assert list(iter_canvases(manifest))[0]["label"] == ""

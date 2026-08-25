@@ -36,34 +36,21 @@ from utils import iiif_utils  # noqa: E402
 _PAGE_RE = re.compile(r"Page\s+(\d+)\s*$")
 
 
-def _canvas_label(canvas: dict) -> str:
-    label = canvas.get("label", "")
-    if isinstance(label, dict):  # IIIF v3 language map
-        values = next(iter(label.values()), [])
-        label = values[0] if values else ""
-    return str(label)
-
-
-def _raw_canvases(manifest: dict) -> list[dict]:
-    """Raw canvas dicts in order — iiif_utils.iter_canvases drops the label."""
-    if iiif_utils.manifest_version(manifest) == 2:
-        return manifest.get("sequences", [{}])[0].get("canvases", [])
-    return manifest.get("items", [])
-
-
 def build_page_labels(manifest_path: Path, printed_offset: int | None) -> dict[str, str]:
     """Map image_id → page label, in canvas order.
 
-    iter_canvases supplies image_id (which is what download_images puts in the
-    filename); the raw canvas list supplies the label. Both iterate the same
-    canvases in the same order, so they zip positionally.
+    Both the image_id (what download_images puts in the filename) and the label
+    come off the same iter_canvases dict, so a manifest whose canvases are not
+    all yielded — iter_canvases skips any that lack an image body or service —
+    cannot slide the labels out of step with the images.
+
+    Positions count yielded canvases, matching how download_images numbers the
+    files, so a "Page N" fallback lines up with the CSV's image column.
     """
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     labels: dict[str, str] = {}
-    raw = _raw_canvases(manifest)
     for position, canvas in enumerate(iiif_utils.iter_canvases(manifest), start=1):
-        text = _canvas_label(raw[position - 1]) if position <= len(raw) else ""
-        match = _PAGE_RE.search(text)
+        match = _PAGE_RE.search(canvas.get("label", ""))
         scan = int(match.group(1)) if match else position
         if printed_offset is not None:
             labels[canvas["image_id"]] = f"p. {scan - printed_offset} (scan {scan})"
@@ -73,8 +60,16 @@ def build_page_labels(manifest_path: Path, printed_offset: int | None) -> dict[s
 
 
 def image_id_from_filename(image: str) -> str:
-    """'0001_p16445coll4:27074.jpg' → 'p16445coll4:27074'."""
+    """'0001_p16445coll4:27074.jpg' → 'p16445coll4:27074'.
+
+    Split-spread halves ('..._left.jpg' / '..._right.jpg') resolve to the
+    canvas they were cropped from, so both halves carry that scan's label.
+    Mirrors align_ocr._extract_image_id.
+    """
     stem = Path(image).stem
+    for suffix in ("_left", "_right"):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
     return stem.split("_", 1)[1] if "_" in stem else stem
 
 
