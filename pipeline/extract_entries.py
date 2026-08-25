@@ -57,6 +57,7 @@ load_dotenv()
 from google.genai.types import GenerateContentConfig, Part
 
 from utils.gemini import flex_http_options, generate_with_retry, get_client, thinking_config_for
+from pipeline.state import find_state_dir, record_stage
 from utils.models import DEFAULT_NER_MODEL, FALLBACK_MODEL, model_slug
 
 # Sparse-page thresholds: pages below BOTH limits are skipped before the NER call.
@@ -1481,6 +1482,7 @@ def main() -> None:
         file=sys.stderr,
     )
 
+    extracted = 0
     for item_dir in item_dirs:
         # Per-item prompt: if the item dir has its own ner_prompt.md (written by
         # --generate-prompts per-volume), use it; otherwise use the resolved prompt.
@@ -1501,10 +1503,21 @@ def main() -> None:
         if not args.dry_run:
             csv_path = item_dir / f"entries_{slug}.csv"
             write_csv(entries, csv_path)
+            if entries:
+                extracted += 1
             print(
                 f"  → {len(entries)} entries total → {csv_path}",
                 file=sys.stderr,
             )
+
+    # Record the stage so a direct invocation updates pipeline_state.json the
+    # same way an orchestrated run does (main.py is otherwise the only writer).
+    # Gated on an item actually yielding entries, matching run_gemini_ocr and
+    # align_ocr: a run where every NER call failed must not leave the stage
+    # stamped complete, since record_stage dedupes and never clears it.
+    if extracted:
+        record_stage(find_state_dir(output_root), "extract_entries",
+                     updates={"ner_model": args.model})
 
     print("Done.", file=sys.stderr)
 

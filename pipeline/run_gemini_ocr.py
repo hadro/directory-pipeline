@@ -35,6 +35,7 @@ from google.genai.types import FinishReason, GenerateContentConfig, MediaResolut
 
 from utils.gemini import flex_http_options, generate_with_retry, get_client, thinking_config_for
 from utils.image_utils import is_blank_page
+from pipeline.state import find_state_dir, record_stage
 from utils.models import DEFAULT_OCR_MODEL, FALLBACK_MODEL, model_slug
 
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
@@ -616,6 +617,12 @@ def main() -> None:
             f"{counts['blank']} blank, {counts['failed']} failed.",
             file=sys.stderr,
         )
+
+    # Record the stage so a direct invocation updates pipeline_state.json the
+    # same way an orchestrated run does (main.py is otherwise the only writer).
+    if counts["ok"]:
+        record_stage(find_state_dir(output_root), "gemini_ocr",
+                     updates={"ocr_model": args.model})
 
 
 if __name__ == "__main__":

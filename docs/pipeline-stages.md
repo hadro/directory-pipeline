@@ -70,7 +70,26 @@ output/{slug}/[{item}/]                      one subdir per item (or flat for si
 | `sections.txt` | written by hand | `--select-pages`, `--generate-prompts`, `--gemini-ocr`, extract (per-section prompt routing) |
 | `spreads_report.csv` + `{stem}_split.json` | `--detect-spreads` / `--split-spreads` | align (translates bboxes back to full-spread coordinates) |
 | `columns_report.csv` | `--detect-columns` or `--surya-detect` | manual QA |
-| `pipeline_state.json` | `main.py` (after each successful stage) | every downstream script (model auto-detection) |
+| `pipeline_state.json` | `main.py` and the OCR/align/extract leaf scripts (each after a successful run) | every downstream script (model auto-detection) |
+
+### OCR text conventions
+
+Two conventions in `{stem}_{ocr-model}.txt` are **contracts the OCR prompt must
+honour**, not stylistic choices — downstream stages parse them, and a prompt that
+omits them silently disables the feature that consumes them.
+
+| Convention | Emitted by | Consumed by |
+|---|---|---|
+| `=== ADVERTISEMENT ===` … `=== END ADVERTISEMENT ===` around each boxed display ad | the OCR prompt | align — lines inside the block are excluded from the anchor set (`_find_anchors(non_anchor_gem_indices=…)`) |
+| `[illegible]` / `[blank]` sentinel tokens | the OCR prompt | extract — copied verbatim into the affected field rather than guessed at |
+
+The advertisement delimiters matter because ad copy routinely repeats a city or
+state name ("ATHENS, ALABAMA" inside a boxed ad). Without the markers such a line
+can be committed as an alignment anchor and pull the rest of the page out of
+order — a single mis-committed anchor is unrecoverable for the remainder of that
+page. Both `prompts/ocr_prompt.md` and the `--generate-prompts` meta-prompt
+instruct on these, so generated and hand-written prompts agree; a prompt written
+by hand for a new collection must include them too.
 
 ### Model auto-detection
 
@@ -78,7 +97,7 @@ Scripts that need to know which model produced existing files resolve it in this
 order — which is why `--model` is rarely needed after the first run:
 
 1. explicit `--model` / `--aligned-model` flag
-2. `pipeline_state.json` (`ocr_model` / `ner_model` keys, written by `main.py`)
+2. `pipeline_state.json` (`ocr_model` / `ner_model` keys)
 3. filename scan (`utils/models.py: discover_ocr_slug()` and per-script variants)
 4. built-in defaults (`utils/models.py`)
 
@@ -91,9 +110,21 @@ order — which is why `--model` is rarely needed after the first run:
   "ocr_model": "gemini-3.1-flash-lite",
   "ner_model": "gemini-3.1-flash-lite",
   "stages_completed": ["download", "gemini_ocr", "extract_entries"],
-  "last_run": "2026-06-10T14:22:00Z"
+  "last_run": "2026-06-10T14:22:00Z",
+  "last_run_args": "extract_entries.py output/vol1 --mode multimodal --flex"
 }
 ```
+
+Written by `main.py` and by `run_gemini_ocr.py`, `align_ocr.py`, and
+`extract_entries.py` — so re-running one stage directly keeps the file current
+instead of leaving it describing an older run. A leaf script handed an item
+directory walks up to the slug-level file `main.py` writes rather than starting
+a second one beside the images (`pipeline/state.py: find_state_dir()`).
+
+`stages_completed` is append-only and unordered: it records that a stage ran at
+some point, not that its output is still current. `last_run_args` records the
+invocation, since the rest of the schema captures what a stage used rather than
+how it was called.
 
 ---
 
@@ -358,18 +389,41 @@ problem is then split into independent segments at those anchors, preventing
 misalignment drift across long pages where OCR reading order diverges from Gemini's.
 
 **Reading-order correction:** OCR on multi-column pages may read across columns
-rather than down each column. Lines are re-sorted before alignment:
-- *Row-major (default):* lines are grouped into 50 px horizontal bands and sorted
-  left-column-first within each band. Correctly places centered section headings
-  (state names, category lines) before the body columns they head.
-- *Column-major (true two-column pages):* when lines cluster into exactly two columns
-  each holding ≥ 20% of page lines, the left column is emitted top-to-bottom followed
-  by the right column top-to-bottom, matching Gemini's reading order for pages with
-  independent side-by-side city sections.
+rather than down each column. Lines are re-sorted before alignment.
 
-Column breaks are detected in two stages: first as gaps in the x1 distribution
-exceeding 8% of page width; then a bimodal histogram fallback for pages where a
-page-number outlier creates a degenerate single-line split.
+`plan_columns()` resolves the page into `(header, [column, ...])` for any number of
+columns. Gutters are found from a *coverage profile*: the page is split into 32
+vertical bins, each counting how many line bboxes cover it, and gutters appear as
+valleys where coverage drops to 55% of the page peak. This survives the sparse
+indented and wrapped lines that defeat a consecutive-x1-gap rule — the reason
+three-column volumes were previously detected as two.
+
+Lines crossing a gutter are hoisted ahead of the columns as page-spanning headers
+only when they span ≥ 30% of page width or sit above the top of every non-first
+column; below that they are ordinary wide body entries (common on narrow city-directory
+pages where entries wrap mid-word) and hoisting them would corrupt the sequence.
+
+When the page does not resolve into ≥ 2 substantial columns, alignment falls back to
+`_legacy_reading_order()`: 50 px horizontal bands sorted left-column-first, with the
+older two-stage x1-gap and bimodal-histogram column detection.
+
+**Column-partitioned alignment:** NW is monotonic and cannot back up, so one
+mis-committed anchor is unrecoverable for the remainder of the page. Each column is
+therefore aligned against its own slice of the Gemini text, bounding that blast radius
+to a single column. The Gemini side carries no coordinates, so its cut points are
+*located* by matching each column's leading lines against the Gemini sequence
+(`_locate_column_start`); guessing them proportionally regresses badly wherever the
+two engines disagree about per-column line counts.
+
+Partitioning reverts to whole-page alignment over the legacy reading order when:
+- the hoisted header group exceeds 10% of the page's lines (the hoist is
+  over-collecting body text), or
+- Surya reports ≥ 1.5× as many lines as Gemini — the `possible_column_merge`
+  signature, meaning Gemini read *across* the columns and merged each visual row into
+  one line (common in city-directory street cross-reference tables), so a column-major
+  partition is the wrong shape, or
+- any column cannot be located in the Gemini sequence, or a column's Gemini span is
+  outside 0.5–2.0× its Surya line count.
 
 **Output JSON schema:**
 
