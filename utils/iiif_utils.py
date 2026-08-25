@@ -76,6 +76,27 @@ def _svc_max_width(service) -> int | None:
     return None
 
 
+def _canvas_label(canvas: dict) -> str:
+    """
+    Extract a plain-text canvas label, handling every shape both versions use:
+      - v3 language map      {"en": ["Page 1"]}
+      - v2 plain string      "Page 1"
+      - v2 value dict        {"@value": "Page 1", "@language": "en"}
+      - v2 list of dicts     [{"@value": "Page 1"}]
+    Returns '' when the canvas carries no label.
+    """
+    label = canvas.get("label", "")
+    if isinstance(label, dict):
+        if "@value" in label:
+            return str(label["@value"])
+        label = next(iter(label.values()), "")  # v3: first language's values
+    if isinstance(label, list):
+        label = label[0] if label else ""
+    if isinstance(label, dict):
+        label = label.get("@value", "")
+    return str(label)
+
+
 # ---------------------------------------------------------------------------
 # Per-version canvas iterators
 # ---------------------------------------------------------------------------
@@ -102,6 +123,7 @@ def _iter_v3(manifest: dict) -> Iterator[dict]:
             "service_id": svc_id,
             "image_id": svc_id.rsplit("/", 1)[-1],
             "max_width": _svc_max_width(service),
+            "label": _canvas_label(canvas),
         }
 
 
@@ -130,6 +152,7 @@ def _iter_v2(manifest: dict) -> Iterator[dict]:
                 "service_id": svc_id,
                 "image_id": svc_id.rsplit("/", 1)[-1],
                 "max_width": _svc_max_width(service),
+                "label": _canvas_label(canvas),
             }
 
 
@@ -148,6 +171,12 @@ def iter_canvases(manifest: dict) -> Iterator[dict]:
         service_id    str       IIIF Image Service base URL (no trailing slash)
         image_id      str       last path segment of service_id
         max_width     int|None  server-advertised max width, if any
+        label         str       canvas label as plain text ('' if absent)
+
+    Canvases without a reachable image body or service ID are skipped, so the
+    yielded sequence can be shorter than the manifest's canvas list.  Callers
+    that need a canvas's own metadata must read it off these dicts rather than
+    indexing back into the raw list by position.
     """
     if manifest_version(manifest) == 2:
         yield from _iter_v2(manifest)
