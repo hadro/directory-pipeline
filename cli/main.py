@@ -246,6 +246,10 @@ def _parser_ocr() -> argparse.ArgumentParser:
                    help="Skip Surya lines below this confidence (0.0–1.0, default: 0.35)")
     p.add_argument("--batch-size", type=int, metavar="N", default=None,
                    help="Images per Surya inference batch (reduce if OOM)")
+    p.add_argument("--max-output-tokens", type=int, metavar="N", default=None,
+                   help="Cap output tokens per Gemini OCR call (default: 24576). "
+                        "Bounds the cost of a page that starts looping. Raise it if "
+                        "dense pages come back truncated; 0 disables the cap.")
     p.add_argument("--dry-run", action="store_true",
                    help="Print commands without executing")
     return p
@@ -273,6 +277,8 @@ def _ocr(args: argparse.Namespace) -> None:
     if args.min_surya_confidence is not None:
         cmd += ["--min-surya-confidence", str(args.min_surya_confidence)]
     if args.batch_size:             cmd += ["--batch-size", str(args.batch_size)]
+    if args.max_output_tokens is not None:
+        cmd += ["--max-output-tokens", str(args.max_output_tokens)]
     if args.dry_run:                cmd.append("--dry-run")
     _exec(cmd)
 

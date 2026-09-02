@@ -47,6 +47,18 @@ def test_no_flex_and_model_passthrough(workdir):
     assert "--flex" not in out
 
 
+def test_max_output_tokens_passthrough(workdir):
+    """Omitted leaves the command line unchanged; 0 must reach the leaf script
+    rather than being swallowed as falsy — there it means "no cap"."""
+    assert "--max-output-tokens" not in run_main(workdir, VOL, "--gemini-ocr")
+
+    out = run_main(workdir, VOL, "--gemini-ocr", "--max-output-tokens", "8192")
+    assert f"-m pipeline.run_gemini_ocr {VOL} --flex --max-output-tokens 8192" in out
+
+    out = run_main(workdir, VOL, "--gemini-ocr", "--max-output-tokens", "0")
+    assert "--max-output-tokens 0" in out
+
+
 def test_extract_shorthand_expands(workdir):
     out = run_main(workdir, VOL, "--extract")
     for module in ("pipeline.download_images", "pipeline.run_gemini_ocr",
