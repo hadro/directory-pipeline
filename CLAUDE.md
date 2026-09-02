@@ -80,6 +80,32 @@ Full filename contract (who writes/reads every artifact, model auto-detection ru
 
 Default model is `gemini-3.1-flash-lite` for both OCR and NER (constants in `utils/models.py`). For higher accuracy use `--ocr-model gemini-2.0-flash`.
 
+`--max-output-tokens` (default 24576) caps output per OCR call, bounding the cost of a page
+that starts looping. Truncation is reported as a `WARNING` and the partial page is still
+written, so raise it if dense pages come back short; `0` disables the cap.
+
+## Degenerate-output detection
+
+`_output_issue()` in `run_gemini_ocr.py` classifies a page and returns `(kind, message)` —
+branch on `kind`, never on `message` (it embeds page content). Four failure modes:
+
+| kind | what it catches |
+|------|-----------------|
+| `leader` / `spaced_leader` / `long_line` | dot-leader runaways |
+| `repetition` | one identical line is ≥40% of the page |
+| `template_loop` | ≥50 consecutive lines identical once digits collapse to `#`, covering ≥50% of the page — counting runaways where every line is distinct |
+| `block_loop` | a page ≥200 lines with <35% distinct lines — a short block cycled for the whole page |
+
+Thresholds are measured, not guessed: see `docs/evidence/2026-09-02-ocr-token-burn/` and
+`tests/test_run_gemini_ocr.py`. The false-positive tests there are the important half —
+hotel rate tables, street/house-number sections and statistical tables all repeat a digit
+template legitimately, and a page wrongly flagged gets sent through a retry ladder that can
+replace a clean transcription with a worse one.
+
+Loop failures skip the temperature rungs (they never rescue a loop) and go straight to the
+simple-prompt fallback. Every attempt is kept as a candidate and the best is chosen at the
+end, ranked by distinct line count — raw length would systematically select the runaway.
+
 ## Surya and alignment
 
 - `--surya-ocr` requires GPU or Apple Silicon; slow on CPU

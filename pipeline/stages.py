@@ -100,6 +100,7 @@ STAGES: "list[StageDef]" = [
             Opt("high_res", "--high-res", kind="switch"),
             Opt("ocr_prompt", "--prompt-file"),
             Opt("flex", "--flex", kind="switch"),
+            Opt("max_output_tokens", "--max-output-tokens", when="not_none"),
             Opt("sections", "--sections", from_ctx=True),
         ),
     ),

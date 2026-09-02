@@ -81,7 +81,7 @@ omits them silently disables the feature that consumes them.
 | Convention | Emitted by | Consumed by |
 |---|---|---|
 | `=== ADVERTISEMENT ===` … `=== END ADVERTISEMENT ===` around each boxed display ad | the OCR prompt | align — lines inside the block are excluded from the anchor set (`_find_anchors(non_anchor_gem_indices=…)`) |
-| `[illegible]` / `[blank]` sentinel tokens | the OCR prompt | extract — copied verbatim into the affected field rather than guessed at |
+| `[illegible]` (span-scoped) / `[blank]` (whole page, emitted once) sentinel tokens | the OCR prompt | extract — copied verbatim into the affected field rather than guessed at |
 
 The advertisement delimiters matter because ad copy routinely repeats a city or
 state name ("ATHENS, ALABAMA" inside a boxed ad). Without the markers such a line

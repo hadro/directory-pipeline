@@ -23,6 +23,7 @@ import argparse
 import re
 import sys
 import threading
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -47,12 +48,16 @@ _SIMPLE_FALLBACK_PROMPT = (
     "Return plain text only. No commentary, no formatting."
 )
 
-# Written to the .txt file when every strategy fails, so downstream stages
-# can detect and report the gap rather than silently treating it as blank.
-_OCR_FAILED_PLACEHOLDER = "[OCR FAILED: page could not be transcribed after all retries]"
-
 # Keywords in the OCR prompt that indicate handwriting → high resolution recommended
 _HANDWRITING_KEYWORDS = ("handwrit", "manuscript", "cursive")
+
+# Default per-call output ceiling. The OCR stage previously set none at all, so a
+# page that started looping ran to the model's own limit — the expensive failure
+# this cap exists to bound. Sized from the corpus: the largest legitimate page
+# measured is ~29KB of abbreviation-dense directory text (~8-12k tokens), so this
+# is roughly 2x headroom. Thinking tokens share this budget, so a "-pro" model
+# also spends PRO_THINKING_BUDGET from it (see utils/gemini.py).
+DEFAULT_MAX_OUTPUT_TOKENS = 24576
 
 
 def _needs_high_res(prompt_text: str) -> bool:
@@ -126,6 +131,37 @@ def _log(msg: str) -> None:
 _REPETITION_THRESHOLD = 0.40   # fraction of lines that are identical → runaway loop
 _REPETITION_MIN_REPEATS = 20   # minimum line count before repetition check applies
 _REPETITION_MIN_LINE_LEN = 4   # ignore lines shorter than this when counting
+
+# Template loop — the same line modulo its digits, repeated back to back. Catches
+# counting runaways ("John, 148 W 128th" / "John, 152 W 128th" / …) where every
+# line is technically distinct, so the exact-line check above sees ~0%.
+#
+# Measured over 11,866 real OCR pages plus the 2026-09-02 harvest evidence set
+# (docs/evidence/2026-09-02-ocr-token-burn/): degenerate pages run 89–2,788
+# consecutive templated lines, while legitimate numeric pages — hotel rate
+# tables, brewers' statistics, street/house-number sections, manuscript ledgers —
+# top out at 16. A page-wide ratio cannot separate them (those pages reach 47–60%
+# normalised and would be flagged), but a consecutive run separates them cleanly.
+_TEMPLATE_MIN_CONSEC_RUN = 50  # consecutive digit-normalised identical lines → loop
+_TEMPLATE_MIN_NORM_LEN = 4     # ignore templates shorter than this AFTER normalising,
+                               # so a column of bare page numbers ("#") is not a loop
+_TEMPLATE_MIN_PAGE_SHARE = 0.5  # the run must also dominate the page. A degenerate
+                               # page is nearly all loop (measured 61-99% across every
+                               # known case); a numeric table that happens to run long
+                               # still carries headings, totals and section breaks, so
+                               # its longest run covers far less of the page.
+
+# Block loop — a short cycle of lines repeated for the whole page, which neither
+# the exact-line nor the template check sees (the top single line can sit under
+# 40% while the page carries only a dozen distinct lines). Trow leaf 0454 is the
+# reference case: 6,142 lines, 13 distinct, an obituary block repeated ~2,045x.
+_BLOCK_LOOP_MIN_LINES = 200    # only applies to pages long enough to be suspicious
+_BLOCK_LOOP_MAX_DISTINCT = 0.35  # distinct/total below this → cycling on a block
+
+# Issue kinds returned by _output_issue(). Grouped so the retry ladder can branch
+# on the failure class instead of substring-matching a human-readable message.
+_LEADER_KINDS = frozenset({"leader", "spaced_leader", "long_line"})
+_LOOP_KINDS = frozenset({"repetition", "template_loop", "block_loop"})
 _LEADER_RUNAWAY_MIN_RUN = 50   # consecutive identical non-word chars → dot-leader runaway
 _LEADER_SPACED_MIN_RUN = 50   # spaced pattern like ". . . . ." repeated this many times
 _LEADER_MAX_LINE_LEN = 500    # any line longer than this is a runaway (catches spaced variants)
@@ -139,6 +175,8 @@ _LEADER_RE = re.compile(r"([^\w\s])\1{%d,}" % (_LEADER_RUNAWAY_MIN_RUN - 1))
 _LEADER_SPACED_RE = re.compile(r"([^\w\s] ){%d,}" % _LEADER_SPACED_MIN_RUN)
 # Regex: collapse any run of 10+ dots (with optional spaces) to a canonical 5-dot leader
 _LEADER_COLLAPSE_RE = re.compile(r"(\.\s*){10,}")
+# Regex: a run of digits, collapsed to "#" so a counting loop reduces to one template
+_DIGIT_RUN_RE = re.compile(r"\d+")
 
 
 def _clean_output(text: str) -> str:
@@ -151,37 +189,85 @@ def _clean_output(text: str) -> str:
     return _LEADER_COLLAPSE_RE.sub(".....", text)
 
 
-def _output_issue(text: str) -> str:
-    """Return a non-empty description if the text has a detectable quality problem, else ''.
+def _output_issue(text: str) -> "tuple[str, str]":
+    """Classify *text* as degenerate model output.
 
-    Checks for two failure modes:
-      1. Repetition loop  — a single line makes up >= 40% of all lines (min 20 lines).
-      2. Dot-leader runaway — any line contains 200+ consecutive identical non-word chars.
+    Returns ``(kind, message)`` — ``("", "")`` when the text looks fine. *kind* is
+    one of the values in _LEADER_KINDS or _LOOP_KINDS and is what callers should
+    branch on; *message* is for logging only and embeds page content, so it must
+    never be pattern-matched (a page repeating the word "leader" would otherwise
+    read as a dot-leader failure).
+
+    Failure modes, in order of the checks:
+      1. Dot-leader runaway — 50+ consecutive identical non-word chars, the spaced
+         ". . . ." variant, or any line over 500 chars.
+      2. Repetition loop    — one identical line is >= 40% of all lines.
+      3. Template loop      — the same line modulo digits, repeated back to back.
+      4. Block loop         — a long page carrying very few distinct lines.
     """
     if not text:
-        return ""
+        return "", ""
 
     # Dot-leader runaway — consecutive (.....) or spaced (. . . .) or just very long lines
     for line in text.splitlines():
         if _LEADER_RE.search(line):
-            return f"leader runaway in line [{line[:50]}…]"
+            return "leader", f"leader runaway in line [{line[:50]}…]"
         if _LEADER_SPACED_RE.search(line):
-            return f"spaced leader runaway in line [{line[:50]}…]"
+            return "spaced_leader", f"spaced leader runaway in line [{line[:50]}…]"
         if len(line) > _LEADER_MAX_LINE_LEN:
-            return f"line too long ({len(line)} chars): [{line[:50]}…]"
+            return "long_line", f"line too long ({len(line)} chars): [{line[:50]}…]"
 
-    # Repetition loop
     lines = [l.strip() for l in text.splitlines() if l.strip()]
-    if len(lines) >= _REPETITION_MIN_REPEATS:
-        from collections import Counter
-        counts = Counter(l for l in lines if len(l) >= _REPETITION_MIN_LINE_LEN)
-        if counts:
-            top_line, top_count = counts.most_common(1)[0]
-            ratio = top_count / len(lines)
-            if ratio >= _REPETITION_THRESHOLD:
-                return f"repetition loop ({ratio:.0%} of lines are [{top_line[:40]}…])"
+    if len(lines) < _REPETITION_MIN_REPEATS:
+        return "", ""
 
-    return ""
+    # Repetition loop — one line dominates the page
+    counts = Counter(l for l in lines if len(l) >= _REPETITION_MIN_LINE_LEN)
+    if counts:
+        top_line, top_count = counts.most_common(1)[0]
+        ratio = top_count / len(lines)
+        if ratio >= _REPETITION_THRESHOLD:
+            return "repetition", f"repetition loop ({ratio:.0%} of lines are [{top_line[:40]}…])"
+
+    # Template loop — consecutive run of the same line once digits are collapsed
+    run_template, run_len = "", 0
+    for line in lines:
+        template = _DIGIT_RUN_RE.sub("#", line)
+        if len(template) < _TEMPLATE_MIN_NORM_LEN:
+            run_template, run_len = "", 0
+            continue
+        if template == run_template:
+            run_len += 1
+            if (run_len >= _TEMPLATE_MIN_CONSEC_RUN
+                    and run_len / len(lines) >= _TEMPLATE_MIN_PAGE_SHARE):
+                return "template_loop", (
+                    f"template loop ({run_len} consecutive lines, "
+                    f"{run_len / len(lines):.0%} of the page, matching [{template[:40]}…])"
+                )
+        else:
+            run_template, run_len = template, 1
+
+    # Block loop — the page cycles a handful of lines for its whole length
+    if len(lines) >= _BLOCK_LOOP_MIN_LINES:
+        distinct = len(set(lines)) / len(lines)
+        if distinct < _BLOCK_LOOP_MAX_DISTINCT:
+            return "block_loop", (
+                f"block loop ({len(set(lines))} distinct lines in {len(lines)}, "
+                f"{distinct:.1%})"
+            )
+
+    return "", ""
+
+
+def _distinct_line_count(text: str) -> int:
+    """Number of distinct non-empty lines — the ranking key for imperfect output.
+
+    Raw length is the wrong measure when choosing among failed candidates: both
+    failure modes the ladder exists to catch (repetition loops and leader
+    runaways) make output *longer*, so preferring length systematically selects
+    the most degenerate candidate. Distinct lines cannot be inflated by a loop.
+    """
+    return len({l.strip() for l in text.splitlines() if l.strip()})
 
 
 def _thinking_config_for(model: str) -> ThinkingConfig:
@@ -197,9 +283,18 @@ def _call_gemini(
     system_prompt: str,
     media_resolution: "MediaResolution | None",
     temperature: float,
-    service_tier: str | None = None,
+    *,
+    service_tier: "str | None",
+    max_output_tokens: "int | None",
 ):
-    """Call Gemini with 429-retry and 503-retry logic. Returns the response object."""
+    """Call Gemini with 429-retry and 503-retry logic. Returns the response object.
+
+    *service_tier* and *max_output_tokens* are keyword-only and have no defaults
+    on purpose: every call on the retry ladder must carry the same billing tier
+    and output ceiling as the first one. Defaulting them made a forgotten
+    argument silently drop the run off the flex tier — a doubled bill on exactly
+    the pages that retry most.
+    """
     return generate_with_retry(
         client,
         model=model,
@@ -207,6 +302,7 @@ def _call_gemini(
             system_instruction=system_prompt,
             temperature=temperature,
             media_resolution=media_resolution,
+            max_output_tokens=max_output_tokens,
             thinking_config=_thinking_config_for(model),
             http_options=flex_http_options(service_tier),
         ),
@@ -225,6 +321,7 @@ def process_image(
     service_tier: str | None = None,
     fallback_model: str | None = None,
     skip_blank: bool = True,
+    max_output_tokens: "int | None" = None,
 ) -> tuple[str, bool | None]:
     """
     OCR one image via Gemini. Returns (status, success) where status is one of
@@ -254,7 +351,15 @@ def process_image(
     with open(image_path, "rb") as f:
         img_bytes = f.read()
 
-    response = _call_gemini(client, img_bytes, image_path.name, model, system_prompt, media_resolution, temperature=0.0, service_tier=service_tier)
+    def call(prompt: str, temperature: float, call_model: str = model):
+        """One API call carrying this page's tier and output ceiling."""
+        return _call_gemini(
+            client, img_bytes, image_path.name, call_model, prompt,
+            media_resolution, temperature=temperature,
+            service_tier=service_tier, max_output_tokens=max_output_tokens,
+        )
+
+    response = call(system_prompt, 0.0)
 
     text = response.text or ""
 
@@ -264,13 +369,18 @@ def process_image(
     if not text:
         candidate = response.candidates[0] if response.candidates else None
         if candidate and candidate.finish_reason == FinishReason.RECITATION:
-            needs_retry, reason = True, "RECITATION"
+            needs_retry, kind, reason = True, "recitation", "RECITATION"
         else:
-            needs_retry, reason = False, ""
+            needs_retry, kind, reason = False, "", ""
             if candidate:
                 _log(f"  finish_reason: {candidate.finish_reason}  [{image_path.name}]")
                 if candidate.safety_ratings:
                     _log(f"  safety_ratings: {candidate.safety_ratings}  [{image_path.name}]")
+            # Write nothing rather than a zero-byte .txt. The empty file was
+            # reported as a processed page, and the resume check deletes and
+            # re-requests it on every later run — paying for the page again each
+            # time with no record that it had already come back empty.
+            return "empty", None
     else:
         # Non-empty but cut off at the output ceiling: the tail of the page is
         # missing. Retrying at a different temperature cannot recover it, so warn
@@ -281,72 +391,88 @@ def process_image(
                 f"  WARNING: truncated at the output token limit (MAX_TOKENS) — "
                 f"transcription is incomplete ({len(text.splitlines())} lines): {image_path.name}"
             )
-        issue = _output_issue(text)
-        needs_retry, reason = bool(issue), issue
+        kind, reason = _output_issue(text)
+        needs_retry = bool(kind)
 
     if needs_retry:
-        best_text = text  # track cleanest output seen; start with original (may be empty)
-        is_leader_issue = "leader" in reason or "line too long" in reason
+        is_leader_issue = kind in _LEADER_KINDS
+        is_loop_issue = kind in _LOOP_KINDS
         retry_prompt = (system_prompt + _NO_LEADER_INSTRUCTION) if is_leader_issue else system_prompt
-        for temp in _RETRY_TEMPERATURES:
-            _log(f"  {reason} — retrying at temperature={temp}: {image_path.name}")
-            retry_response = _call_gemini(client, img_bytes, image_path.name, model, retry_prompt, media_resolution, temperature=temp)
-            retry_text = retry_response.text or ""
-            retry_issue = _output_issue(retry_text)
-            if retry_text and not retry_issue:
-                text = retry_text  # clean output — accept and stop retrying
-                break
-            if retry_text:
-                _log(f"  temperature={temp} still problematic ({retry_issue}): {image_path.name}")
-                best_text = retry_text  # imperfect but non-empty; keep as fallback
-        else:
-            # All temperature retries exhausted without a clean result.
-            if best_text:
-                text = best_text
-            if is_leader_issue:
-                text = _clean_output(text)
 
-            # Only attempt deeper fallbacks when we still have no usable text.
-            if not text or _output_issue(text):
-                # Strategy 1: simple prompt — complex prompts can themselves
-                # trigger recitation on visually dense pages.
-                for temp in (0.3, 0.7):
-                    _log(f"  Trying simple fallback prompt at temperature={temp}: {image_path.name}")
-                    r = _call_gemini(
-                        client, img_bytes, image_path.name, model,
-                        _SIMPLE_FALLBACK_PROMPT, media_resolution, temperature=temp,
-                    )
-                    simple_text = r.text or ""
-                    if simple_text and not _output_issue(simple_text):
-                        text = simple_text
+        # Every attempt is kept as a candidate and the best one is chosen at the
+        # end. The ladder used to assign last-wins, so a page whose first call
+        # returned 240 good lines could be saved as a 12-line temperature-0.7
+        # response — the variable was named best_text but never compared anything.
+        candidates: "list[tuple[str, str]]" = [(text, kind)]
+
+        def best() -> "tuple[str, str]":
+            """Pick the strongest candidate: clean beats flawed, then most distinct lines."""
+            usable = [(t, k) for t, k in candidates if t]
+            if not usable:
+                return "", ""
+            clean = [(t, k) for t, k in usable if not k]
+            pool = clean or usable
+            return max(pool, key=lambda c: _distinct_line_count(c[0]))
+
+        # Temperature retries. Skipped for degenerate loops: across the 10 harvest
+        # logs in docs/evidence/2026-09-02-ocr-token-burn/, 14 pages entered this
+        # rung and no loop page was ever rescued by it, while the simple prompt
+        # below rescued 3 of the 6 that reached it. Recitation and leader failures
+        # do respond to resampling, so they keep the full ladder.
+        if is_loop_issue:
+            _log(f"  {reason} — skipping temperature retries (ineffective for loops): {image_path.name}")
+        for temp in ([] if is_loop_issue else _RETRY_TEMPERATURES):
+            _log(f"  {reason} — retrying at temperature={temp}: {image_path.name}")
+            retry_text = call(retry_prompt, temp).text or ""
+            retry_kind, retry_reason = _output_issue(retry_text)
+            if retry_text:
+                candidates.append((retry_text, retry_kind))
+                if not retry_kind:
+                    break  # clean output — accept and stop retrying
+                _log(f"  temperature={temp} still problematic ({retry_reason}): {image_path.name}")
+
+        text, kind = best()
+        if kind and is_leader_issue:
+            cleaned = _clean_output(text)
+            candidates.append((cleaned, _output_issue(cleaned)[0]))
+            text, kind = best()
+
+        # Strategy 1: simple prompt — complex prompts can themselves trigger
+        # recitation on visually dense pages, and empirically this is the rung
+        # that actually rescues repetition loops.
+        if kind:
+            for temp in (0.3, 0.7):
+                _log(f"  Trying simple fallback prompt at temperature={temp}: {image_path.name}")
+                simple_text = call(_SIMPLE_FALLBACK_PROMPT, temp).text or ""
+                if simple_text:
+                    simple_kind, _ = _output_issue(simple_text)
+                    candidates.append((simple_text, simple_kind))
+                    if not simple_kind:
                         _log(f"  Simple prompt succeeded at temperature={temp}: {image_path.name}")
                         break
-                    if simple_text and len(simple_text) > len(text):
-                        text = simple_text  # imperfect but longer — keep as new best
+            text, kind = best()
 
-            if not text or _output_issue(text):
-                # Strategy 2: model escalation — larger model handles layout
-                # complexity that causes recitation in smaller models.
-                esc_model = fallback_model
-                if esc_model and esc_model != model:
-                    _log(f"  Escalating to {esc_model}: {image_path.name}")
-                    r = _call_gemini(
-                        client, img_bytes, image_path.name, esc_model,
-                        _SIMPLE_FALLBACK_PROMPT, media_resolution, temperature=0.0,
-                    )
-                    esc_text = r.text or ""
-                    if esc_text and not _output_issue(esc_text):
-                        text = esc_text
+        # Strategy 2: model escalation — a larger model handles layout complexity
+        # that causes recitation in smaller ones.
+        if kind:
+            esc_model = fallback_model
+            if esc_model and esc_model != model:
+                _log(f"  Escalating to {esc_model}: {image_path.name}")
+                esc_text = call(_SIMPLE_FALLBACK_PROMPT, 0.0, esc_model).text or ""
+                if esc_text:
+                    esc_kind, _ = _output_issue(esc_text)
+                    candidates.append((esc_text, esc_kind))
+                    if not esc_kind:
                         _log(f"  Model escalation succeeded ({esc_model}): {image_path.name}")
-                    elif esc_text:
-                        text = esc_text
+                    else:
                         _log(f"  Model escalation: imperfect output ({esc_model}): {image_path.name}")
+                text, kind = best()
 
-            if text:
-                _log(f"  All retries exhausted — keeping best available output: {image_path.name}")
-            else:
-                text = _OCR_FAILED_PLACEHOLDER
-                _log(f"  All retries exhausted — no output recovered; writing placeholder: {image_path.name}")
+        if not text:
+            _log(f"  All retries exhausted — no output recovered: {image_path.name}")
+            return "failed", False
+        if kind:
+            _log(f"  All retries exhausted — keeping best available output: {image_path.name}")
 
     txt_path.write_text(text, encoding="utf-8")
     return "ok", True
@@ -424,6 +550,21 @@ def main() -> None:
             f"Model to escalate to when the primary model exhausts all retries "
             f"with no usable output (default: {FALLBACK_MODEL}). "
             "Pass an empty string to disable escalation."
+        ),
+    )
+    parser.add_argument(
+        "--max-output-tokens",
+        type=int,
+        default=DEFAULT_MAX_OUTPUT_TOKENS,
+        metavar="N",
+        help=(
+            f"Cap on output tokens per OCR call (default: {DEFAULT_MAX_OUTPUT_TOKENS}). "
+            "Without a cap a degenerating page runs to the model ceiling — one "
+            "observed run emitted 32,758 lines before stopping at MAX_TOKENS. The "
+            "largest legitimate page measured across this corpus is ~29KB, roughly "
+            "8-12k tokens, so the default leaves about 2x headroom. Truncation is "
+            "reported as a WARNING and the partial page is still written, so raise "
+            "this if dense pages start coming back short. Pass 0 for no cap."
         ),
     )
     parser.add_argument(
@@ -576,7 +717,7 @@ def main() -> None:
         )
 
     client = get_client()
-    counts = {"ok": 0, "skipped": 0, "blank": 0, "failed": 0}
+    counts = {"ok": 0, "skipped": 0, "blank": 0, "empty": 0, "failed": 0}
     completed = 0
 
     fallback_model = args.fallback_model.strip() or None
@@ -585,7 +726,7 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(process_image, client, img, args.model, img_prompts[img], media_resolution, service_tier, fallback_model, not args.no_blank_skip): img
+            executor.submit(process_image, client, img, args.model, img_prompts[img], media_resolution, service_tier, fallback_model, not args.no_blank_skip, args.max_output_tokens or None): img
             for img in images
         }
         for future in as_completed(futures):
@@ -605,6 +746,8 @@ def main() -> None:
                     _log(f"[{completed:04d}/{total}] Skipped (exists): {txt_name}")
                 elif status == "blank":
                     _log(f"[{completed:04d}/{total}] Blank page — no OCR: {image_path.name}")
+                elif status == "empty":
+                    _log(f"[{completed:04d}/{total}] Empty response — nothing written: {image_path.name}")
                 elif status == "ok":
                     _log(f"[{completed:04d}/{total}] Done: {txt_name}")
                 else:
@@ -614,15 +757,27 @@ def main() -> None:
         print(
             f"\nDone. {total} image(s): "
             f"{counts['ok']} processed, {counts['skipped']} skipped, "
-            f"{counts['blank']} blank, {counts['failed']} failed.",
+            f"{counts['blank']} blank, {counts['empty']} empty, "
+            f"{counts['failed']} failed.",
             file=sys.stderr,
         )
 
     # Record the stage so a direct invocation updates pipeline_state.json the
     # same way an orchestrated run does (main.py is otherwise the only writer).
-    if counts["ok"]:
+    # Gated on there being no failures, not merely one success: recording the
+    # stage complete after 1 of 83 pages made a 1%-finished run indistinguishable
+    # from a clean one, and main.py trusts this file.
+    if counts["ok"] and not counts["failed"]:
         record_stage(find_state_dir(output_root), "gemini_ocr",
                      updates={"ocr_model": args.model})
+
+    if counts["failed"]:
+        print(
+            f"Error: {counts['failed']} page(s) failed; stage not recorded as complete. "
+            "Re-run to retry them — failed pages write no .txt, so they are not skipped.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

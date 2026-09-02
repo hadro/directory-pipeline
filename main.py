@@ -823,6 +823,18 @@ def main() -> None:
         help="Images per Surya inference batch (default: 4; reduce if OOM)",
     )
     opts.add_argument(
+        "--max-output-tokens",
+        type=int,
+        default=None,
+        dest="max_output_tokens",
+        metavar="N",
+        help=(
+            "For --gemini-ocr: cap output tokens per call (default: 24576). Bounds "
+            "the cost of a page that starts looping. Raise it if dense pages come "
+            "back truncated; 0 disables the cap."
+        ),
+    )
+    opts.add_argument(
         "--width",
         type=int,
         default=None,

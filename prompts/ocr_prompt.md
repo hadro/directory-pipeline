@@ -10,7 +10,9 @@ Transcribe the text on this page exactly as it is printed:
 - Output each printed line as one line of output; preserve blank lines between sections
 - Include page numbers and running headers or footers if present
 - For text that is degraded, blurred, or partially obscured, transcribe your best reading — do not skip words or leave gaps
-- Only when a span is genuinely impossible to read after a best-effort attempt, write the literal token `[illegible]` in its place. If a region truly contains no text, write `[blank]`. Use these two tokens exactly as written — do not invent other placeholders.
+- Only when a span is genuinely impossible to read after a best-effort attempt, write the literal token `[illegible]` in its place. Scope it to that span alone — never to a whole line, column, or page you have not tried to read.
+- If the page contains no text at all, output the single line `[blank]` and nothing else. Do not write `[blank]` for an empty line, an empty column, or the space between sections — leave those simply empty.
+- Use these two tokens exactly as written — do not invent other placeholders, and never repeat either one line after line.
 
 ## Boxed advertisements
 

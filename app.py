@@ -140,6 +140,9 @@ STAGE_ARG_DEFS: dict[str, list[dict]] = {
         {"name": "high_res",      "flag": "--high-res",        "type": "bool", "label": "High res",
          "default": False,
          "hint": "Send images at higher resolution to the API. Slower and costlier; useful for small or dense text, and recommended for handwritten text (HTR)."},
+        {"name": "max_output_tokens", "flag": "--max-output-tokens", "type": "int", "label": "Max output tokens",
+         "default": "", "placeholder": "e.g. 24576",
+         "hint": "Cap on output tokens per call (default 24576). Bounds the cost of a page that starts looping. Raise it if dense pages come back truncated; 0 disables the cap."},
     ],
     "align_ocr": [
         {"name": "model",                "flag": "--model",                 "type": "str",   "label": "OCR model",
