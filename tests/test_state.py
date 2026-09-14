@@ -47,6 +47,19 @@ def test_record_stage_appends_and_dedups(tmp_path):
     assert read_state(tmp_path)["stages_completed"] == ["download", "gemini_ocr"]
 
 
+def test_record_stage_merges_updates_in_one_write(tmp_path):
+    record_stage(tmp_path, "gemini_ocr", updates={"ocr_model": "gemini-o"})
+    state = read_state(tmp_path)
+    assert state["stages_completed"] == ["gemini_ocr"]
+    assert state["ocr_model"] == "gemini-o"
+
+
+def test_record_stage_updates_cannot_clobber_stage_list(tmp_path):
+    record_stage(tmp_path, "download")
+    record_stage(tmp_path, "gemini_ocr", updates={"stages_completed": ["bogus"]})
+    assert read_state(tmp_path)["stages_completed"] == ["download", "gemini_ocr"]
+
+
 def test_model_getters(tmp_path):
     assert get_ocr_model(tmp_path) is None
     assert get_ner_model(tmp_path) is None

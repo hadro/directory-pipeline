@@ -104,12 +104,19 @@ def write_state(output_dir: Path, updates: dict, args=_UNSET) -> None:
     p.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def record_stage(output_dir: Path, stage: str, args=_UNSET) -> None:
+def record_stage(output_dir: Path, stage: str, args=_UNSET, *, updates: dict | None = None) -> None:
+    """Append *stage* to ``stages_completed``, merging *updates* in the same write.
+
+    Pass fields the stage owns (``ocr_model``, ``ner_model``, …) via *updates*
+    rather than following this with a separate ``write_state`` call — the two
+    belong to one logical update, and merging them halves the read-merge-write
+    cycles on the state file.
+    """
     state = read_state(output_dir)
     completed = state.get("stages_completed", [])
     if stage not in completed:
         completed.append(stage)
-    write_state(output_dir, {"stages_completed": completed}, args=args)
+    write_state(output_dir, {**(updates or {}), "stages_completed": completed}, args=args)
 
 
 def get_last_run_args(output_dir: Path) -> str | None:
