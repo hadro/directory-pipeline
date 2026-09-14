@@ -972,6 +972,56 @@ def resolve_fragment_fn(
 # Per-image alignment
 # ---------------------------------------------------------------------------
 
+def _preserve_manual_lines(
+    out_path: "Path",
+    result_lines: list[dict],
+    unmatched_gemini: list[str],
+) -> "tuple[list[dict], list[str], int]":
+    """Carry hand-made alignments in *out_path* forward onto a fresh alignment.
+
+    Manual lines are the only artifact in the pipeline that cannot be
+    regenerated from the page image — Surya output, Gemini text, alignments and
+    entries all can be. Re-aligning with ``--force`` rebuilds the page from
+    scratch, so without this the write at the end of :func:`align_image` would
+    silently discard every ``confidence: "manual"`` line a human placed via
+    ``--review-alignment``.
+
+    A manual line wins over any machine line that claims the same Surya bbox or
+    the same Gemini text, and its text is dropped from *unmatched_gemini* so the
+    page does not report it as unaligned. Returns
+    ``(lines, unmatched_gemini, n_preserved)``.
+    """
+    if not out_path.exists():
+        return result_lines, unmatched_gemini, 0
+    try:
+        prev = json.loads(out_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # An unreadable existing file must never cost us the new alignment, but
+        # it also must not be treated as "no manual work" — the caller logs the
+        # preserved count, so returning 0 here is visible rather than silent.
+        return result_lines, unmatched_gemini, 0
+
+    manual = [ln for ln in prev.get("lines", []) if ln.get("confidence") == "manual"]
+    if not manual:
+        return result_lines, unmatched_gemini, 0
+
+    claimed_bboxes = {tuple(ln["bbox"]) for ln in manual if ln.get("bbox")}
+    claimed_texts  = {ln.get("gemini_text", "") for ln in manual if ln.get("gemini_text")}
+
+    kept = [
+        ln for ln in result_lines
+        if tuple(ln.get("bbox", ())) not in claimed_bboxes
+        and ln.get("gemini_text", "") not in claimed_texts
+    ]
+    kept.extend(manual)
+    # Reading order: top-to-bottom, then left-to-right, matching the order the
+    # machine lines already arrive in so a re-aligned page stays scannable.
+    kept.sort(key=lambda ln: (ln.get("bbox", [0, 0])[1], ln.get("bbox", [0])[0]))
+
+    remaining = [g for g in unmatched_gemini if g not in claimed_texts]
+    return kept, remaining, len(manual)
+
+
 def align_image(
     image_path: Path,
     model: str,
@@ -1058,6 +1108,14 @@ def align_image(
             and _MERGE_RATIO_THRESHOLD < ratio <= _MERGE_RATIO_MAX
         )
 
+        n_manual = 0
+        if force:
+            result_lines, unmatched_gemini, n_manual = _preserve_manual_lines(
+                out_path, result_lines, unmatched_gemini
+            )
+            if n_manual and not quiet:
+                _log(f"  {image_path.name}: preserved {n_manual} manual line(s)")
+
         result = {
             "image": image_path.name,
             "model": model,
@@ -1068,6 +1126,7 @@ def align_image(
             "surya_median_confidence": round(surya_median_conf, 4) if surya_median_conf is not None else None,
             "needs_review": needs_review,
             "possible_column_merge": possible_column_merge,
+            "manual_lines_preserved": n_manual,
             "lines": result_lines,
             "unmatched_gemini": unmatched_gemini,
         }
