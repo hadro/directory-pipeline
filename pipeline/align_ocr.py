@@ -1202,11 +1202,27 @@ def main() -> None:
     if args.model is None:
         args.model = (
             get_ocr_model(output_root)
-            or discover_ocr_slug(output_root)
+            # require_txt: the aligner's input is the OCR text, not the aligned
+            # JSON. Without it, a directory holding an older model's alignments
+            # resolves to that model and every page is skipped as "missing".
+            or discover_ocr_slug(output_root, require_txt=True)
             or DEFAULT_OCR_MODEL
         )
         if not getattr(args, "quiet", False):
             print(f"  Auto-detected OCR model: {args.model}", file=sys.stderr)
+
+    # Whatever route set the model — flag, pipeline_state.json, or discovery —
+    # warn loudly when its .txt files are absent. Every page would report
+    # "missing" and be skipped, which --quiet otherwise renders invisible: the
+    # run exits 0 having written nothing.
+    _slug = model_slug(args.model)
+    if not any(output_root.glob(f"**/*_{_slug}.txt")):
+        print(
+            f"  *** WARNING: no *_{_slug}.txt files under {output_root} —"
+            f" alignment needs the OCR text and will skip every page."
+            f" Pass --model with a slug that has OCR text.",
+            file=sys.stderr,
+        )
 
     # Same split-aware image selection used across the pipeline
     all_jpgs = sorted(output_root.rglob("*.jpg"))
