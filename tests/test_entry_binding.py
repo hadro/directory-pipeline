@@ -12,7 +12,6 @@ from utils.entry_binding import (
     Binding,
     bind_entries,
     identity_text,
-    identity_tokens,
     is_edge_bleed,
     order_violations,
     review_queue,
