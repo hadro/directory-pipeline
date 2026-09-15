@@ -12,66 +12,34 @@ Usage:
 
 import argparse
 import csv
-import difflib
 import json
 import re
 import sys
 from pathlib import Path
 
-
-def _find_fragment(query: str, aligned_lines: list[dict]) -> str | None:
-    """Match query text against aligned lines; return canvas_fragment or None."""
-    if not query or not aligned_lines:
-        return None
-    q = query.strip()
-    # 1. Exact
-    for ln in aligned_lines:
-        if ln.get("gemini_text", "").strip() == q:
-            return ln.get("canvas_fragment")
-    # 2. Substring
-    q_lower = q.lower()
-    for ln in aligned_lines:
-        if q_lower in ln.get("gemini_text", "").lower():
-            return ln.get("canvas_fragment")
-    # 3. Fuzzy
-    candidates = [ln.get("gemini_text", "") for ln in aligned_lines]
-    matches = difflib.get_close_matches(q, candidates, n=1, cutoff=0.6)
-    if matches:
-        for ln in aligned_lines:
-            if ln.get("gemini_text") == matches[0]:
-                return ln.get("canvas_fragment")
-    return None
-
-
-def _best_fragment(entry: dict, aligned_lines: list[dict]) -> str | None:
-    """Try entry fields in priority order to find a matching aligned line."""
-    # Fields most likely to appear verbatim in aligned text, in priority order
-    for field in ("firm_name", "name", "business_name", "subject", "city", "address"):
-        val = entry.get(field)
-        if val:
-            frag = _find_fragment(str(val), aligned_lines)
-            if frag:
-                return frag
-    return None
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utils.entry_binding import bind_entries  # noqa: E402
 
 
 def patch_item_dir(item_dir: Path, aligned_model_slug: str, dry_run: bool = False) -> dict:
     aligned_suffix = f"_{aligned_model_slug}_aligned.json"
     aligned_files = sorted(item_dir.glob(f"*{aligned_suffix}"))
     if not aligned_files:
-        return {"patched": 0, "skipped": 0, "no_match": 0}
+        return {"patched": 0, "skipped": 0, "no_match": 0, "unplaced": 0}
 
-    # Build map: page_stem → aligned_lines
-    page_lines: dict[str, list[dict]] = {}
+    # Build map: page_stem → (aligned_lines, canvas_width). The width feeds the
+    # edge-bleed guard, which rejects the narrow sliver of the facing page that
+    # spread scans leave at the extreme left or right edge.
+    page_lines: dict[str, tuple[list[dict], int]] = {}
     for af in aligned_files:
         stem = af.name[: -len(aligned_suffix)]
         try:
             data = json.loads(af.read_text(encoding="utf-8"))
-            page_lines[stem] = data.get("lines", [])
+            page_lines[stem] = (data.get("lines", []), data.get("canvas_width") or 0)
         except Exception:
             pass
 
-    patched = skipped = no_match = 0
+    patched = skipped = no_match = unplaced = 0
 
     # Patch per-page cache files
     for cache_path in sorted(item_dir.glob("*_entries.json")):
@@ -79,7 +47,13 @@ def patch_item_dir(item_dir: Path, aligned_model_slug: str, dry_run: bool = Fals
             data = json.loads(cache_path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if data.get("mode") not in ("text-only", "aligned", "aligned-patched"):
+        # Every extraction mode is patchable: the mode records how the NER call
+        # was made (with the page image or from text alone), not where the boxes
+        # came from, and a page with no aligned data is already caught by the
+        # no_match branch below. The old list omitted "multimodal", which is two
+        # thirds of the corpus and every Green Book volume — this tool silently
+        # skipped all of them and reported success.
+        if data.get("mode") not in ("text-only", "multimodal", "aligned", "aligned-patched"):
             skipped += 1
             continue
 
@@ -89,20 +63,32 @@ def patch_item_dir(item_dir: Path, aligned_model_slug: str, dry_run: bool = Fals
         # Strip NER model slug from stem if present (e.g. "0017_5142941")
         # cache filename: {page_stem}_{ner_slug}_entries.json
         # page_stem in page_lines uses aligned_model_slug naming: "0017_5142941"
-        lines = page_lines.get(page_stem)
-        if not lines:
+        page = page_lines.get(page_stem)
+        if not page:
             # Try matching by 4-digit prefix
             prefix = page_stem[:4] if len(page_stem) >= 4 else page_stem
-            lines = next(
+            page = next(
                 (v for k, v in page_lines.items() if k.startswith(prefix)), None
             )
-        if not lines:
+        if not page or not page[0]:
             no_match += 1
             continue
+        lines, canvas_width = page
 
+        # One call for the whole page, not one per entry: the assignment is
+        # one-to-one, so the strongest agreement settles before a weaker claim
+        # can take its line. Patching entry-by-entry let several entries share
+        # a box.
+        entries = data.get("entries", [])
         changed = False
-        for entry in data.get("entries", []):
-            frag = _best_fragment(entry, lines)
+        for entry, binding in zip(entries, bind_entries(entries, lines,
+                                                        canvas_width=canvas_width)):
+            if binding.line_index is None:
+                # Leave whatever is there rather than overwriting a good box
+                # with a guess; an entry this tool cannot place is one for review.
+                unplaced += 1
+                continue
+            frag = lines[binding.line_index].get("canvas_fragment")
             if frag and frag != entry.get("canvas_fragment"):
                 entry["canvas_fragment"] = frag
                 changed = True
@@ -112,7 +98,8 @@ def patch_item_dir(item_dir: Path, aligned_model_slug: str, dry_run: bool = Fals
             data["mode"] = "aligned-patched"
             cache_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    return {"patched": patched, "skipped": skipped, "no_match": no_match}
+    return {"patched": patched, "skipped": skipped, "no_match": no_match,
+            "unplaced": unplaced}
 
 
 def rebuild_csv(item_dir: Path) -> int:
@@ -187,19 +174,23 @@ def main() -> None:
         print(f"No item directories found under {root}", file=sys.stderr)
         sys.exit(1)
 
-    total_patched = total_no_match = 0
+    total_patched = total_no_match = total_unplaced = 0
     for item_dir in item_dirs:
         stats = patch_item_dir(item_dir, aligned_slug, dry_run=args.dry_run)
         label = item_dir.name
-        print(f"{label}: patched={stats['patched']} no_match={stats['no_match']} skipped={stats['skipped']}")
+        print(f"{label}: patched={stats['patched']} unplaced={stats['unplaced']}"
+              f" no_match={stats['no_match']} skipped={stats['skipped']}")
         total_patched += stats["patched"]
         total_no_match += stats["no_match"]
+        total_unplaced += stats["unplaced"]
 
         if not args.dry_run and stats["patched"] > 0:
             n = rebuild_csv(item_dir)
             print(f"  → rebuilt CSV: {n} entries")
 
-    print(f"\nTotal: {total_patched} fragments patched, {total_no_match} pages with no aligned data")
+    print(f"\nTotal: {total_patched} fragments patched, {total_unplaced} entries left"
+          f" unplaced (no line matched strongly enough), {total_no_match} pages"
+          f" with no aligned data")
     if args.dry_run:
         print("(dry run — no files written)")
 

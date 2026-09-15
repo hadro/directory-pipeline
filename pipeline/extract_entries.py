@@ -39,7 +39,6 @@ With aligned JSON (adds precise bounding-box fragments):
 
 import argparse
 import csv
-import difflib
 import io
 import json
 import re
@@ -59,6 +58,7 @@ from google.genai.types import GenerateContentConfig, Part
 from utils.gemini import flex_http_options, generate_with_retry, get_client, thinking_config_for
 from pipeline.state import find_state_dir, record_stage
 from utils.models import DEFAULT_NER_MODEL, FALLBACK_MODEL, model_slug
+from utils.entry_binding import bind_entries, order_violations, review_queue
 
 # Sparse-page thresholds: pages below BOTH limits are skipped before the NER call.
 # A blank or nearly-blank page passes enough ghost/bleed text to trigger hallucinations.
@@ -132,19 +132,61 @@ def _find_ner_prompt(output_root: Path) -> Path:
                     return p
     return NER_PROMPT_FILE
 
+def _aligned_slug_coverage(item_dir: Path, slug: str, sample: int = 25) -> float:
+    """Expected useful boxed lines for *slug* over the first *sample* pages.
+
+    Scored as ``lines * (lines / (lines + unmatched))`` — raw line count times
+    the fraction of the model's own text that actually got boxed. Line count
+    alone is not enough and picks the wrong model in practice: one collection
+    has an alignment with 3,967 lines but only 53% of its text boxed, against
+    2,889 lines with 87% boxed, and the second is the better alignment. The
+    fraction alone is not enough either, since a model that emitted almost no
+    text scores near 1.0 on a handful of lines.
+    """
+    lines = unmatched = 0
+    for p in sorted(item_dir.glob(f"*_{slug}_aligned.json"))[:sample]:
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        lines += len(data.get("lines", []))
+        unmatched += len(data.get("unmatched_gemini", []))
+    if not lines:
+        return 0.0
+    return lines * (lines / (lines + unmatched))
+
+
 def _detect_aligned_slug(item_dir: Path) -> str | None:
     """Scan item_dir for aligned JSON or OCR txt files and return the model slug found.
 
     Searches for *_aligned.json first, then *.txt, extracting the model slug
     (e.g. 'gemini-2.0-flash') from the filename suffix. Returns None if nothing
     that looks like pipeline output is found.
+
+    Where a directory holds alignments from several models, the one with the best
+    line coverage wins. This used to return the first hit from a sorted glob,
+    which is a plain alphabetical sort over filenames: 'gemini-2.0-flash' beat
+    'gemini-3-flash-preview' on every page that had both, so the older and worse
+    alignment was picked deterministically rather than occasionally. Nothing
+    records which alignment produced a given canvas_fragment, so a wrong choice
+    here is also invisible downstream.
     """
     import re
     slug_pat = re.compile(r"_(gemini[-\w.]+)_aligned\.json$")
-    for p in sorted(item_dir.glob("*_aligned.json")):
-        m = slug_pat.search(p.name)
-        if m:
-            return m.group(1)
+    slugs = {m.group(1) for p in item_dir.glob("*_aligned.json")
+             if (m := slug_pat.search(p.name))}
+    if slugs:
+        if len(slugs) == 1:
+            return next(iter(slugs))
+        # Highest coverage wins; ties break on the newest alignment, then name,
+        # so the result is stable rather than filesystem-order dependent.
+        def _rank(slug: str) -> tuple:
+            newest = max(
+                (p.stat().st_mtime for p in item_dir.glob(f"*_{slug}_aligned.json")),
+                default=0.0,
+            )
+            return (_aligned_slug_coverage(item_dir, slug), newest, slug)
+        return max(slugs, key=_rank)
     txt_pat = re.compile(r"_(gemini[-\w.]+)\.txt$")
     for p in sorted(item_dir.glob("*.txt")):
         m = txt_pat.search(p.name)
@@ -379,72 +421,6 @@ def _img_path_from_aligned(aligned_path: Path, slug: str) -> Path | None:
     return candidate if candidate.exists() else None
 
 
-# ---------------------------------------------------------------------------
-# Canvas fragment linking
-# ---------------------------------------------------------------------------
-
-def _find_fragment(line_text: str, aligned_lines: list[dict]) -> tuple[str | None, str | None]:
-    """Find the canvas_fragment for an entry by matching its line_text to aligned lines.
-
-    Tries three strategies in order:
-    1. Exact match against gemini_text
-    2. Substring match — handles the common Green Book format where the aligned
-       line includes the city name and dot leaders before the establishment name,
-       e.g. "LAKE GEORGE....Woodbine Cottage, 75 Dieskau Street"
-    3. Fuzzy match as a last resort
-
-    Returns (canvas_fragment, matched_gemini_text) or (None, None).
-    """
-    if not line_text or not aligned_lines:
-        return None, None
-    # Exact match
-    for ln in aligned_lines:
-        if ln.get("gemini_text", "") == line_text:
-            return ln.get("canvas_fragment"), ln.get("gemini_text", "")
-    # Substring match
-    lt_lower = line_text.lower()
-    for ln in aligned_lines:
-        if lt_lower in ln.get("gemini_text", "").lower():
-            return ln.get("canvas_fragment"), ln.get("gemini_text", "")
-    # Fuzzy match (handles minor whitespace / OCR differences)
-    candidates = [ln.get("gemini_text", "") for ln in aligned_lines]
-    matches = difflib.get_close_matches(line_text, candidates, n=1, cutoff=0.6)
-    if matches:
-        for ln in aligned_lines:
-            if ln.get("gemini_text", "") == matches[0]:
-                return ln.get("canvas_fragment"), ln.get("gemini_text", "")
-    return None, None
-
-
-def _bbox_height(canvas_fragment: str) -> int | None:
-    """Parse the height from a IIIF canvas fragment URI (#xywh=x,y,w,h)."""
-    import re
-    m = re.search(r"#xywh=\d+,\d+,\d+,(\d+)", canvas_fragment or "")
-    return int(m.group(1)) if m else None
-
-
-def _is_edge_bleed(canvas_fragment: str, canvas_width: int,
-                   edge_pct: float = 0.05) -> bool:
-    """Return True if the bbox is a narrow strip abutting the left or right edge.
-
-    Two-page spread scans include a sliver of the facing page at the extreme
-    left or right of the image. Surya detects these as text lines and the NW
-    alignment can assign an entry to one. Reject any bbox that is both
-    narrower than *edge_pct* of the canvas width AND starts/ends within
-    *edge_pct* of either edge. Using a percentage keeps the threshold
-    proportional across collections with different scan resolutions.
-    """
-    if not canvas_fragment or not canvas_width:
-        return False
-    import re
-    m = re.search(r"#xywh=(\d+),\d+,(\d+),\d+", canvas_fragment)
-    if not m:
-        return False
-    x, w = int(m.group(1)), int(m.group(2))
-    edge_px = canvas_width * edge_pct
-    if w >= edge_px:
-        return False
-    return x < edge_px or (x + w) > (canvas_width - edge_px)
 
 
 
@@ -834,52 +810,47 @@ def process_page(
                         f" → {n_corrected} corrected"
                     )
 
-    # Link canvas fragments from the aligned JSON.
-    # Try known text fields first, then every non-trivial string field in order until
-    # one matches — this handles schemas where line_text is absent and the most
-    # distinctive text (e.g. ship_name) isn't the first field in the dict.
+    # Link canvas fragments from the aligned JSON. The matcher lives in
+    # utils.entry_binding so tools/patch_canvas_fragments.py applies exactly the
+    # same rules; see that module for why an entry's category and geography
+    # fields must never be allowed to supply a box.
     aligned_lines = aligned.get("lines", [])
     canvas_uri = aligned.get("canvas_uri", "")
     canvas_width = aligned.get("canvas_width") or 0
-    used_fragments: set[str] = set()  # prevent multiple entries sharing one bounding box
-    # Fields that represent inherited context headings, not the entry's own line text.
-    # Matching against these causes the first entry after a heading to steal the
-    # heading's bounding box (e.g. "Alabama" substring-matches "ALABAMA." heading,
-    # "Brooklyn" substring-matches "BROOKLYN." heading).
-    _HEADING_FIELDS = {"section", "subsection", "state", "city"}
-    for entry in entries:
-        cf = None
-        # Prioritise specific entry-text fields; skip heading/context fields entirely.
-        candidates = [
-            entry.get("line_text", ""),
-            entry.get("establishment_name", ""),
-            entry.get("firm_name", ""),
-            entry.get("business_name", ""),
-            entry.get("name", ""),
-            entry.get("address", "") or "",
-        ]
-        candidates += [
-            v for k, v in entry.items()
-            if k not in _HEADING_FIELDS and isinstance(v, str) and len(v) > 3
-        ]
-        for lt in candidates:
-            if lt:
-                candidate_uri, _ = _find_fragment(lt, aligned_lines)
-                if (candidate_uri and candidate_uri not in used_fragments
-                        and not _is_edge_bleed(candidate_uri, canvas_width)):
-                    cf = candidate_uri
-                    break
-        if cf:
-            used_fragments.add(cf)
-        entry["canvas_fragment"] = cf or canvas_uri  # fall back to full canvas
+
+    bindings = bind_entries(entries, aligned_lines, canvas_width=canvas_width)
+    for entry, binding in zip(entries, bindings):
+        if binding.line_index is not None:
+            entry["canvas_fragment"] = aligned_lines[binding.line_index].get("canvas_fragment")
+        else:
+            # No line agreed strongly enough. Fall back to the whole canvas
+            # rather than to the best guess: a confidently wrong box is the
+            # failure this matcher exists to prevent, and an unboxed entry is
+            # visible to review.
+            entry["canvas_fragment"] = canvas_uri
         entry["image"] = aligned.get("image", "")
+
+    unplaced = review_queue(entries, aligned_lines, bindings)
+    if unplaced:
+        _log(f"    [{aligned_path.name}] {len(unplaced)} entr"
+             f"{'y' if len(unplaced) == 1 else 'ies'} unplaced → review queue")
+    violations = order_violations(bindings)
+    if violations:
+        _log(f"    [{aligned_path.name}] {violations} reading-order violation(s)"
+             " among bound entries")
 
     output = {
         "image": aligned.get("image", ""),
         "model": model,
         "mode": mode,
+        "aligned_model": aligned_slug,   # which alignment produced these boxes
         "prior_context": prior_context,
         "page_context": new_context,
+        # Entries no line matched strongly enough to claim, each with its nearest
+        # miss. Persisted rather than only logged so the review queue survives the
+        # run and can be collated across a whole volume.
+        "unplaced_entries": unplaced,
+        "order_violations": violations,
         "entries": entries,
     }
     out_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")

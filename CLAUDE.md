@@ -113,6 +113,45 @@ end, ranked by distinct line count — raw length would systematically select th
 - `--review-alignment` is a Flask server — access via `localhost:5000` locally or ngrok/Colab proxy in Colab
 - Aligned JSON confidence values: `"line"` (Surya), `"manual"` (user-confirmed via review UI)
 
+## Entry binding (entry → aligned line)
+
+`utils/entry_binding.py` decides which aligned line an extracted entry came from, and is
+shared by `extract_entries.py` and `tools/patch_canvas_fragments.py` — they used to keep
+separate copies and both copies had the same bug.
+
+The rule that matters: **only identity fields may supply a box.** The old matcher fell
+through to every string field over three characters, guarded by a denylist of four field
+names. `category` was not on it, and in a Green Book a category value *is* the printed
+section heading — 489 of ~900 attributable misplacements came from an entry matching its
+own category to the heading line. A denylist cannot govern a vocabulary each collection's
+NER prompt invents, so the guard is now an allowlist keyed on field *shape*: `line_text`,
+`name`, `subject`, `title`, anything ending `_name`, plus address-like fields.
+
+Three scoring decisions were measured rather than reasoned, and the two intuitive ones
+lost — don't re-propose them without re-measuring:
+
+- **Monotonic reading-order constraint** (entries arrive in reading order, so their lines
+  should too): much worse, 251 regressions, refused bindings scoring a perfect 1.0. NER
+  entry order does not reliably track aligned-line order. Reading order is reported by
+  `order_violations()` as a diagnostic and never constrains the match.
+- **Recall-weighted scoring** instead of token-set F1: worse on both axes.
+- **What works**: F1 at floor 0.34, plus containment (a line carrying tariff notation
+  shares every token of the name but scores 0.36), plus a name-only fallback for entries
+  whose address wrapped to the next line.
+
+Refusing is a result. An entry with no confident match gets no box rather than a best
+guess — a confidently wrong box is the failure this exists to prevent. Refusals land in
+`unplaced_entries` in each page's `*_entries.json`; collate them with
+`tools/collate_review_queue.py`.
+
+`tools/audit_entry_bindings.py` measures placement without ground truth and is the
+before/after checkpoint for any change to alignment or binding. **Coverage is not
+placement** — that distinction cost this project several wrong conclusions; unmatched-rate
+cannot see whether a box landed on the right line.
+
+Cross-repo handoff for the 2026-09-04 audit and the outstanding policy decision:
+`../green-books/docs/alignment-audit-2026-09-04.md`.
+
 ## Supported sources
 
 | Source | How to use |
