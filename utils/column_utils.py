@@ -60,3 +60,58 @@ def column_breaks(lines: list[dict], page_width: int) -> list[float]:
     # Valleys touching either edge are the page margins, not gutters.
     return [((a + b + 1) / 2.0) * bin_w
             for a, b in valleys if a != 0 and b != n_bins - 1]
+
+
+# ---------------------------------------------------------------------------
+# Geometric alignment quality
+# ---------------------------------------------------------------------------
+# These live here rather than in tools/compare_alignments.py because the
+# aligner itself now uses them to choose between candidate alignments, and a
+# tool must not be a dependency of the pipeline.
+
+def bbox_centre(b) -> "tuple[float, float]":
+    return ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
+
+
+def assign_columns(placed: "list[tuple[float, float]]", n_cols_max: int = 4) -> "list[int]":
+    """Assign each placed point a column index from x-centre gaps alone."""
+    xs = sorted(p[0] for p in placed)
+    if not xs:
+        return [0] * len(placed)
+    span = xs[-1] - xs[0]
+    gaps = sorted(
+        ((xs[i + 1] - xs[i], (xs[i + 1] + xs[i]) / 2.0) for i in range(len(xs) - 1)),
+        reverse=True,
+    )
+    cuts = sorted(mid for gap, mid in gaps[: n_cols_max - 1] if span and gap > span * 0.12)
+    return [sum(1 for c in cuts if p[0] >= c) for p in placed]
+
+
+def inversion_rate(placed: "list[tuple[float, float]]") -> float:
+    """Normalised Kendall-tau distance between list order and geometric order.
+
+    This is the primary quality signal because it is *independent of the
+    objective Needleman-Wunsch optimises*. NW maximises text similarity, so a
+    text-similarity score rewards its mistakes as readily as its successes.
+    Geometry does not collude: if alignment is correct, walking the aligned
+    lines in list order visits boxes in column-major, top-to-bottom order.
+    Every pair visited out of that order is an inversion.
+
+    Returns inversions / total_pairs, so 0.0 is perfect and higher is worse.
+    """
+    n = len(placed)
+    if n < 3:
+        return 0.0
+    cols = assign_columns(placed)
+    order = sorted(range(n), key=lambda i: (cols[i], placed[i][1], placed[i][0]))
+    rank = [0] * n
+    for r, i in enumerate(order):
+        rank[i] = r
+    inv = 0
+    for i in range(n):
+        ri = rank[i]
+        for j in range(i + 1, n):
+            if rank[j] < ri:
+                inv += 1
+    total = n * (n - 1) // 2
+    return inv / total if total else 0.0

@@ -47,6 +47,16 @@ import statistics
 from difflib import SequenceMatcher
 from pathlib import Path
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# The aligner itself now uses these to choose between candidate alignments,
+# so they live in utils/ — a pipeline stage must not depend on a tool.
+from utils.column_utils import (  # noqa: E402
+    assign_columns as _assign_columns,
+    bbox_centre as _centre,
+    inversion_rate as _inversion_rate,
+)
+
 _ALIGNED_RE = re.compile(r"^(?P<stem>.+?)_[^_]+(?:-[^_]+)*_aligned\.json$")
 _WS = re.compile(r"[^a-z0-9]+")
 
@@ -84,10 +94,6 @@ def _index_surya(d: Path) -> dict[str, Path]:
 def _load_surya(path: Path) -> tuple[int, list[dict]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     return int(data.get("image_width") or 0), data.get("lines", [])
-
-
-def _centre(b) -> tuple[float, float]:
-    return ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
 
 
 def score_page(aligned_path: Path, surya_path: Path, bad_threshold: float) -> dict | None:
@@ -163,52 +169,6 @@ def score_page(aligned_path: Path, surya_path: Path, bad_threshold: float) -> di
         "coverage": matched / len(lines),
         "unmatched": len(aligned.get("unmatched_gemini", [])),
     }
-
-
-def _inversion_rate(placed: list[tuple[float, float]]) -> float:
-    """Normalised Kendall-tau distance between list order and geometric order.
-
-    This is the primary quality signal because it is *independent of the
-    objective Needleman-Wunsch optimises*.  NW maximises text similarity, so a
-    text-similarity score rewards its mistakes as readily as its successes --
-    it happily binds "Funeral Home" to a different ad's "FUNERAL" box and scores
-    that highly.  Geometry does not collude: if alignment is correct, walking
-    the aligned lines in list order visits boxes in column-major, top-to-bottom
-    order.  Every pair visited out of that order is an inversion.
-
-    Returns inversions / total_pairs, so 0.0 is perfect and higher is worse.
-    """
-    n = len(placed)
-    if n < 3:
-        return 0.0
-    cols = _assign_columns(placed)
-    # Geometric reading order: column first, then y, then x.
-    order = sorted(range(n), key=lambda i: (cols[i], placed[i][1], placed[i][0]))
-    rank = [0] * n
-    for r, i in enumerate(order):
-        rank[i] = r
-    inv = 0
-    for i in range(n):
-        ri = rank[i]
-        for j in range(i + 1, n):
-            if rank[j] < ri:
-                inv += 1
-    total = n * (n - 1) // 2
-    return inv / total if total else 0.0
-
-
-def _assign_columns(placed: list[tuple[float, float]], n_cols_max: int = 4) -> list[int]:
-    """Assign each placed point a column index from x-centre gaps alone."""
-    xs = sorted(p[0] for p in placed)
-    if not xs:
-        return [0] * len(placed)
-    span = xs[-1] - xs[0]
-    gaps = sorted(
-        ((xs[i + 1] - xs[i], (xs[i + 1] + xs[i]) / 2.0) for i in range(len(xs) - 1)),
-        reverse=True,
-    )
-    cuts = sorted(mid for gap, mid in gaps[: n_cols_max - 1] if span and gap > span * 0.12)
-    return [sum(1 for c in cuts if p[0] >= c) for p in placed]
 
 
 def _order_violations(placed: list[tuple[float, float]], n_cols_max: int = 4) -> int:
