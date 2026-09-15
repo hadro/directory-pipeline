@@ -14,6 +14,15 @@ A tiered review of what to borrow from [`UNDP-Serbia/lorya_`](https://github.com
 
 A phased implementation plan for a `detect_sections` stage — auto-drafts `sections.txt` for multi-section city directories (alphabetical / street / classified / frontmatter) so per-section NER prompts route correctly — lives at `docs/plans/section-detection-plan.md` (created 2026-06-15). The consumer side (`utils/section_utils.py` + `extract_entries.py`) already exists; only the producer is missing. Read it before starting section-detection work; best implemented locally where the gitignored `output/` data is on disk.
 
+## Deferred work: 21 degenerate Green Book pages
+
+21 pages in `output/green_books_and_related/` have runaway Gemini OCR (`long_line` /
+`block_loop` / `repetition`) and cannot be re-OCR'd with the model that produced the rest
+of the collection — **`gemini-2.0-flash` was retired and returns 404 as of 2026-09-04**.
+Fixing them needs per-page (not per-directory) alignment-model selection. Page list,
+blocker detail and the two implementation options: `docs/plans/degenerate-page-reocr.md`
+(created 2026-09-04). Deferred until after the re-align and entry-binder work.
+
 ## Setup
 
 ```bash
