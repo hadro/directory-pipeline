@@ -41,7 +41,22 @@ def test_assign_columns_splits_on_the_wide_x_gap():
 
 
 def test_assign_columns_keeps_one_column_when_no_gap_is_wide_enough():
-    """Evenly spread x-centres are one column, not many narrow ones."""
+    """Evenly spread x-centres are one column, not many narrow ones.
+
+    This is the criterion's known weak point, and the reason it is unproven on
+    city directories. A dense city-directory page carries full-width headings,
+    continued lines and indented sub-entries, so the x-centres form a continuum
+    and no single gap clears 12% of the span — the metric then reports one
+    column for a page plan_columns had already resolved into two or more. On
+    such a page "correct" order is judged as pure top-to-bottom, so a genuine
+    column-major alignment looks maximally disordered and the read-across
+    whole-page candidate scores better. Measured 2026-09-14: this collapse hits
+    1 of 80 Green Book pages but 27 of 80 Tulsa 1922 pages.
+
+    Feeding plan_columns' known layout in instead is the obvious fix and is
+    NOT yet justified — it wins on the geometry metric (which it *is*) but
+    loses on independent text-vs-box placement. See the evidence README.
+    """
     pts = [(x, 0) for x in range(0, 1000, 50)]
     assert set(assign_columns(pts)) == {0}
 
@@ -49,9 +64,10 @@ def test_assign_columns_keeps_one_column_when_no_gap_is_wide_enough():
 def test_assign_columns_caps_at_n_cols_max():
     """Five visually distinct columns collapse to four at the default cap.
 
-    This is the documented ceiling, and the reason the criterion is weaker on
-    dense city-directory pages than on travel guides. Pinned so that raising
-    the cap is a deliberate edit with a test to update, not a silent drift.
+    The cap is *not* what limits this on real pages — measured over 60 Tulsa
+    1922 multi-column pages, raising it from 4 to 8 changes the assignment on
+    exactly zero. The binding constraint is the 12%-of-span gap threshold
+    below. Pinned anyway so a change to the ceiling is deliberate.
     """
     pts = [(c * 400, r) for c in range(5) for r in range(5)]
     assert len(set(assign_columns(pts))) == 4

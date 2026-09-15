@@ -122,6 +122,48 @@ columns, so this is not a corner case — it is close to the headline use case. 
 is resolved, treat the criterion as **validated for travel guides and
 national/business directories, unproven for city directories.**
 
+### The mechanism, and a fix that does not survive checking
+
+`inversion_rate` re-derives the column split itself, from x-centre gaps alone, keeping
+gaps wider than 12% of the span. On a dense city-directory page — full-width headings,
+continued lines, indented sub-entries — the centres form a continuum and no gap clears
+12%, so **the metric reports one column for a page `plan_columns` already resolved into
+two or more**. When it thinks the page is one column, correct order is pure
+top-to-bottom, so a genuine column-major alignment (down column 1, back up to column 2)
+looks maximally disordered and the read-across candidate wins. The metric inverts on
+exactly the pages it most needs to be right about.
+
+Measured 2026-09-14, multi-column pages per `plan_columns` where the metric sees one
+column: green books **1/80**, Tulsa 1921 **11/80**, Tulsa 1922 **27/80**.
+
+Two candidate explanations, one of which is wrong:
+
+- **The `n_cols_max=4` cap.** It is not the cause. Raising it 4 → 8 changes the
+  assignment on **0 of 60** Tulsa 1922 pages; the 12% gap threshold binds first, and
+  the cap is never reached. (Verified with a positive control — the cap does change
+  synthetic 6-column input — because identical output across three caps looks exactly
+  like a patch that never applied.)
+- **The 12% threshold.** This is the real constraint.
+
+The obvious fix is to stop guessing: `build_aligned_lines` already holds the true layout
+in `column_groups`, so feed it in rather than re-deriving it. Judged by geometry that
+looks decisive — bad picks fall from 11/38 to 3/36 on green books, 10/33 to 1/42 on
+Tulsa 1921, 9/50 to 1/57 on Tulsa 1922.
+
+**Do not adopt that on this evidence.** The judge there is the known-column inversion
+rate, which is the very quantity the fixed rule optimises — it is being scored by its
+own metric, the trap this whole document exists to warn about. Scored instead on
+text-vs-box agreement (the placement metric commit 2c66654 reported, differently shaped
+from geometry), on the pages where the two rules disagree the *current* guessed-column
+rule wins more often: green books 17 vs 9, Tulsa 1921 18 vs 15, Tulsa 1922 19 vs 10.
+
+So the mechanism is real, the cap is a red herring, and the natural fix fails an
+independent check. Settling this needs the non-circular judge — a placement audit via
+`tools/audit_entry_bindings.py` (strong bindings ≥ 0.6 against the text at the assigned
+box) over a re-aligned city-directory volume, the same way the "Outcome on placement"
+table above was produced. That is hours of compute, not a quick check, and it is the
+next thing worth doing here.
+
 ## Reproducing
 
 ```bash
