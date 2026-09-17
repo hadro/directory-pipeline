@@ -15,6 +15,12 @@ entries and non-item results are skipped automatically.
 The IIIF manifest URL is derived predictably from the item URL:
     https://www.loc.gov/item/{id}/manifest.json
 
+An item URL may name a sub-resource — a Chronicling America issue
+(/item/{lccn}/{date}/ed-{n}/) or one digitized volume of a serial
+(/item/{id}/resource/{resource_id}/).  The whole path is kept, because the page
+images hang off the sub-resource and /item/{id}/manifest.json is the serial's
+catalog record with no images on it.
+
 This CSV feeds directly into the existing download → OCR → align pipeline:
     python loc_collection_csv.py https://www.loc.gov/collections/civil-war-maps/ \\
         --output civil-war-maps.csv
@@ -71,6 +77,30 @@ def _extract_item_id(url: str) -> str | None:
     return m.group(1).strip("/") if m else None
 
 
+def _extract_item_path(url: str) -> str | None:
+    """
+    Extract the *full* path under /item/, sub-resource included.
+        '…/item/01015253/'                                → '01015253'
+        '…/item/sn83030313/1847-04-30/ed-1/manifest.json' → 'sn83030313/1847-04-30/ed-1'
+        '…/item/sn82007064/resource/gdc.sn82007064_1869/' → 'sn82007064/resource/gdc.sn82007064_1869'
+
+    A LoC item URL can address a sub-resource — a Chronicling America issue, or
+    one digitized volume of a serial.  The page images hang off the
+    sub-resource; /item/{id}/manifest.json is the catalog record for the serial
+    as a whole and carries no images at all, so the sub-path has to survive into
+    the manifest URL or the download silently finds nothing.
+    """
+    path = url.split("?")[0].split("#")[0]
+    if "/item/" not in path:
+        return None
+    path = path.split("/item/", 1)[1]
+    for suffix in ("/manifest.json", "/manifest"):
+        if path.lower().endswith(suffix):
+            path = path[: -len(suffix)]
+            break
+    return path.strip("/") or None
+
+
 def _is_item_url(url: str) -> bool:
     return "/item/" in url
 
@@ -79,8 +109,8 @@ def _is_collection_url(url: str) -> bool:
     return "/collections/" in url
 
 
-def _manifest_url(item_id: str) -> str:
-    return f"https://www.loc.gov/item/{item_id}/manifest.json"
+def _manifest_url(item_path: str) -> str:
+    return f"https://www.loc.gov/item/{item_path}/manifest.json"
 
 
 def _get_with_retry(
@@ -165,11 +195,11 @@ def _is_microform(raw_text: str) -> bool:
     return "microform" in t or "microfilm" in t
 
 
-def _make_row(item_id: str, title: str, microform: bool) -> dict:
+def _make_row(item_id: str, item_path: str, title: str, microform: bool) -> dict:
     return {
         "item_id": item_id,
         "item_title": title,
-        "iiif_manifest_url": _manifest_url(item_id),
+        "iiif_manifest_url": _manifest_url(item_path),
         "microform": microform,
     }
 
@@ -226,12 +256,13 @@ def process_collection(
     rows = 0
     for item in iter_collection_items(session, collection_url, per_page, verbose):
         item_id = _extract_item_id(item.get("id", ""))
-        if not item_id:
+        item_path = _extract_item_path(item.get("id", ""))
+        if not item_id or not item_path:
             continue
 
         title = _str_val(item.get("title", ""))
         microform = _is_microform(str(item))
-        writer.writerow(_make_row(item_id, title, microform))
+        writer.writerow(_make_row(item_id, item_path, title, microform))
         rows += 1
         if verbose:
             label = title[:60] if title else item_id
@@ -252,29 +283,16 @@ def process_single_item(
 ) -> int:
     """Fetch full item metadata and export one CSV row. Returns 1 on success."""
     item_id = _extract_item_id(item_url)
-    if not item_id:
+    item_path = _extract_item_path(item_url)
+    if not item_id or not item_path:
         print(f"  Warning: could not extract item ID from: {item_url}", file=sys.stderr)
         return 0
 
-    # Newspaper issue manifest URLs have the form:
-    #   …/item/sn83030313/1847-04-30/ed-1/manifest.json
-    # Preserve the full path for both the API call and the manifest URL so
-    # the downloader can fetch the right pages (not just the serial title).
-    import re as _re
-    _ca_m = _re.search(r"/item/([^/?#]+)/(\d{4}-\d{2}-\d{2})/ed-(\d+)", item_url)
-    if item_url.lower().endswith("/manifest.json"):
-        base_url = item_url[: -len("/manifest.json")]
-        api_url = f"{base_url}/?fo=json"
-        manifest_url = item_url
-    elif _ca_m:
-        # Chronicling America issue URL: build issue-specific manifest URL
-        lccn, date, edition = _ca_m.group(1), _ca_m.group(2), _ca_m.group(3)
-        base_url = f"https://www.loc.gov/item/{lccn}/{date}/ed-{edition}"
-        api_url = f"{base_url}/?fo=json"
-        manifest_url = f"{base_url}/manifest.json"
-    else:
-        api_url = f"https://www.loc.gov/item/{item_id}/?fo=json"
-        manifest_url = _manifest_url(item_id)
+    # Query and link the sub-resource the URL actually named — a Chronicling
+    # America issue (…/item/{lccn}/{date}/ed-{n}/) or one digitized volume of a
+    # serial (…/item/{id}/resource/{resource_id}/).  Collapsing either back to
+    # /item/{id}/ yields the serial's catalog record, which has no pages.
+    api_url = f"https://www.loc.gov/item/{item_path}/?fo=json"
 
     if verbose:
         print(f"  Fetching item {item_id}…", file=sys.stderr)
@@ -292,12 +310,7 @@ def process_single_item(
 
     title = _str_val(item.get("title", ""))
     microform = _is_microform(str(data))
-    writer.writerow({
-        "item_id": item_id,
-        "item_title": title,
-        "iiif_manifest_url": manifest_url,
-        "microform": microform,
-    })
+    writer.writerow(_make_row(item_id, item_path, title, microform))
     if verbose:
         label = title[:60] if title else item_id
         print(f"    {item_id}: {label}", file=sys.stderr)
