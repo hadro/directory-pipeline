@@ -107,8 +107,8 @@ order — which is why `--model` is rarely needed after the first run:
 {
   "slug": "ldpd_11290437_000",
   "source_url": "https://…",
-  "ocr_model": "gemini-3.5-flash-lite",
-  "ner_model": "gemini-3.5-flash-lite",
+  "ocr_model": "gemini-3.1-flash-lite",
+  "ner_model": "gemini-3.1-flash-lite",
   "stages_completed": ["download", "gemini_ocr", "extract_entries"],
   "last_run": "2026-06-10T14:22:00Z",
   "last_run_args": "extract_entries.py output/vol1 --mode multimodal --flex"
@@ -407,7 +407,7 @@ page-number outlier creates a degenerate single-line split.
 ```json
 {
   "image": "0001_58030238.jpg",
-  "model": "gemini-3.5-flash-lite",
+  "model": "gemini-3.1-flash-lite",
   "canvas_uri": "https://...",
   "canvas_width": 3316,
   "canvas_height": 4513,
@@ -502,7 +502,7 @@ other document types the fields will match that volume's NER prompt.
 
 Outputs a per-page `*_entries.json` sidecar and an aggregate `entries_{model}.csv`.
 
-By default uses `gemini-3.5-flash-lite` (fast and cheap). Dense pages that exceed the
+By default uses `gemini-3.1-flash-lite` (fast and cheap). Dense pages that exceed the
 model's output token limit automatically fall back to `gemini-3.8-flash` (higher
 output limit), and then to partial JSON recovery if needed. Previously failed pages
 (where a `*_entries_error.txt` sidecar exists) are auto-retried without `--force`.

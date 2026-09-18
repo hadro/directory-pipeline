@@ -24,7 +24,7 @@ Output JSON
 -----------
   {
     "image": "0001_58030238.jpg",
-    "model": "gemini-3.5-flash-lite",
+    "model": "gemini-3.1-flash-lite",
     "canvas_uri": "https://...",
     "canvas_width": 2048,
     "canvas_height": 3000,

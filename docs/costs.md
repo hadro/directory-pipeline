@@ -8,36 +8,77 @@ Two cost categories: **API charges** (variable; applies on any platform) and **p
 
 `--gemini-ocr` and `--extract-entries` both call the Gemini API.
 
-> **Rates below are stale.** They were recorded in June 2026 against the previous
-> defaults (`gemini-3.1-flash-lite` for OCR and NER, `gemini-3-flash-preview` for the
-> fallback). The models changed on 2026-09-18; the per-token rates have not been
-> re-checked against the new ones, so treat every figure on this page as an order of
-> magnitude rather than a quote. Verify current rates at
-> [ai.google.dev/gemini-api/docs/pricing](https://ai.google.dev/gemini-api/docs/pricing).
-
-| Stage | Model (default) | Input (standard) | Output (standard) |
-|---|---|---|---|
-| `--gemini-ocr` | `gemini-3.5-flash-lite` | *unverified* | *unverified* |
-| `--extract-entries` | `gemini-3.5-flash-lite` | *unverified* | *unverified* |
-| fallback (dense pages) | `gemini-3.8-flash` | *unverified* | *unverified* |
-
-Note also that the non-lite fallback bills thinking tokens on every call: it has no
-"thinking off" mode, only a `thinking_level="low"` floor (see `thinking_config_for()` in
-`utils/gemini.py`). Escalated pages therefore cost more than the input/output figures
-alone suggest.
-
-**Flex inference (`--flex`):** Flex pricing is approximately **50% off** the standard rates above, with 1–15 minute latency per request and best-effort availability. It is **on by default** for `--gemini-ocr` and `--extract-entries` (both via `pipeline …` and `python main.py …`) — pass `--no-flex` when you need real-time throughput:
+**Do not estimate this — measure it.** Every Gemini response carries
+`usage_metadata`; `generate_with_retry()` records it and the OCR and NER stages
+persist the totals to `token_usage` in each volume's `pipeline_state.json`:
 
 ```bash
-python main.py URL --gemini-ocr --ocr-model gemini-3.5-flash-lite             # flex by default
-python main.py URL --gemini-ocr --no-flex                                     # standard tier
+python tools/report_cost.py output/                  # every volume
+python tools/report_cost.py output/my-volume/ --by-reason
+python tools/report_cost.py output/ --pages 1900     # project onto a corpus
 ```
 
-A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens for OCR, and another approx. 10,000 input / 2,000 output tokens for entry extraction. Those token counts are a property of the page and the prompt, so they still hold. The costs derived from them do not: measured in June 2026 against `gemini-3.1-flash-lite`, OCR came to approx. $0.0020/page standard and extraction approx. $0.0055/page — about **$0.0075 per page** combined, or **$0.0038/page** with `--flex`. Re-derive these from current rates for `gemini-3.5-flash-lite` before quoting them. Dense pages that exceed the output token limit automatically retry with `gemini-3.8-flash`, but this affects fewer than 5% of pages in practice.
+The figures below are for sizing a run before you start. Rates live in
+`utils/models.py` (`MODEL_RATES`, checked `RATES_CHECKED`) so a model bump and its
+price move together — the previous arrangement left this page quoting the old
+models' rates for three months.
+
+| model | input / 1M | output / 1M |
+|---|---|---|
+| `gemini-3.1-flash-lite` (OCR + NER default) | $0.25 | $1.50 |
+| `gemini-3.5-flash-lite` | $0.30 | $2.50 |
+| `gemini-3.7-flash` (prompt generation) | $0.75 | $3.75 |
+| `gemini-3.8-flash` (escalation) | $0.75 | $3.75 |
+| `gemini-3.5-flash` | $1.50 | $9.00 |
+
+Checked 2026-09-18. The 3.7/3.8 rates are promotional through 2026-12-31 and
+double on 2027-01-01. **Thinking tokens bill at the output rate**, and every
+non-lite 3.x flash model has no thinking-off mode (see `thinking_config_for()` in
+`utils/gemini.py`), so escalated pages cost more than their input/output counts
+suggest.
+
+**Flex and Batch are both 50% off.** Flex is on by default for `--gemini-ocr` and
+`--extract-entries`; pass `--no-flex` when you need real-time throughput.
+
+### Measured, not estimated
+
+Three pages of the 1869 Rowell directory, `gemini-3.1-flash-lite`, flex, on
+2026-09-18:
+
+| | |
+|---|---|
+| per page | **$0.00183** |
+| calls per page | 1.33 |
+| projected, 1,900 pages | **$3.48** |
+
+That 1.33 is the part an estimate cannot see. A page blocked for RECITATION and
+retried at a higher temperature is billed twice, each attempt paying full input
+tokens. `--by-reason` breaks the bill down by what provoked each call:
+
+```
+reason                    calls      output          cost   share
+initial                       3       3,592  $     0.0035   63.7%
+temp:recitation               1       2,299  $     0.0020   36.3%
+```
+
+The two failure classes cost very differently. A RECITATION block is refused
+before generation — prompt tokens only, no output, ~$0.0006 a call. A runaway
+*emits*, up to whatever ceiling it is given: at the 24,576 default that is ~$0.06,
+roughly 11x a clean page. That asymmetry is why retries are capped against the
+page's own demonstrated length (`_retry_cap` in `run_gemini_ocr.py`) and why loop
+failures skip the temperature rungs entirely.
+
+Caveat on the numbers above: three pages, one volume, one run. Treat them as an
+order of magnitude and run `report_cost.py` on your own output.
+
+NER has not yet been measured this way. Historically it ran roughly 3x the OCR
+cost per page (approx. 10,000 input / 2,000 output tokens against OCR's 2,000 /
+1,800), so budget accordingly until a real run records it.
 
 `--generate-prompts` makes 2 Gemini calls with 4–8 sample images each — a one-time per-volume cost of roughly **$0.02–$0.10 total**.
 
-**Rough collection estimates:**
+**Rough collection estimates** (June 2026, `gemini-3.1-flash-lite`; the OCR column
+now reads low against the $3.48 measured above, which carries a real retry rate):
 
 | Collection | Pages | Prompt gen | OCR | NER | Total (standard) | Total (`--flex`) |
 |---|---|---|---|---|---|---|
@@ -53,7 +94,7 @@ A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens f
 
 | Model | Input | Output | Per page (NER only) | 1,900 pages | 1,900 pages + `--flex` |
 |---|---|---|---|---|---|
-| `gemini-3.1-flash-lite` (former default) | $0.25/1M | $1.50/1M | $0.0055 | $10.50 | $5.25 |
+| `gemini-3.1-flash-lite` (default) | $0.25/1M | $1.50/1M | $0.0055 | $10.50 | $5.25 |
 | `gemini-3-flash-preview` | $0.50/1M | $3.00/1M | $0.011 | $21 | $10.50 |
 | `gemini-3.1-pro-preview` | $2.00/1M | $12.00/1M | $0.044 | $84 | $42 |
 

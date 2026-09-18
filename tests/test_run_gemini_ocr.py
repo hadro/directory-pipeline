@@ -227,7 +227,15 @@ def test_every_call_carries_the_service_tier_and_token_cap(page):
     assert len(client.calls) > 1, "expected the ladder to make retry calls"
     for call in client.calls:
         assert call["config"].http_options is not None, "a call lost the flex tier"
-        assert call["config"].max_output_tokens == 24576, "a call lost the token cap"
+        assert call["config"].max_output_tokens, "a call lost the token cap entirely"
+        assert call["config"].max_output_tokens <= 24576, "a call raised the token cap"
+
+    # The first attempt gets the full budget; retries are narrowed to what the
+    # page has shown it needs (see _retry_cap). That narrowing is the point —
+    # a runaway retried at the full ceiling emits ~11x a clean page's output.
+    assert client.calls[0]["config"].max_output_tokens == 24576
+    assert any(c["config"].max_output_tokens < 24576 for c in client.calls[1:]), \
+        "retries should be capped below the initial ceiling"
 
 
 def test_repetition_loop_skips_the_temperature_rungs(page):

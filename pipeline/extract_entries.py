@@ -55,8 +55,14 @@ from google import genai
 load_dotenv()
 from google.genai.types import GenerateContentConfig, Part
 
-from utils.gemini import flex_http_options, generate_with_retry, get_client, thinking_config_for
-from pipeline.state import find_state_dir, record_stage
+from utils.gemini import (
+    flex_http_options,
+    generate_with_retry,
+    get_client,
+    thinking_config_for,
+    usage_snapshot,
+)
+from pipeline.state import add_usage, find_state_dir, record_stage
 from utils.models import DEFAULT_NER_MODEL, FALLBACK_MODEL, model_slug
 from utils.entry_binding import bind_entries, order_violations, review_queue
 
@@ -1486,6 +1492,9 @@ def main() -> None:
     # Gated on an item actually yielding entries, matching run_gemini_ocr and
     # align_ocr: a run where every NER call failed must not leave the stage
     # stamped complete, since record_stage dedupes and never clears it.
+    # Billed whatever the outcome — see the matching note in run_gemini_ocr.py.
+    add_usage(find_state_dir(output_root), usage_snapshot(), pages=extracted)
+
     if extracted:
         record_stage(find_state_dir(output_root), "extract_entries",
                      updates={"ner_model": args.model})

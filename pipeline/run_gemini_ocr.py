@@ -34,9 +34,15 @@ from google import genai
 load_dotenv()
 from google.genai.types import FinishReason, GenerateContentConfig, MediaResolution, Part, ThinkingConfig
 
-from utils.gemini import flex_http_options, generate_with_retry, get_client, thinking_config_for
+from utils.gemini import (
+    flex_http_options,
+    generate_with_retry,
+    get_client,
+    thinking_config_for,
+    usage_snapshot,
+)
 from utils.image_utils import is_blank_page
-from pipeline.state import find_state_dir, record_stage
+from pipeline.state import add_usage, find_state_dir, record_stage
 from utils.models import DEFAULT_OCR_MODEL, FALLBACK_MODEL, model_slug
 
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
@@ -169,6 +175,49 @@ _LEADER_MAX_LINE_LEN = 500    # any line longer than this is a runaway (catches 
 # Temperatures to try in order when output quality checks fail
 _RETRY_TEMPERATURES = [0.1, 0.3, 0.7]
 
+# Output ceiling for a retry, derived from what the page has already produced.
+#
+# The first attempt needs the full --max-output-tokens budget: a legitimately
+# dense page is indistinguishable from a runaway until it arrives. A retry is
+# different — the page has shown how much text it actually holds.
+#
+# This exists because the two failure classes cost wildly different amounts. A
+# RECITATION block is refused before generation: prompt tokens only, no output,
+# ~$0.0006 a call. A runaway *emits*, to whatever ceiling it is given — $0.06 at
+# the 24,576 default, ~11x a clean page, and a leader page walking the whole
+# ladder can reach $0.47.
+#
+# Two measured constants, not guesses:
+#   * ~13 output tokens per line of directory text (5,904 output tokens across
+#     453 lines on the 1869 Rowell probe pages, 2026-09-18). An earlier draft of
+#     this used 1.3 and would have truncated every rescue.
+#   * distinct lines, not raw lines. A block_loop page runs 6,142 lines with 13
+#     distinct (Trow leaf 0454), so a raw-line cap would not bite on the exact
+#     runaway it targets. _distinct_line_count is also what best() ranks by, so
+#     the cap and the selection agree on what "long" means.
+_RETRY_CAP_TOKENS_PER_LINE = 13
+_RETRY_CAP_MULTIPLE = 2
+# Floor: roughly 150 lines of headroom. Below this the cap could truncate a
+# rescue on a page whose only candidates so far are degenerate, which would turn
+# a cost guard into a quality regression.
+_RETRY_CAP_FLOOR = 2048
+
+
+def _retry_cap(candidates: "list[tuple[str, str]]", ceiling: "int | None") -> "int | None":
+    """Output ceiling for the next retry, from the best candidate so far.
+
+    Returns *ceiling* unchanged when nothing usable has come back yet (a page
+    blocked on its first attempt has produced no evidence of its own length),
+    when the run is uncapped, or when the derived cap would not be lower.
+    """
+    if not ceiling:
+        return ceiling
+    longest = max((_distinct_line_count(t) for t, _ in candidates if t), default=0)
+    if not longest:
+        return ceiling
+    cap = longest * _RETRY_CAP_TOKENS_PER_LINE * _RETRY_CAP_MULTIPLE
+    return min(ceiling, max(cap, _RETRY_CAP_FLOOR))
+
 # Regex: 200+ consecutive identical non-word, non-space characters (dots, dashes, etc.)
 _LEADER_RE = re.compile(r"([^\w\s])\1{%d,}" % (_LEADER_RUNAWAY_MIN_RUN - 1))
 # Regex: spaced dot-leader like ". . . . ." — non-word char + space repeated 50+ times
@@ -286,6 +335,7 @@ def _call_gemini(
     *,
     service_tier: "str | None",
     max_output_tokens: "int | None",
+    reason: str = "initial",
 ):
     """Call Gemini with 429-retry and 503-retry logic. Returns the response object.
 
@@ -307,6 +357,7 @@ def _call_gemini(
             http_options=flex_http_options(service_tier),
         ),
         contents=[Part.from_bytes(data=img_bytes, mime_type="image/jpeg")],
+        reason=reason,
         label=image_name,
         log=_log,
     )
@@ -351,12 +402,18 @@ def process_image(
     with open(image_path, "rb") as f:
         img_bytes = f.read()
 
-    def call(prompt: str, temperature: float, call_model: str = model):
-        """One API call carrying this page's tier and output ceiling."""
+    def call(prompt: str, temperature: float, call_model: str = model,
+             reason: str = "initial", cap: "int | None" = None):
+        """One API call carrying this page's tier and output ceiling.
+
+        *cap* narrows max_output_tokens for this call only — see _retry_cap.
+        """
         return _call_gemini(
             client, img_bytes, image_path.name, call_model, prompt,
             media_resolution, temperature=temperature,
-            service_tier=service_tier, max_output_tokens=max_output_tokens,
+            service_tier=service_tier,
+            max_output_tokens=max_output_tokens if cap is None else cap,
+            reason=reason,
         )
 
     response = call(system_prompt, 0.0)
@@ -423,7 +480,8 @@ def process_image(
             _log(f"  {reason} — skipping temperature retries (ineffective for loops): {image_path.name}")
         for temp in ([] if is_loop_issue else _RETRY_TEMPERATURES):
             _log(f"  {reason} — retrying at temperature={temp}: {image_path.name}")
-            retry_text = call(retry_prompt, temp).text or ""
+            retry_text = call(retry_prompt, temp, reason=f"temp:{kind}",
+                              cap=_retry_cap(candidates, max_output_tokens)).text or ""
             retry_kind, retry_reason = _output_issue(retry_text)
             if retry_text:
                 candidates.append((retry_text, retry_kind))
@@ -443,7 +501,8 @@ def process_image(
         if kind:
             for temp in (0.3, 0.7):
                 _log(f"  Trying simple fallback prompt at temperature={temp}: {image_path.name}")
-                simple_text = call(_SIMPLE_FALLBACK_PROMPT, temp).text or ""
+                simple_text = call(_SIMPLE_FALLBACK_PROMPT, temp, reason=f"simple:{kind}",
+                                   cap=_retry_cap(candidates, max_output_tokens)).text or ""
                 if simple_text:
                     simple_kind, _ = _output_issue(simple_text)
                     candidates.append((simple_text, simple_kind))
@@ -458,7 +517,9 @@ def process_image(
             esc_model = fallback_model
             if esc_model and esc_model != model:
                 _log(f"  Escalating to {esc_model}: {image_path.name}")
-                esc_text = call(_SIMPLE_FALLBACK_PROMPT, 0.0, esc_model).text or ""
+                esc_text = call(_SIMPLE_FALLBACK_PROMPT, 0.0, esc_model,
+                                reason=f"escalate:{kind}",
+                                cap=_retry_cap(candidates, max_output_tokens)).text or ""
                 if esc_text:
                     esc_kind, _ = _output_issue(esc_text)
                     candidates.append((esc_text, esc_kind))
@@ -767,6 +828,12 @@ def main() -> None:
     # Gated on there being no failures, not merely one success: recording the
     # stage complete after 1 of 83 pages made a 1%-finished run indistinguishable
     # from a clean one, and main.py trusts this file.
+    # Token usage is recorded whatever the outcome — a failed page's calls were
+    # billed just the same, and the retry ladder is exactly the cost an estimate
+    # cannot see. This is deliberately outside the success gate below.
+    add_usage(find_state_dir(output_root), usage_snapshot(),
+              pages=counts["ok"] + counts["failed"])
+
     if counts["ok"] and not counts["failed"]:
         record_stage(find_state_dir(output_root), "gemini_ocr",
                      updates={"ocr_model": args.model})

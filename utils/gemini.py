@@ -8,6 +8,7 @@ backoff, so rate-limit handling lives in exactly one place.
 import os
 import re
 import sys
+import threading
 import time
 
 from dotenv import load_dotenv
@@ -115,6 +116,75 @@ def flex_http_options(service_tier: "str | None") -> "HttpOptions | None":
     return HttpOptions(extra_body={"service_tier": service_tier})
 
 
+# ---------------------------------------------------------------------------
+# Token accounting
+#
+# Every Gemini response carries usage_metadata; until this existed the pipeline
+# threw it away, which is why every figure in docs/costs.md was an estimate
+# rather than a measurement. Recording here — inside the one function every
+# stage's API calls funnel through — counts the calls that estimates miss: the
+# temperature/RECITATION ladder in run_gemini_ocr.py loops *outside* this
+# function, so each rung arrives as its own call, and a page that is blocked
+# four times before it transcribes is billed four times. A blocked response
+# still returns normally with its prompt tokens counted, so those land here too.
+# ---------------------------------------------------------------------------
+
+_USAGE_FIELDS = ("calls", "input", "output", "thoughts", "cached")
+
+# The OCR stage runs a ThreadPoolExecutor, so this is written concurrently and
+# "counts[field] += 1" is a read-modify-write. Without the lock a parallel run
+# quietly loses calls, which is the one thing a cost record must not do.
+_usage_lock = threading.Lock()
+_usage: "dict[str, dict[str, int]]" = {}
+
+
+def _service_tier(config) -> str:
+    """The service tier *config* requests — "flex", "batch", or "standard"."""
+    try:
+        extra = config.http_options.extra_body or {}
+    except AttributeError:
+        return "standard"
+    return str(extra.get("service_tier") or "standard")
+
+
+def record_usage(model: str, response, tier: str = "standard", reason: str = "initial") -> None:
+    """Accumulate one response's token usage under "{model}|{tier}|{reason}".
+
+    *reason* says why this call happened — "initial", or a retry rung tagged with
+    the failure that provoked it ("temp:recitation", "simple:block_loop",
+    "escalate:leader"). Keeping it on the key is what lets tools/report_cost.py
+    answer "what did recitation cost me, versus runaway loops" from measurement
+    instead of argument. Pricing only reads the model and tier, so the extra
+    field costs nothing there.
+
+    Tolerates a response with no usage_metadata, and fields that come back None
+    (a RECITATION-blocked response has prompt tokens but no candidate tokens).
+    """
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return
+    key = f"{model}|{tier}|{reason or 'initial'}"
+    with _usage_lock:
+        counts = _usage.setdefault(key, dict.fromkeys(_USAGE_FIELDS, 0))
+        counts["calls"] += 1
+        counts["input"] += getattr(usage, "prompt_token_count", 0) or 0
+        counts["output"] += getattr(usage, "candidates_token_count", 0) or 0
+        counts["thoughts"] += getattr(usage, "thoughts_token_count", 0) or 0
+        counts["cached"] += getattr(usage, "cached_content_token_count", 0) or 0
+
+
+def usage_snapshot() -> "dict[str, dict[str, int]]":
+    """A copy of what has been recorded so far, keyed "{model}|{tier}|{reason}"."""
+    with _usage_lock:
+        return {key: dict(counts) for key, counts in _usage.items()}
+
+
+def reset_usage() -> None:
+    """Clear the accumulator (tests, and long-lived processes between runs)."""
+    with _usage_lock:
+        _usage.clear()
+
+
 def _is_rate_limit(exc: Exception) -> bool:
     s = str(exc)
     return "429" in s or "RESOURCE_EXHAUSTED" in s
@@ -140,6 +210,7 @@ def generate_with_retry(
     config,
     label: str = "",
     log=None,
+    reason: str = "initial",
     max_retries: int = 5,
     base_delay: float = 10.0,
     max_503_retries: int = 4,
@@ -161,7 +232,8 @@ def generate_with_retry(
     to wait out a load spike before retrying.
 
     *label* names the work item (e.g. an image filename) in retry log lines;
-    *log* is a print-style callable (defaults to stderr print).
+    *log* is a print-style callable (defaults to stderr print). *reason* tags the
+    call for cost accounting — see record_usage.
     """
     log = log or (lambda msg: print(msg, file=sys.stderr))
     tag = f" {label}" if label else ""
@@ -171,9 +243,12 @@ def generate_with_retry(
     delay_503 = base_503_delay
     attempt_500 = 0
     delay_500 = base_500_delay
+    tier = _service_tier(config)
     while True:
         try:
-            return client.models.generate_content(model=model, config=config, contents=contents)
+            response = client.models.generate_content(model=model, config=config, contents=contents)
+            record_usage(model, response, tier, reason)
+            return response
         except Exception as exc:
             if _is_rate_limit(exc) and attempt_429 < max_retries - 1:
                 attempt_429 += 1

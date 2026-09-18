@@ -15,18 +15,87 @@ from collections import Counter
 from pathlib import Path
 
 # Default model for Gemini OCR (--gemini-ocr) and downstream filename defaults.
-DEFAULT_OCR_MODEL = "gemini-3.5-flash-lite"
+#
+# Held at 3.1-flash-lite deliberately. 3.5-flash-lite was tried as the default on
+# 2026-09-18 and reverted: it prices at $0.30/$2.50 against 3.1's $0.25/$1.50, so
+# a measured page went from $0.0032 to $0.0051 — a 59% rise — for no quality gain
+# that had been demonstrated. Raise it only with a measurement that justifies it.
+DEFAULT_OCR_MODEL = "gemini-3.1-flash-lite"
 
 # Default model for NER entry extraction (--extract-entries).
-DEFAULT_NER_MODEL = "gemini-3.5-flash-lite"
+DEFAULT_NER_MODEL = "gemini-3.1-flash-lite"
 
 # More capable model for one-off generation/review tasks
 # (--generate-prompts, analysis/review_entries.py).
 DEFAULT_PROMPT_MODEL = "gemini-3.7-flash"
 
-# Escalation target when the primary model exhausts its output budget on a
-# dense page (used by run_gemini_ocr.py and extract_entries.py).
+# Escalation target for a page the primary model cannot transcribe cleanly
+# (used by run_gemini_ocr.py and extract_entries.py).
+#
+# Not an output-budget escape hatch, whatever this comment used to say: every
+# candidate model has the same 65,536-token output limit, and the escalated call
+# reuses the same --max-output-tokens cap as the attempt that failed. What it
+# buys is capability on layouts the lite tier mishandles.
+#
+# 3.8-flash over 3.5-flash on price: they share that output limit, but 3.5-flash
+# is $1.50/$9.00 against 3.8-flash's $0.75/$3.75. The version numbers are not a
+# price ordering. Escalation is already the costliest rung in the retry ladder —
+# it also has no thinking-off mode, so it bills thought tokens at the output rate
+# (see thinking_config_for in utils/gemini.py) — and 3.5-flash would roughly
+# double it.
 FALLBACK_MODEL = "gemini-3.8-flash"
+
+
+# ---------------------------------------------------------------------------
+# Pricing
+#
+# USD per 1,000,000 tokens at the standard tier, as (input, output).
+#
+# Source: ai.google.dev/gemini-api/docs/pricing, checked on RATES_CHECKED.
+# Keep this beside the model constants: the last bump left docs/costs.md quoting
+# the previous models' rates for three months, because the price lived in a
+# document instead of next to the thing it prices.
+#
+# Only rates actually read off the pricing page belong here. A model that is
+# missing is reported as unpriced by tools/report_cost.py, which is the right
+# failure — an invented rate is worse than a gap.
+#
+# Thinking tokens bill at the OUTPUT rate, so a model with no "thinking off"
+# mode (every non-lite 3.x flash — see thinking_config_for in utils/gemini.py)
+# costs more per call than its input/output counts alone suggest.
+RATES_CHECKED = "2026-09-18"
+
+MODEL_RATES: "dict[str, tuple[float, float]]" = {
+    "gemini-3.1-flash-lite": (0.25, 1.50),
+    "gemini-3.5-flash-lite": (0.30, 2.50),
+    "gemini-3.5-flash": (1.50, 9.00),
+    # 3.7/3.8 are promotional through 2026-12-31 and double on 2027-01-01
+    # (to 1.50 / 7.50). Re-check this table in January.
+    "gemini-3.7-flash": (0.75, 3.75),
+    "gemini-3.8-flash": (0.75, 3.75),
+}
+
+# Flex and Batch are both half the standard rate.
+TIER_MULTIPLIERS: "dict[str, float]" = {
+    "standard": 1.0,
+    "flex": 0.5,
+    "batch": 0.5,
+}
+
+
+def price_usage(model: str, counts: dict, tier: str = "standard") -> "float | None":
+    """Cost in USD for one {calls,input,output,thoughts,cached} record.
+
+    Returns None when *model* has no entry in MODEL_RATES, so callers can say
+    "unpriced" rather than report a number built on a guess.
+    """
+    rate = MODEL_RATES.get(model)
+    if rate is None:
+        return None
+    rate_in, rate_out = rate
+    billed_out = (counts.get("output", 0) or 0) + (counts.get("thoughts", 0) or 0)
+    gross = (counts.get("input", 0) or 0) / 1e6 * rate_in + billed_out / 1e6 * rate_out
+    return gross * TIER_MULTIPLIERS.get(tier, 1.0)
 
 
 def model_slug(model: str) -> str:

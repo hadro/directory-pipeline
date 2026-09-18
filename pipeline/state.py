@@ -10,8 +10,8 @@ Schema
 {
     "source_url": "https://...",
     "slug": "ldpd_11290437_000",
-    "ocr_model": "gemini-3.5-flash-lite",
-    "ner_model": "gemini-3.5-flash-lite",
+    "ocr_model": "gemini-3.1-flash-lite",
+    "ner_model": "gemini-3.1-flash-lite",
     "stages_completed": ["download", "surya_ocr", "gemini_ocr", "align_ocr"],
     "last_run": "2026-05-31T14:22:00Z",
     "last_run_args": "main.py output/vol1 --gemini-ocr --flex"
@@ -117,6 +117,37 @@ def record_stage(output_dir: Path, stage: str, args=_UNSET, *, updates: dict | N
     if stage not in completed:
         completed.append(stage)
     write_state(output_dir, {**(updates or {}), "stages_completed": completed}, args=args)
+
+
+def add_usage(output_dir: Path, snapshot: dict, pages: int = 0) -> None:
+    """Accumulate a run's token usage into ``token_usage``.
+
+    *snapshot* comes from ``utils.gemini.usage_snapshot()`` — keys are
+    ``"{model}|{tier}"``, values are ``{calls,input,output,thoughts,cached}``.
+
+    *pages* is how many pages the run actually sent to the API, accumulated into
+    ``token_usage_pages``. Without it, cost per page cannot be derived: calls and
+    pages are not the same number, because a page blocked and retried bills
+    several times. Reporting per-call cost as if it were per-page understates a
+    projection by exactly the retry multiplier.
+
+    Totals are **cumulative across runs**, which is what "what has this volume
+    cost me" means: re-OCR'ing a page adds to the total because you paid for it
+    twice. ``last_run_args`` is left alone, so a usage write never displaces the
+    invocation recorded by the stage itself.
+    """
+    if not snapshot:
+        return
+    state = read_state(output_dir)
+    totals = state.get("token_usage", {})
+    for key, counts in snapshot.items():
+        running = totals.setdefault(key, {})
+        for field, value in counts.items():
+            running[field] = running.get(field, 0) + int(value or 0)
+    updates = {"token_usage": totals}
+    if pages:
+        updates["token_usage_pages"] = state.get("token_usage_pages", 0) + int(pages)
+    write_state(output_dir, updates, args=None)
 
 
 def get_last_run_args(output_dir: Path) -> str | None:
