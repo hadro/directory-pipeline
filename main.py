@@ -43,7 +43,7 @@ command line:
 
 Key model flags:
   --ocr-model MODEL     Gemini model for OCR and downstream stages (each stage uses its own default if omitted)
-  --prompt-model MODEL  Gemini model for --generate-prompts (default: gemini-3-flash-preview)
+  --prompt-model MODEL  Gemini model for --generate-prompts (default: gemini-3.7-flash)
 
 Usage
 -----
@@ -775,7 +775,7 @@ def main() -> None:
         default=None,
         metavar="MODEL",
         help=(
-            "Gemini model for --generate-prompts (default: gemini-3-flash-preview). "
+            "Gemini model for --generate-prompts (default: gemini-3.7-flash). "
             "A more capable model is used by default for prompt generation; override here."
         ),
     )

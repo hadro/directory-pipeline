@@ -6,6 +6,7 @@ backoff, so rate-limit handling lives in exactly one place.
 """
 
 import os
+import re
 import sys
 import time
 
@@ -42,17 +43,69 @@ def get_client(required: bool = True) -> "genai.Client | None":
 PRO_THINKING_BUDGET = 4096
 
 
+_GEMINI_VERSION_RX = re.compile(r"gemini-(\d+)(?:\.(\d+))?")
+
+
+def _gemini_version(model: str) -> "tuple[int, int] | None":
+    """Major/minor version out of a Gemini model name, or None for an alias.
+
+    'gemini-2.5-flash-lite' → (2, 5);  'gemini-3-flash-preview' → (3, 0);
+    'gemini-flash-lite-latest' → None (a moving alias — treated as newest).
+    """
+    m = _GEMINI_VERSION_RX.search(model)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2) or 0)
+
+
 def thinking_config_for(model: str) -> ThinkingConfig:
     """Return the ThinkingConfig to use for *model*.
 
-    Flash/flash-lite models support thinking_budget=0 (thinking disabled), which
-    is what these stages want — the work is transcription and extraction, not
-    reasoning. Pro-tier models only operate in thinking mode and reject budget=0,
-    so they get a positive cap instead (see PRO_THINKING_BUDGET).
+    These stages transcribe and extract; they do not reason, so they want as
+    little thinking as each model will allow. How you ask for that changed
+    between model generations, and asking the wrong way fails in two different
+    directions — one loud, one silent. Measured against the live API
+    (2026-09-18), one call per cell, reading ``usage_metadata.thoughts_token_count``:
+
+        model                    budget=0      level="minimal"
+        gemini-2.5-flash-lite    0 thoughts    400
+        gemini-3.1-flash-lite    0 thoughts    0 thoughts
+        gemini-3.5-flash-lite    400           0 thoughts
+        gemini-3.7-flash         72 thoughts   400
+        gemini-3.8-flash         46 thoughts   400
+
+    Two things to take from that. ``thinking_level="minimal"`` is the 3.x
+    replacement for the ``thinking_budget=0`` sentinel, and 3.1-flash-lite is
+    the only model that accepts both — 3.5-flash-lite dropped the sentinel and
+    400s on it. And the non-lite 3.x flash models never had a true "off": they
+    accept budget=0 without complaint and think anyway (3.8-flash returned 46,
+    143 and 0 thought tokens across three identical calls), while rejecting
+    "minimal" outright. Their real floor is ``thinking_level="low"``.
+
+    So the axis is the model generation, not the tier — the old ``"-pro" in
+    model`` test was right for the 2.x family and is no longer sufficient.
+    Unversioned aliases ('gemini-flash-latest') are treated as newest, since
+    the level vocabulary is where the API is going and a wrong guess there
+    fails loudly rather than silently billing thinking tokens.
+
+    Pro-tier models only operate in thinking mode and reject any request to
+    disable it, so they keep a positive cap instead (see PRO_THINKING_BUDGET).
     """
     if "-pro" in model:
         return ThinkingConfig(thinking_budget=PRO_THINKING_BUDGET)
-    return ThinkingConfig(thinking_budget=0)
+
+    version = _gemini_version(model)
+    if version is not None and version < (3, 0):
+        # 2.x: the budget sentinel is the only spelling, and it is honored.
+        return ThinkingConfig(thinking_budget=0)
+
+    if "-lite" in model:
+        # 3.x lite: the one family that can genuinely run with thinking off.
+        return ThinkingConfig(thinking_level="minimal")
+
+    # 3.x non-lite: "minimal" is rejected; "low" is the cheapest that works.
+    # Thinking is minimized here, not disabled — these calls do bill thoughts.
+    return ThinkingConfig(thinking_level="low")
 
 
 def flex_http_options(service_tier: "str | None") -> "HttpOptions | None":

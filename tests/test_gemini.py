@@ -13,12 +13,21 @@ import pytest
 
 import utils.gemini as gemini_mod
 from utils.gemini import (
+    PRO_THINKING_BUDGET,
+    _gemini_version,
     _is_internal,
     _is_rate_limit,
     _is_unavailable,
     flex_http_options,
     generate_with_retry,
     get_client,
+    thinking_config_for,
+)
+from utils.models import (
+    DEFAULT_NER_MODEL,
+    DEFAULT_OCR_MODEL,
+    DEFAULT_PROMPT_MODEL,
+    FALLBACK_MODEL,
 )
 
 
@@ -240,3 +249,93 @@ def test_get_client_required_exits_without_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     with pytest.raises(SystemExit):
         get_client()
+
+
+# --- thinking configuration -------------------------------------------------
+#
+# The table in thinking_config_for()'s docstring is the measured contract. These
+# tests pin the three cells that bite, so a model bump fails here rather than
+# either 400-ing every call or silently billing thinking tokens.
+
+
+def _level(cfg) -> "str | None":
+    """The thinking level as a lowercase string.
+
+    The SDK coerces the string we pass into a ThinkingLevel enum whose value is
+    uppercase ("MINIMAL"), so comparing against the spelling in the API docs
+    needs normalizing.
+    """
+    lvl = cfg.thinking_level
+    return None if lvl is None else str(getattr(lvl, "value", lvl)).lower()
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("gemini-2.0-flash", (2, 0)),
+        ("gemini-2.5-flash-lite", (2, 5)),
+        ("gemini-3-flash-preview", (3, 0)),
+        ("gemini-3.5-flash-lite", (3, 5)),
+        ("gemini-3.8-flash", (3, 8)),
+        ("gemini-flash-lite-latest", None),
+    ],
+)
+def test_gemini_version_parsing(model, expected):
+    assert _gemini_version(model) == expected
+
+
+def test_pro_models_keep_a_positive_budget():
+    """Pro tiers reject any request to disable thinking, so they get a cap."""
+    cfg = thinking_config_for("gemini-3.5-pro")
+    assert cfg.thinking_budget == PRO_THINKING_BUDGET
+    assert _level(cfg) is None
+
+
+def test_2x_models_use_the_budget_sentinel():
+    """thinking_budget=0 is the only spelling 2.x accepts, and it is honored."""
+    cfg = thinking_config_for("gemini-2.5-flash-lite")
+    assert cfg.thinking_budget == 0
+    assert _level(cfg) is None
+
+
+@pytest.mark.parametrize("model", ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"])
+def test_3x_lite_models_use_minimal(model):
+    """gemini-3.5-flash-lite 400s on thinking_budget=0 — 'minimal' replaced it.
+
+    This is the loud failure: it took out the OCR and NER defaults entirely.
+    """
+    cfg = thinking_config_for(model)
+    assert _level(cfg) == "minimal"
+    assert cfg.thinking_budget is None
+
+
+@pytest.mark.parametrize("model", ["gemini-3.7-flash", "gemini-3.8-flash"])
+def test_3x_non_lite_models_use_low_not_minimal(model):
+    """Non-lite 3.x flash rejects 'minimal' and ignores budget=0, thinking anyway.
+
+    This is the silent failure: budget=0 returned no error and 46-143 thought
+    tokens per call. 'low' is the cheapest setting these models honor.
+    """
+    cfg = thinking_config_for(model)
+    assert _level(cfg) == "low"
+    assert cfg.thinking_budget is None
+
+
+def test_unversioned_aliases_are_treated_as_newest():
+    """A moving alias gets the level vocabulary, not the retired sentinel."""
+    assert _level(thinking_config_for("gemini-flash-lite-latest")) == "minimal"
+    assert _level(thinking_config_for("gemini-flash-latest")) == "low"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [DEFAULT_OCR_MODEL, DEFAULT_NER_MODEL, DEFAULT_PROMPT_MODEL, FALLBACK_MODEL],
+)
+def test_every_configured_default_gets_a_usable_config(model):
+    """Guards the bump that broke this: a new default must resolve to a config
+    the API will actually accept, never to the sentinel a 3.x model rejects."""
+    cfg = thinking_config_for(model)
+    if cfg.thinking_budget is not None:
+        assert _gemini_version(model) < (3, 0) or "-pro" in model
+    else:
+        assert _level(cfg) in ("minimal", "low")

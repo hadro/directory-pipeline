@@ -174,7 +174,7 @@ STAGE_ARG_DEFS: dict[str, list[dict]] = {
     ],
     "extract_entries": [
         {"name": "aligned_model", "flag": "--ocr-model", "type": "str", "label": "Aligned model (OCR)",
-         "default": "", "placeholder": "e.g. gemini-3.1-flash-lite",
+         "default": "", "placeholder": "e.g. gemini-3.5-flash-lite",
          "hint": "OCR model whose *_aligned.json files to use for bounding boxes. Auto-detected from pipeline_state.json if omitted. Leave blank for text-only (no #xywh= in output)."},
         {"name": "ner_prompt",    "flag": "--ner-prompt",     "type": "str", "label": "NER prompt path",
          "default": "", "placeholder": "e.g. output/slug/ner_prompt.md",
@@ -318,7 +318,7 @@ def _init_db() -> None:
                 url        TEXT NOT NULL,
                 slug       TEXT,
                 output_dir TEXT,
-                model      TEXT NOT NULL DEFAULT 'gemini-3.1-flash-lite',
+                model      TEXT NOT NULL DEFAULT 'gemini-3.5-flash-lite',
                 added_at   TEXT DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS runs (

@@ -973,7 +973,7 @@ def main() -> None:
         help=(
             "Model slug used in entries CSV filename. "
             "Auto-detected from pipeline_state.json if omitted "
-            "(fallback default: gemini-3.1-flash-lite)."
+            f"(fallback default: {DEFAULT_OCR_MODEL})."
         ),
     )
     args = parser.parse_args()

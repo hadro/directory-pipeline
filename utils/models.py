@@ -15,18 +15,18 @@ from collections import Counter
 from pathlib import Path
 
 # Default model for Gemini OCR (--gemini-ocr) and downstream filename defaults.
-DEFAULT_OCR_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_OCR_MODEL = "gemini-3.5-flash-lite"
 
 # Default model for NER entry extraction (--extract-entries).
-DEFAULT_NER_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_NER_MODEL = "gemini-3.5-flash-lite"
 
 # More capable model for one-off generation/review tasks
 # (--generate-prompts, analysis/review_entries.py).
-DEFAULT_PROMPT_MODEL = "gemini-3-flash-preview"
+DEFAULT_PROMPT_MODEL = "gemini-3.7-flash"
 
 # Escalation target when the primary model exhausts its output budget on a
 # dense page (used by run_gemini_ocr.py and extract_entries.py).
-FALLBACK_MODEL = "gemini-3-flash-preview"
+FALLBACK_MODEL = "gemini-3.8-flash"
 
 
 def model_slug(model: str) -> str:

@@ -10,8 +10,8 @@ Schema
 {
     "source_url": "https://...",
     "slug": "ldpd_11290437_000",
-    "ocr_model": "gemini-3.1-flash-lite",
-    "ner_model": "gemini-3.1-flash-lite",
+    "ocr_model": "gemini-3.5-flash-lite",
+    "ner_model": "gemini-3.5-flash-lite",
     "stages_completed": ["download", "surya_ocr", "gemini_ocr", "align_ocr"],
     "last_run": "2026-05-31T14:22:00Z",
     "last_run_args": "main.py output/vol1 --gemini-ocr --flex"

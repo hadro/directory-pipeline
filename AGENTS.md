@@ -78,7 +78,15 @@ Full filename contract (who writes/reads every artifact, model auto-detection ru
 - **`--flex`** — Flex inference (`service_tier="flex"`): ~50% cheaper than standard pricing, with 1–15 min latency per request. Best for large volumes where real-time throughput isn't needed. Flex is **on by default** everywhere (`pipeline run`/`guided`/`ocr`/`extract` and `python main.py`) — pass `--no-flex` for time-sensitive runs. Only direct invocation of the leaf scripts (`pipeline/run_gemini_ocr.py`, `pipeline/extract_entries.py`) keeps `--flex` opt-in.
 - **Batch API** (not yet implemented) — Submit all pages as a single async job; 50% cheaper, up to 24-hour turnaround. Planned for future implementation.
 
-Default model is `gemini-3.1-flash-lite` for both OCR and NER (constants in `utils/models.py`). For higher accuracy use `--ocr-model gemini-2.0-flash`.
+Default model is `gemini-3.5-flash-lite` for both OCR and NER, with `gemini-3.7-flash` for
+prompt generation and `gemini-3.8-flash` as the dense-page fallback (constants in
+`utils/models.py`). For higher accuracy pass `--ocr-model gemini-3.7-flash`; `gemini-2.0-flash`
+was retired and returns 404 as of 2026-09-04.
+
+Changing a model default means checking `thinking_config_for()` in `utils/gemini.py` — 3.x
+lite models need `thinking_level="minimal"` rather than the `thinking_budget=0` sentinel,
+which they reject with a 400, and non-lite 3.x models take `"low"` as their floor. See that
+function's docstring and `tests/test_gemini.py`.
 
 ## Surya and alignment
 
