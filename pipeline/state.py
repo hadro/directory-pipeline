@@ -136,7 +136,7 @@ def add_usage(output_dir: Path, snapshot: dict, pages: int = 0) -> None:
     twice. ``last_run_args`` is left alone, so a usage write never displaces the
     invocation recorded by the stage itself.
     """
-    if not snapshot:
+    if not snapshot and not pages:
         return
     state = read_state(output_dir)
     totals = state.get("token_usage", {})

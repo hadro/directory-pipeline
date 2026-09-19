@@ -179,6 +179,20 @@ def usage_snapshot() -> "dict[str, dict[str, int]]":
         return {key: dict(counts) for key, counts in _usage.items()}
 
 
+def drain_usage() -> "dict[str, dict[str, int]]":
+    """Return everything recorded so far and clear the accumulator, atomically.
+
+    For callers that persist usage more than once in a run. Each drain yields
+    only what accrued since the last one, so a caller that *adds* each drain to
+    a running total never double-counts — which ``usage_snapshot()`` would, since
+    it reports cumulative totals every time.
+    """
+    with _usage_lock:
+        drained = {key: dict(counts) for key, counts in _usage.items()}
+        _usage.clear()
+    return drained
+
+
 def reset_usage() -> None:
     """Clear the accumulator (tests, and long-lived processes between runs)."""
     with _usage_lock:

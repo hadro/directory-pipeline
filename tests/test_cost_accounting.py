@@ -14,6 +14,7 @@ from google.genai.types import GenerateContentConfig
 import utils.gemini as gemini_mod
 from pipeline.state import add_usage, read_state
 from utils.gemini import (
+    drain_usage,
     flex_http_options,
     generate_with_retry,
     record_usage,
@@ -324,3 +325,70 @@ def test_retry_cap_respects_an_uncapped_run():
     page = "\n".join(f"line {i}" for i in range(200))
     assert _retry_cap([(page, "")], 0) == 0
     assert _retry_cap([(page, "")], None) is None
+
+
+# --- incremental persistence ------------------------------------------------
+#
+# A 365-page run takes hours on the flex tier. Writing usage only at the end
+# meant an interrupted run recorded nothing, and report_cost.py answered "no
+# token usage recorded yet" for the whole of a long run. Flushing periodically
+# is only safe if flushes add up instead of double-counting, which is what
+# drain_usage guarantees and what these pin.
+
+
+def test_drain_returns_everything_and_clears():
+    record_usage("m", _Response(_Usage(prompt=10, candidates=2)))
+    drained = drain_usage()
+    assert drained["m|standard|initial"]["input"] == 10
+    assert usage_snapshot() == {}
+
+
+def test_drain_yields_only_what_accrued_since_the_last_one():
+    record_usage("m", _Response(_Usage(prompt=10)))
+    first = drain_usage()
+    record_usage("m", _Response(_Usage(prompt=5)))
+    second = drain_usage()
+    assert first["m|standard|initial"]["input"] == 10
+    assert second["m|standard|initial"]["input"] == 5, "a drain must not repeat earlier usage"
+
+
+def test_periodic_flushes_sum_to_the_single_end_of_run_total(tmp_path):
+    """Three flushes of a nine-call run must record exactly nine calls.
+
+    This is the property that makes incremental writing safe. Using
+    usage_snapshot() here instead of drain_usage() would record 3 + 6 + 9 = 18.
+    """
+    for batch in range(3):
+        for _ in range(3):
+            record_usage("m", _Response(_Usage(prompt=100, candidates=10)))
+        add_usage(tmp_path, drain_usage(), pages=3)
+
+    totals = read_state(tmp_path)["token_usage"]["m|standard|initial"]
+    assert totals["calls"] == 9
+    assert totals["input"] == 900
+    assert read_state(tmp_path)["token_usage_pages"] == 9
+
+
+def test_a_flush_with_no_new_usage_still_records_pages(tmp_path):
+    """Pages and calls do not always arrive together — a page can be skipped or
+    blank. Dropping the write when the snapshot is empty lost the page count."""
+    add_usage(tmp_path, {}, pages=4)
+    assert read_state(tmp_path)["token_usage_pages"] == 4
+
+
+def test_an_empty_flush_writes_nothing(tmp_path):
+    add_usage(tmp_path, {}, pages=0)
+    assert not (tmp_path / "pipeline_state.json").exists()
+
+
+def test_interrupted_run_keeps_what_it_already_flushed(tmp_path):
+    """The finally-guard case: usage flushed before the interruption survives."""
+    for _ in range(25):
+        record_usage("m", _Response(_Usage(prompt=100, candidates=10)))
+    add_usage(tmp_path, drain_usage(), pages=25)          # periodic flush
+    record_usage("m", _Response(_Usage(prompt=100)))      # then the run dies
+    add_usage(tmp_path, drain_usage(), pages=1)           # finally-guard flush
+
+    totals = read_state(tmp_path)["token_usage"]["m|standard|initial"]
+    assert totals["calls"] == 26
+    assert read_state(tmp_path)["token_usage_pages"] == 26

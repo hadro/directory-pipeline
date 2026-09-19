@@ -59,8 +59,8 @@ from utils.gemini import (
     flex_http_options,
     generate_with_retry,
     get_client,
+    drain_usage,
     thinking_config_for,
-    usage_snapshot,
 )
 from pipeline.state import add_usage, find_state_dir, record_stage
 from utils.models import DEFAULT_NER_MODEL, FALLBACK_MODEL, model_slug
@@ -1460,6 +1460,25 @@ def main() -> None:
     )
 
     extracted = 0
+    state_dir = find_state_dir(output_root)
+
+    def _flush_usage() -> None:
+        """Persist usage accrued since the last flush. Safe to call repeatedly.
+
+        Flushed per item rather than once at the end, so an interrupted
+        multi-volume run keeps the record of what it already spent. Each flush
+        drains the accumulator, so flushes add rather than double-count.
+
+        ``pages`` is deliberately not passed. token_usage_pages counts pages
+        sent to the API by the OCR stage; this stage iterates *items*, and
+        adding item counts to it would silently corrupt the per-page figure
+        report_cost.py derives. Extraction's cost still lands in the totals, so
+        cost-per-page stays a true end-to-end number over OCR'd pages.
+        """
+        drained = drain_usage()
+        if drained:
+            add_usage(state_dir, drained)
+
     for item_dir in item_dirs:
         # Per-item prompt: if the item dir has its own ner_prompt.md (written by
         # --generate-prompts per-volume), use it; otherwise use the resolved prompt.
@@ -1486,6 +1505,7 @@ def main() -> None:
                 f"  → {len(entries)} entries total → {csv_path}",
                 file=sys.stderr,
             )
+        _flush_usage()
 
     # Record the stage so a direct invocation updates pipeline_state.json the
     # same way an orchestrated run does (main.py is otherwise the only writer).
@@ -1493,7 +1513,7 @@ def main() -> None:
     # align_ocr: a run where every NER call failed must not leave the stage
     # stamped complete, since record_stage dedupes and never clears it.
     # Billed whatever the outcome — see the matching note in run_gemini_ocr.py.
-    add_usage(find_state_dir(output_root), usage_snapshot(), pages=extracted)
+    _flush_usage()
 
     if extracted:
         record_stage(find_state_dir(output_root), "extract_entries",

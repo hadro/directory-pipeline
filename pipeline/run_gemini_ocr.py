@@ -35,11 +35,11 @@ load_dotenv()
 from google.genai.types import FinishReason, GenerateContentConfig, MediaResolution, Part, ThinkingConfig
 
 from utils.gemini import (
+    drain_usage,
     flex_http_options,
     generate_with_retry,
     get_client,
     thinking_config_for,
-    usage_snapshot,
 )
 from utils.image_utils import is_blank_page
 from pipeline.state import add_usage, find_state_dir, record_stage
@@ -64,6 +64,15 @@ _HANDWRITING_KEYWORDS = ("handwrit", "manuscript", "cursive")
 # is roughly 2x headroom. Thinking tokens share this budget, so a "-pro" model
 # also spends PRO_THINKING_BUDGET from it (see utils/gemini.py).
 DEFAULT_MAX_OUTPUT_TOKENS = 24576
+
+# Persist token usage every this many billed pages, rather than once at the end.
+# A 365-page run takes over two hours on the flex tier, and writing only on
+# completion meant an interrupted or crashed run recorded nothing at all — the
+# spend still happened, the evidence of it did not. It also left `report_cost.py`
+# answering "no token usage recorded yet" for the whole of a long run, which is
+# exactly when you want to look. Each flush drains the accumulator, so flushes
+# add up rather than double-count.
+USAGE_FLUSH_EVERY = 25
 
 
 def _needs_high_res(prompt_text: str) -> bool:
@@ -794,34 +803,56 @@ def main() -> None:
     if fallback_model and not args.quiet:
         print(f"Fallback model (on exhaustion): {fallback_model}", file=sys.stderr)
 
-    with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        futures = {
-            executor.submit(process_image, client, img, args.model, img_prompts[img], media_resolution, service_tier, fallback_model, not args.no_blank_skip, args.max_output_tokens or None): img
-            for img in images
-        }
-        for future in as_completed(futures):
-            image_path = futures[future]
-            completed += 1
-            try:
-                status, _ = future.result()
-            except Exception as exc:  # noqa: BLE001
-                status = "failed"
-                _log(f"Warning: exception processing {image_path}: {exc}")
+    state_dir = find_state_dir(output_root)
+    pending_pages = 0
 
-            counts[status] += 1
+    def _flush_usage() -> None:
+        """Persist usage accrued since the last flush. Safe to call repeatedly."""
+        nonlocal pending_pages
+        drained = drain_usage()
+        if drained or pending_pages:
+            add_usage(state_dir, drained, pages=pending_pages)
+            pending_pages = 0
 
-            if not args.quiet:
-                txt_name = f"{image_path.stem}_{model_slug(args.model)}.txt"
-                if status == "skipped":
-                    _log(f"[{completed:04d}/{total}] Skipped (exists): {txt_name}")
-                elif status == "blank":
-                    _log(f"[{completed:04d}/{total}] Blank page — no OCR: {image_path.name}")
-                elif status == "empty":
-                    _log(f"[{completed:04d}/{total}] Empty response — nothing written: {image_path.name}")
-                elif status == "ok":
-                    _log(f"[{completed:04d}/{total}] Done: {txt_name}")
-                else:
-                    _log(f"[{completed:04d}/{total}] FAILED: {image_path.name}")
+    try:
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            futures = {
+                executor.submit(process_image, client, img, args.model, img_prompts[img], media_resolution, service_tier, fallback_model, not args.no_blank_skip, args.max_output_tokens or None): img
+                for img in images
+            }
+            for future in as_completed(futures):
+                image_path = futures[future]
+                completed += 1
+                try:
+                    status, _ = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    status = "failed"
+                    _log(f"Warning: exception processing {image_path}: {exc}")
+
+                counts[status] += 1
+
+                # Only pages that actually called the API are billed pages.
+                if status in ("ok", "failed"):
+                    pending_pages += 1
+                    if pending_pages >= USAGE_FLUSH_EVERY:
+                        _flush_usage()
+
+                if not args.quiet:
+                    txt_name = f"{image_path.stem}_{model_slug(args.model)}.txt"
+                    if status == "skipped":
+                        _log(f"[{completed:04d}/{total}] Skipped (exists): {txt_name}")
+                    elif status == "blank":
+                        _log(f"[{completed:04d}/{total}] Blank page — no OCR: {image_path.name}")
+                    elif status == "empty":
+                        _log(f"[{completed:04d}/{total}] Empty response — nothing written: {image_path.name}")
+                    elif status == "ok":
+                        _log(f"[{completed:04d}/{total}] Done: {txt_name}")
+                    else:
+                        _log(f"[{completed:04d}/{total}] FAILED: {image_path.name}")
+    finally:
+        # Runs on Ctrl-C and on an unhandled error too: the calls were billed
+        # whether or not the run reached its end.
+        _flush_usage()
 
     if not args.quiet:
         print(
@@ -837,12 +868,6 @@ def main() -> None:
     # Gated on there being no failures, not merely one success: recording the
     # stage complete after 1 of 83 pages made a 1%-finished run indistinguishable
     # from a clean one, and main.py trusts this file.
-    # Token usage is recorded whatever the outcome — a failed page's calls were
-    # billed just the same, and the retry ladder is exactly the cost an estimate
-    # cannot see. This is deliberately outside the success gate below.
-    add_usage(find_state_dir(output_root), usage_snapshot(),
-              pages=counts["ok"] + counts["failed"])
-
     if counts["ok"] and not counts["failed"]:
         record_stage(find_state_dir(output_root), "gemini_ocr",
                      updates={"ocr_model": args.model})
