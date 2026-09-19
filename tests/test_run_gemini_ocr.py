@@ -317,3 +317,28 @@ def test_empty_first_response_writes_nothing_and_reports_empty(page):
     assert status == "empty"
     assert not (page.parent / "0001_page_gemini-3.1-flash-lite.txt").exists()
     assert len(client.calls) == 1, "an empty response must not start the ladder"
+
+
+def test_a_wholly_blocked_page_still_reaches_the_simple_prompt(page):
+    """RECITATION on every attempt must not skip the rungs written for it.
+
+    A blocked response carries no text, so candidates hold only empty strings and
+    best() returns ("", ""). Guarding the simple-prompt and escalation rungs on
+    `if kind:` therefore read false and failed the page having tried nothing but
+    temperature — which is how two of eight 1869 Rowell validation pages failed.
+    """
+    from google.genai.types import FinishReason
+
+    # Blocked on the initial call and all three temperatures, then the simple
+    # prompt gets through — the sequence two Rowell pages actually produced.
+    client = _Recorder(
+        [("", FinishReason.RECITATION), "", "", "", "A clean transcription of the page."]
+    )
+
+    status, _ = _run(client, page, service_tier="flex", max_output_tokens=24576,
+                     fallback_model="gemini-3.8-flash")
+
+    assert status != "failed", "the simple-prompt rung should have rescued this page"
+    prompts = [c["config"].system_instruction for c in client.calls]
+    assert any("Transcribe all text on this page exactly" in (p or "") for p in prompts), \
+        "expected the simple fallback prompt to be tried"

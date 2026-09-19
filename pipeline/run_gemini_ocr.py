@@ -498,7 +498,15 @@ def process_image(
         # Strategy 1: simple prompt — complex prompts can themselves trigger
         # recitation on visually dense pages, and empirically this is the rung
         # that actually rescues repetition loops.
-        if kind:
+        #
+        # Guarded on "no usable output yet", not on "best candidate is flawed".
+        # A page blocked for RECITATION on every attempt has only empty
+        # candidates, so best() returns ("", "") and a `if kind:` guard reads
+        # false — skipping this rung and the escalation below, and failing the
+        # page having tried nothing but temperature. That is the exact case this
+        # rung was written for. Found on the 1869 Rowell select lists, where two
+        # of eight validation pages failed this way.
+        if kind or not text:
             for temp in (0.3, 0.7):
                 _log(f"  Trying simple fallback prompt at temperature={temp}: {image_path.name}")
                 simple_text = call(_SIMPLE_FALLBACK_PROMPT, temp, reason=f"simple:{kind}",
@@ -512,8 +520,9 @@ def process_image(
             text, kind = best()
 
         # Strategy 2: model escalation — a larger model handles layout complexity
-        # that causes recitation in smaller ones.
-        if kind:
+        # that causes recitation in smaller ones. Same guard as above: a wholly
+        # blocked page must reach here too.
+        if kind or not text:
             esc_model = fallback_model
             if esc_model and esc_model != model:
                 _log(f"  Escalating to {esc_model}: {image_path.name}")
