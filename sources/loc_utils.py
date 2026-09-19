@@ -67,7 +67,7 @@ def _fetch_loc_title(item_path: str) -> str:
             return str(v[0]).strip() if v else ""
         return str(v).strip() if v else ""
     except Exception as exc:  # noqa: BLE001
-        print(f"Warning: could not fetch LoC title for {item_id}: {exc}", file=sys.stderr)
+        print(f"Warning: could not fetch LoC title for {item_path}: {exc}", file=sys.stderr)
         return ""
 
 

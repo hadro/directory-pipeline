@@ -166,8 +166,8 @@ def main() -> int:
         return 1
 
     print(f"Rates: utils/models.py MODEL_RATES, checked {RATES_CHECKED}. "
-          f"Thinking tokens bill at the output rate.")
-    print(f"Tiers: " + ", ".join(f"{t} x{m}" for t, m in sorted(TIER_MULTIPLIERS.items())))
+          "Thinking tokens bill at the output rate.")
+    print("Tiers: " + ", ".join(f"{t} x{m}" for t, m in sorted(TIER_MULTIPLIERS.items())))
     print()
 
     combined: dict = {}

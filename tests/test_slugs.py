@@ -160,3 +160,32 @@ def test_load_targets_csv_passthrough(tmp_path):
     f = tmp_path / "items.csv"
     f.write_text("item_id,item_title\n1,x\n", encoding="utf-8")
     assert main.load_targets(str(f)) == [str(f)]
+
+
+# --- _fetch_loc_title error path ---
+
+def test_fetch_loc_title_warns_and_returns_empty_when_the_api_fails(monkeypatch, capsys):
+    """A network failure must degrade to a warning, not raise.
+
+    The except branch interpolated `item_id` after the parameter was renamed to
+    `item_path`, so every failure raised NameError from inside the handler —
+    turning a recoverable miss into a crash, and masking the original error.
+    Nothing exercised this path, so ruff's F821 was the only thing that saw it.
+    """
+    def _boom(*_a, **_kw):
+        raise OSError("network down")
+
+    monkeypatch.setattr(loc_utils.requests, "get", _boom)
+    assert loc_utils._fetch_loc_title("sn82007064") == ""
+    assert "sn82007064" in capsys.readouterr().err
+
+
+def test_fetch_loc_title_reports_the_full_sub_resource_path(monkeypatch, capsys):
+    """The warning should name what was actually requested, sub-resource and all."""
+    def _boom(*_a, **_kw):
+        raise OSError("network down")
+
+    path = "sn82007064/resource/gdc.sn82007064_1869"
+    monkeypatch.setattr(loc_utils.requests, "get", _boom)
+    assert loc_utils._fetch_loc_title(path) == ""
+    assert path in capsys.readouterr().err
