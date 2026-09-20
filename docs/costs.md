@@ -112,6 +112,18 @@ The `--geocode` stage uses Nominatim (free, city-level accuracy) by default. Set
 
 The stages that use significant compute are **Surya OCR** (`--surya-ocr`, `--surya-detect`, `--review-alignment`). Gemini API stages are network-bound and run equally fast everywhere.
 
+> **The table below is unverified for dense directory material and was wrong by
+> roughly 30x on the one volume anyone has timed.** The 1869 Rowell directory
+> (373 pages, M-series Mac, `--batch-size 4`) took about **6 hours of active
+> compute at ~1 page/minute**, measured from output file timestamps, against the
+> 5–8 minutes per 200 pages below. The cause is not established. Line density is
+> a plausible contributor but not sufficient on its own: those pages carry a
+> median of 143 Surya lines against 80 for a Green Book page, under 2x.
+>
+> Until someone re-times it, plan Surya as an overnight job for anything
+> line-dense. It resumes cleanly — pages with an existing `*_surya.json` are
+> skipped — so an interrupted run costs nothing but the wall-clock already spent.
+
 | Platform | Cost | Surya OCR (200 pages) | Notes |
 |---|---|---|---|
 | **Mac (M-series, 16 GB+)** | $0 (electricity) | 5–8 min (MPS, `--batch-size 4`) | Good for development and single-volume runs |
