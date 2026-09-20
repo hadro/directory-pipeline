@@ -34,6 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.state import read_state  # noqa: E402
+from utils.collections import eval_collections, summarize_exclusions  # noqa: E402
 from utils.models import (  # noqa: E402
     MODEL_RATES,
     RATES_CHECKED,
@@ -44,11 +45,23 @@ from utils.models import (  # noqa: E402
 _FIELDS = ("calls", "input", "output", "thoughts", "cached")
 
 
-def find_volumes(root: Path) -> "list[Path]":
-    """Directories under *root* (or *root* itself) holding a pipeline_state.json."""
+def find_volumes(root: Path, all_collections: bool = False) -> "tuple[list[Path], str]":
+    """Volumes under *root* holding a pipeline_state.json, minus test collections.
+
+    Returns ``(volumes, note)`` where *note* names what was excluded, so a
+    dropped collection is never silent. A path pointing straight at one volume
+    is always honoured — the registry governs corpus-wide sweeps, not a
+    deliberate request for one directory.
+    """
     if (root / "pipeline_state.json").exists():
-        return [root]
-    return sorted(p.parent for p in root.rglob("pipeline_state.json"))
+        return [root], ""
+    if all_collections:
+        return sorted(p.parent for p in root.rglob("pipeline_state.json")), ""
+    kept, dropped = eval_collections(root)
+    keep_names = {d.name for d in kept}
+    vols = [p.parent for p in sorted(root.rglob("pipeline_state.json"))
+            if any(part in keep_names for part in p.parts)]
+    return vols, summarize_exclusions(dropped)
 
 
 def usage_for(volume: Path) -> "dict[str, dict[str, int]]":
@@ -149,6 +162,9 @@ def main() -> int:
     ap.add_argument("path", type=Path, help="A volume directory, or a root to search")
     ap.add_argument("--by-model", action="store_true",
                     help="Aggregate across volumes instead of listing each one")
+    ap.add_argument("--all-collections", action="store_true",
+                    help="Include source probes, evidence slices and test collections "
+                         "that analysis/collection_registry.txt normally excludes")
     ap.add_argument("--by-reason", action="store_true",
                     help="Break each volume down by what provoked the call "
                          "(initial, temp:recitation, simple:block_loop, escalate:…)")
@@ -160,7 +176,7 @@ def main() -> int:
         print(f"Error: no such path: {args.path}", file=sys.stderr)
         return 1
 
-    volumes = find_volumes(args.path)
+    volumes, exclusion_note = find_volumes(args.path, args.all_collections)
     if not volumes:
         print(f"No pipeline_state.json found under {args.path}", file=sys.stderr)
         return 1
@@ -168,6 +184,8 @@ def main() -> int:
     print(f"Rates: utils/models.py MODEL_RATES, checked {RATES_CHECKED}. "
           "Thinking tokens bill at the output rate.")
     print("Tiers: " + ", ".join(f"{t} x{m}" for t, m in sorted(TIER_MULTIPLIERS.items())))
+    if exclusion_note:
+        print(exclusion_note)
     print()
 
     combined: dict = {}

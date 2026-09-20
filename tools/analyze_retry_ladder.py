@@ -56,6 +56,10 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from utils.collections import classify  # noqa: E402
+
 # Message prefix -> _output_issue kind. Order matters: the first match wins.
 _KIND_PATTERNS = [
     ("RECITATION", "recitation"),
@@ -225,12 +229,20 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument("paths", type=Path, nargs="+",
                     help="Log files, or directories of them")
+    ap.add_argument("--all-collections", action="store_true",
+                    help="Include logs from collections that "
+                         "analysis/collection_registry.txt normally excludes")
     args = ap.parse_args()
 
     files: "list[Path]" = []
     for p in args.paths:
         if p.is_dir():
-            files.extend(sorted(p.rglob("*.txt")) + sorted(p.rglob("*.log")))
+            found = sorted(p.rglob("*.txt")) + sorted(p.rglob("*.log"))
+            if not args.all_collections:
+                # A log inside a test collection describes a test, not the corpus.
+                found = [f for f in found
+                         if all(classify(part)[0] for part in f.relative_to(p).parts[:-1])]
+            files.extend(found)
         elif p.exists():
             files.append(p)
         else:
