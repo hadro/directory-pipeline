@@ -81,6 +81,15 @@ ADDRESS_SUFFIX = ("_address",)
 NEVER_IDENTITY = frozenset({
     "section_name", "category_name", "subsection_name", "state_name",
     "city_name", "region_name", "country_name", "column_name",
+    # A context field named after the *set* an entry belongs to, not the entry.
+    # The 1869 Rowell classified lists carried `list_name` ("A LIST OF RELIGIOUS
+    # NEWSPAPERS AND PERIODICALS") and its index carried `index_name`; both sort
+    # before `publication_name`, so _first_field took them and every entry on the
+    # page tried to match the page's own caption. 2,468 of 3,034 entries across
+    # three sections went unplaced — the same heading steal `category` caused in
+    # the Green Books, through a field name nobody had thought to guard.
+    "list_name", "index_name", "group_name", "heading_name",
+    "series_name", "volume_name", "collection_name", "table_name",
 })
 
 # Score below which a line is not considered a match at all.

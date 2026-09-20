@@ -392,3 +392,50 @@ class TestIdentityVariants:
                     "category": "SUMMER RESORTS"}]
         b = bind_entries(entries, [line("SUMMER RESORTS")], canvas_width=2400)
         assert b[0].line_index is None
+
+
+# --- context fields named after the set, not the entry ----------------------
+#
+# entry_binding treats any field ending `_name` as the entry's own identity, and
+# identity_text takes the FIRST populated one in dict order. The 1869 Rowell
+# classified lists carried `list_name` ("A LIST OF RELIGIOUS NEWSPAPERS AND
+# PERIODICALS") and its index carried `index_name`; both sort before
+# `publication_name`, so every entry on a page claimed the page's own caption as
+# its identity and tried to match the heading line. 2,468 of 3,034 entries went
+# unplaced across three sections.
+#
+# That is the same heading steal `category` caused in the Green Books, reached
+# through a field name nobody had thought to guard.
+
+@pytest.mark.parametrize("context_field", [
+    "list_name", "index_name", "group_name", "heading_name",
+    "series_name", "volume_name", "collection_name", "table_name",
+])
+def test_a_set_name_never_supplies_the_identity(context_field):
+    entry = {
+        context_field: "A LIST OF RELIGIOUS NEWSPAPERS AND PERIODICALS",
+        "state_or_province": "NEW YORK",
+        "town": "New York",
+        "publication_name": "Examiner and Chronicle",
+    }
+    assert identity_text(entry) == "Examiner and Chronicle"
+
+
+def test_the_guard_holds_when_the_context_field_sorts_first():
+    """Order is what made this bite: _first_field takes the first match, and a
+    dict built from a prompt lists context before the entry's own fields."""
+    entry = {"list_name": "A LIST OF DAILY PAPERS", "publication_name": "Herald"}
+    assert list(entry)[0] == "list_name", "guard is meaningless if order changes"
+    assert identity_text(entry) == "Herald"
+
+
+def test_an_entry_with_only_a_set_name_has_no_identity():
+    """Refusing beats binding every entry on the page to its own heading."""
+    assert identity_text({"list_name": "A LIST OF RELIGIOUS NEWSPAPERS"}) == ""
+
+
+def test_a_genuine_name_field_still_qualifies():
+    """The suffix rule must keep working — firm_name/ship_name/publication_name
+    are what it exists for."""
+    for field in ("publication_name", "firm_name", "ship_name", "town_name"):
+        assert identity_text({field: "Examiner and Chronicle"}) == "Examiner and Chronicle"
