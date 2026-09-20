@@ -1131,10 +1131,16 @@ def process_item(
         for i, txt_path in enumerate(txt_files):
             canvas_uri = _stem_to_canvas.get(txt_path.stem[: -len(txt_suffix)], "")
             page_prompt = system_prompt
+            page_section = ""
             if sections and all_files:
-                from utils.section_utils import is_section_boundary, prompt_for_page
+                from utils.section_utils import (
+                    is_section_boundary,
+                    prompt_for_page,
+                    section_for_page,
+                )
                 stem = txt_path.stem[: -len(f"_{aligned_slug}")]
                 img_name = f"{stem}.jpg"
+                page_section = section_for_page(img_name, sections, all_files) or ""
                 if is_section_boundary(img_name, sections, all_files):
                     context = {}
                     if not quiet:
@@ -1156,7 +1162,11 @@ def process_item(
                 ctx_str = " > ".join(str(v) for v in ctx.values()) if ctx else "?"
                 _log(f"  [{i + 1:03d}/{len(txt_files)}] {txt_path.name}  {status}  {n} entries  [{ctx_str}]")
             context = ctx
-            all_entries.extend(result.get("entries", []))
+            page_entries = result.get("entries", [])
+            if page_section:
+                for entry in page_entries:
+                    entry.setdefault("section", page_section)
+            all_entries.extend(page_entries)
             if not dry_run:
                 context_file.write_text(json.dumps(context, ensure_ascii=False), encoding="utf-8")
         return all_entries
@@ -1186,9 +1196,11 @@ def process_item(
             page_force = True
 
         page_prompt = system_prompt
+        page_section = ""
         if sections and all_files:
-            from utils.section_utils import is_section_boundary, prompt_for_page
+            from utils.section_utils import is_section_boundary, prompt_for_page, section_for_page
             img_name = f"{stem}.jpg"
+            page_section = section_for_page(img_name, sections, all_files) or ""
             if is_section_boundary(img_name, sections, all_files):
                 context = {}
                 if not quiet:
@@ -1213,7 +1225,18 @@ def process_item(
             _log(f"  [{i:03d}/{len(aligned_files)}] {aligned_path.name}  {status}  {n} entries  [{ctx_str}]")
 
         context = ctx
-        all_entries.extend(result.get("entries", []))
+        page_entries = result.get("entries", [])
+        if page_section:
+            # Which structural section of the volume this entry came from. A
+            # combined CSV is the union of every section's schema — 54 columns
+            # for the 1869 Rowell volume, 39 of them populated on under 20% of
+            # rows — so without this the only way to tell a gazetteer row from
+            # an advertisement is to guess from page number ranges. Recorded
+            # only when sections.txt exists; single-section volumes are
+            # unchanged.
+            for entry in page_entries:
+                entry.setdefault("section", page_section)
+        all_entries.extend(page_entries)
 
         # Persist context so runs can be resumed
         if not dry_run:

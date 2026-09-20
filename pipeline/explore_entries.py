@@ -499,6 +499,68 @@ def _safe_json(obj: object) -> str:
     return s.replace("</script>", r"<\/script>").replace("<!--", r"<\!--")
 
 
+# Section column written by extract_entries when a volume has a sections.txt.
+SECTION_FIELD = "section"
+
+
+def _group_by_section(rows: "list[dict]") -> "dict[str, dict]":
+    """Split a volume's rows by structural section, each with its own facets.
+
+    A combined CSV is the union of every section's schema — 54 columns for the
+    1869 Rowell volume, 39 of them populated on under 20% of rows, because a
+    gazetteer row and an advertisement row share almost nothing. Grouping gives
+    each section its own column set and its own fill rates, so a field that is
+    universal within its section stops looking sparse against the whole volume
+    and can be offered as a facet.
+
+    Returns {} for a volume with no section column or only one section, which
+    leaves single-section volumes exactly as they were.
+    """
+    if not rows or SECTION_FIELD not in rows[0]:
+        return {}
+    groups: "dict[str, list[dict]]" = {}
+    for row in rows:
+        label = (row.get(SECTION_FIELD) or "").strip()
+        if label:
+            groups.setdefault(label, []).append(row)
+    if len(groups) < 2:
+        return {}
+    # Preserve the order sections appear in the volume rather than alphabetical:
+    # it is the order of the book.
+    seen: "list[str]" = []
+    for row in rows:
+        label = (row.get(SECTION_FIELD) or "").strip()
+        if label and label not in seen:
+            seen.append(label)
+    # Carry the column set and a count, not the rows: every row already holds
+    # its own `section`, so the template filters the volume's rows rather than
+    # receiving a second copy of them. Embedding both doubled the 1869 Rowell
+    # explorer to 42 MB for no added information.
+    return {
+        label: {"field_meta": _section_field_meta(groups[label]),
+                "count": len(groups[label])}
+        for label in seen
+    }
+
+
+def _section_field_meta(rows: "list[dict]") -> "list[dict]":
+    """Field metadata for one section, minus the columns it never populates.
+
+    Rows keep every key of the combined CSV — they came from one DictReader —
+    so classifying them directly returns all 54 fields and the section table
+    still renders 40 empty columns. The template drives its columns from
+    field_meta, so trimming here is enough; the row objects stay shared with the
+    volume-wide view rather than being copied, which keeps the embedded JSON the
+    same size.
+    """
+    meta = _classify_fields(rows)
+    populated = {
+        f["name"] for f in meta
+        if any((r.get(f["name"]) or "").strip() for r in rows)
+    }
+    return [f for f in meta if f["name"] in populated or f.get("type") == "id"]
+
+
 def build_html(
     rows: list[dict],
     field_meta: list[dict],
@@ -518,7 +580,8 @@ def build_html(
         title_json_safe  = title.replace('"', '&quot;'),
         doc_meta_json    = _safe_json(doc_meta or {}),
         volumes_json     = _safe_json(
-            {k: {"rows": list(v["rows"]), "field_meta": v["field_meta"], "doc_meta": v.get("doc_meta", {})}
+            {k: {"rows": list(v["rows"]), "field_meta": v["field_meta"],
+                 "doc_meta": v.get("doc_meta", {}), "sections": v.get("sections", {})}
              for k, v in (volumes or {}).items()}
         ),
         viewer_url_json  = _safe_json(viewer_url),
@@ -670,9 +733,11 @@ def main() -> None:
             label: str = meta.get("title") or item_dir.name
             if label in volumes:
                 label = f"{label} ({item_dir.name})"
-            volumes[label] = {"rows": vol_rows, "field_meta": _classify_fields(vol_rows), "doc_meta": meta}
+            volumes[label] = {"rows": vol_rows, "field_meta": _classify_fields(vol_rows),
+                              "doc_meta": meta, "sections": _group_by_section(vol_rows)}
         else:
-            volumes[p.stem] = {"rows": vol_rows, "field_meta": _classify_fields(vol_rows)}
+            volumes[p.stem] = {"rows": vol_rows, "field_meta": _classify_fields(vol_rows),
+                               "sections": _group_by_section(vol_rows)}
 
     if collection_mode:
         volumes = dict(sorted(volumes.items(), key=lambda x: x[0].lower()))
@@ -743,8 +808,12 @@ def main() -> None:
         or (f"{viewer_url}/manifest.json" if viewer_url else "")
     )
 
+    # Hand the per-volume payload to the template for a collection, and also for
+    # a single volume that has sections — the section selector reads VOLUMES, so
+    # withholding it left a one-volume sectioned explorer with nothing to switch.
+    _has_sections = any(v.get("sections") for v in volumes.values())
     html = build_html(rows, field_meta, canvas_map, title, doc_meta,
-                      volumes=volumes if collection_mode else None,
+                      volumes=volumes if (collection_mode or _has_sections) else None,
                       viewer_url=viewer_url,
                       manifest_url=manifest_url,
                       full_page_thumbs=args.full_page_thumbs)

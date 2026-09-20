@@ -20,6 +20,7 @@ a {{ color: #1a6ebd; }}
 #sidebar-header .sub {{ font-size: 12px; color: #595959; }}
 #volume-wrap {{ margin-top: 10px; display: none; background: #eef3fb; border: 1px solid #5a86b8; border-radius: 5px; padding: 8px 10px; }}
 #volume-select {{ width: 100%; font-size: 12px; padding: 4px 6px; border: 1px solid #767676; border-radius: 4px; background: #fff; color: #333; cursor: pointer; }}
+#section-select {{ width: 100%; font-size: 12px; padding: 4px 6px; border: 1px solid #767676; border-radius: 4px; background: #fff; color: #333; cursor: pointer; }}
 #sidebar-scroll {{ overflow-y: auto; flex: 1; padding: 10px 14px 20px; }}
 
 .facet-group {{ margin-bottom: 14px; }}
@@ -175,8 +176,12 @@ tbody tr.selected .detail-btn {{ color: #1a6ebd; }}
     <h2 id="doc-title"></h2>
     <div class="sub" id="doc-sub"></div>
     <div id="volume-wrap">
-      <label for="volume-select" style="display:block;font-size:11px;color:#595959;margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">Select volume</label>
+      <label id="volume-label" for="volume-select" style="display:block;font-size:11px;color:#595959;margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">Select volume</label>
       <select id="volume-select"></select>
+      <div id="section-wrap" style="display:none;margin-top:8px;">
+        <label for="section-select" style="display:block;font-size:11px;color:#595959;margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">Section</label>
+        <select id="section-select"></select>
+      </div>
     </div>
   </div>
   <div id="sidebar-scroll">
@@ -332,6 +337,63 @@ function loadVolume(label) {{
   activeManifestUrl = currentDocMeta.manifest_url || MANIFEST_URL;
   renderMetaStrip(currentDocMeta);
   renderFillRate();
+  populateSections(label);
+}}
+
+// ── Sections within a volume ────────────────────────────────────────────────
+// A combined CSV is the union of every section's schema, so most columns are
+// empty on most rows: 54 columns for the 1869 Rowell volume, but 8-19 once you
+// look at one section. Each section carries its own field_meta, so switching
+// rebuilds the column set and the facets rather than filtering a wide table.
+let currentVolumeLabel = null;
+
+function populateSections(volLabel) {{
+  currentVolumeLabel = volLabel;
+  const vol = VOLUMES[volLabel] || {{}};
+  const sections = vol.sections || {{}};
+  const names = Object.keys(sections);
+  const wrap = document.getElementById("section-wrap");
+  const sel = document.getElementById("section-select");
+  if (!wrap || !sel) return;
+  sel.innerHTML = "";
+  if (names.length < 2) {{ wrap.style.display = "none"; return; }}
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = "All sections  (" + (vol.rows || []).length.toLocaleString() + ")";
+  sel.appendChild(all);
+  names.forEach(name => {{
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name + "  (" + (sections[name].count || 0).toLocaleString() + ")";
+    sel.appendChild(opt);
+  }});
+  wrap.style.display = "block";
+}}
+
+function loadSection(secLabel) {{
+  const vol = VOLUMES[currentVolumeLabel];
+  if (!vol) return;
+  const sec = secLabel && vol.sections ? vol.sections[secLabel] : null;
+  // Rows are stored once, on the volume; a section is a column set plus a
+  // filter over them.
+  ALL_ENTRIES = sec ? vol.rows.filter(r => r.section === secLabel) : vol.rows;
+  const meta = sec ? sec.field_meta : vol.field_meta;
+  facetFields = meta.filter(f => f.type === "facet");
+  displayFields = meta.filter(f => f.type !== "id");
+  Object.keys(facetState).forEach(k => delete facetState[k]);
+  facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
+  searchQuery = "";
+  sortCol = null; sortDir = 1; selectedIdx = null; colFilters = {{}};
+  showAllFacets.clear();
+  document.getElementById("search").value = "";
+  document.getElementById("detail").classList.remove("open");
+  const shown = currentVolumeLabel + (secLabel ? " — " + secLabel : "");
+  document.getElementById("doc-title").textContent = shown;
+  document.getElementById("mobile-title").textContent = shown;
+  const n = ALL_ENTRIES.length.toLocaleString() + " entries";
+  document.getElementById("doc-sub").textContent = n;
+  document.getElementById("mobile-sub").textContent = n;
+  renderFillRate();
 }}
 
 // ── Volume selector ─────────────────────────────────────────────────────────
@@ -341,6 +403,12 @@ function loadVolume(label) {{
   const wrap = document.getElementById("volume-wrap");
   const sel  = document.getElementById("volume-select");
   wrap.style.display = "block";
+  // One volume with sections still wants the panel — for the section select.
+  if (volLabels.length < 2) {{
+    sel.style.display = "none";
+    const vlab = document.getElementById("volume-label");
+    if (vlab) vlab.style.display = "none";
+  }}
   volLabels.forEach(label => {{
     const opt = document.createElement("option");
     opt.value = label;
@@ -372,6 +440,12 @@ function loadVolume(label) {{
     document.getElementById("mobile-volume-select").value = sel.value;
     renderAll();
   }});
+
+  const ssel = document.getElementById("section-select");
+  if (ssel) {{
+    ssel.addEventListener("change", () => {{ loadSection(ssel.value); renderAll(); }});
+  }}
+  populateSections(volLabels[0]);
 }})();
 
 // ── Filtering ──────────────────────────────────────────────────────────────
