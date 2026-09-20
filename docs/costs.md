@@ -114,19 +114,26 @@ The stages that use significant compute are **Surya OCR** (`--surya-ocr`, `--sur
 
 > **The table below is unverified for dense directory material and was wrong by
 > roughly 30x on the one volume anyone has timed.** The 1869 Rowell directory
-> (373 pages, M-series Mac, `--batch-size 4`) took about **6 hours of active
-> compute at ~1 page/minute**, measured from output file timestamps, against the
-> 5–8 minutes per 200 pages below. The cause is not established. Line density is
-> a plausible contributor but not sufficient on its own: those pages carry a
-> median of 143 Surya lines against 80 for a Green Book page, under 2x.
+> (373 pages, **M2 MacBook Air**, `--batch-size 4`) took about **6 hours of
+> active compute at ~1 page/minute**, measured from output file timestamps,
+> against the 5–8 minutes per 200 pages below — a configuration the first row
+> nominally covers.
 >
-> Until someone re-times it, plan Surya as an overnight job for anything
-> line-dense. It resumes cleanly — pages with an existing `*_surya.json` are
-> skipped — so an interrupted run costs nothing but the wall-clock already spent.
+> Thermal throttling is the most likely explanation: an Air is fanless and this
+> was six hours of sustained GPU load. Line density is not sufficient on its own
+> — those pages carry a median of 143 Surya lines against 80 for a Green Book
+> page, under 2x. **On a machine with active cooling, an M-series Pro/Max, or a
+> discrete GPU, expect this stage to be unremarkable**; none of those have been
+> timed here.
+>
+> So: on a fanless laptop plan Surya as an overnight job, or move it to Colab
+> (`colab/ocr-align-review.ipynb`). It resumes cleanly — pages with an existing
+> `*_surya.json` are skipped — so an interrupted run costs only the wall-clock
+> already spent.
 
 | Platform | Cost | Surya OCR (200 pages) | Notes |
 |---|---|---|---|
-| **Mac (M-series, 16 GB+)** | $0 (electricity) | 5–8 min (MPS, `--batch-size 4`) | Good for development and single-volume runs |
+| **Mac (M-series, 16 GB+)** | $0 (electricity) | 5–8 min (MPS, `--batch-size 4`) — *but see the note above; an M2 Air measured ~1 page/min on dense pages* | Good for development and single-volume runs |
 | **Mac (8 GB)** | $0 | 10–15 min (MPS, `--batch-size 1–2`) | Works; reduce batch size if OOM errors occur |
 | **Google Colab (free T4)** | $0 | 2–3 min (CUDA, `--batch-size 8`) | Sessions expire; T4 not always available; `--review-alignment` requires a tunnel (e.g. ngrok) |
 | **Google Colab Pro** | $10/month | 1–2 min (T4/L4, `--batch-size 8`) | Reliable GPU access, longer sessions |
