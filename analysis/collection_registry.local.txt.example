@@ -1,0 +1,22 @@
+# Corpus-specific exclusions — copy to collection_registry.local.txt and edit.
+#
+# This file is gitignored. It names volumes in *your* output/ directory, so it
+# means nothing in anyone else's clone. The shared rules in
+# collection_registry.txt cover directories the pipeline generates by
+# convention; this covers judgements about particular material.
+#
+# Same format: <verb> <glob> <category> [# note]
+# Loaded after the shared file, so `include` here overrides an `exclude` there.
+
+# Manuscript material — pipeline tests, not directories. Handwriting and sparse
+# layouts give these alignment and OCR profiles nothing like a printed
+# directory's, so averaging them into a corpus figure describes neither.
+# exclude  copyright_ledgers_*            manuscript-test
+# exclude  frederick_douglass_papers_*    manuscript-test
+
+# Genres tried once. "deferred" rather than "rejected" when you may return:
+# flipping the line to `include` brings them back.
+# exclude  *language_of_flowers*          deferred
+
+# Carve one volume out of a shared rule:
+# include  ia_trow_1907_trowsgen          promoted to production

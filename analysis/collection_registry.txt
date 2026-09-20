@@ -1,66 +1,32 @@
-# Which collections under output/ count as evaluation data.
+# Which collections under output/ count as evaluation data — shared rules.
 #
-# This lives in the repo rather than beside the data: output/ is gitignored, so
-# a marker file there would vanish on a fresh clone and could never be reviewed
-# in a diff. Deciding what counts as evidence is a judgement, and judgements
-# belong in version control.
+# This file holds only rules that are true for anyone running this pipeline,
+# because the directories they match are ones the pipeline itself creates:
+# sources/ writes ia_*/nypl_*/loc_* probes, the evidence scripts write harvest_*,
+# and backup tooling writes _*. A fresh clone gets rules that actually fire.
+#
+# Judgements about *your* corpus — which volumes are manuscripts, which genres
+# you were experimenting with — go in analysis/collection_registry.local.txt,
+# which is gitignored. See collection_registry.local.txt.example. Both files are
+# loaded, local second, and a local `include` overrides a shared `exclude`.
 #
 # Format:  <verb> <glob> <category> [# note]
 #   exclude — keep out of cross-collection analysis
-#   include — force back in, overriding any exclude below it
-#
-# Globs match the directory name (fnmatch). Includes win over excludes, so a
-# specific include can carve one volume out of a broad exclude.
+#   include — force back in, overriding any exclude
 #
 # Collections matching nothing are INCLUDED: production is the norm, and a new
-# volume should not silently disappear from an evaluation because nobody
-# remembered to register it. Tools print what they excluded, so the reverse
-# mistake stays visible — an unnoticed 6,862-file backup directory is how a
-# cross-collection table got polluted in the first place.
+# volume must not vanish from an evaluation because nobody registered it. The
+# tools print what they excluded, so the opposite mistake stays visible — an
+# unnoticed backup directory holding 6,862 aligned files and zero images is how
+# a cross-collection table got polluted in the first place.
 
-# --- infrastructure, not collections at all -------------------------------
-exclude  _*                                   infrastructure    # _ocr_backups, _frontmatter
+# --- infrastructure: not collections at all -------------------------------
+exclude  _*          infrastructure   # _ocr_backups, _frontmatter
 
 # --- source probes: a dozen pages pulled to check a IIIF endpoint works ----
-exclude  ia_*                                 source-probe
-exclude  nypl_*                               source-probe
-exclude  loc_*                                source-probe
+exclude  ia_*        source-probe
+exclude  nypl_*      source-probe
+exclude  loc_*       source-probe
 
-# --- five-page slices behind docs/evidence/2026-09-02-ocr-token-burn ------
-exclude  harvest_*                            evidence-slice
-
-# --- manuscript material: pipeline tests, not directories -----------------
-# Handwriting and sparse layouts give these alignment and OCR profiles nothing
-# like a printed directory's, so averaging them into a corpus-wide figure
-# describes neither.
-exclude  copyright_ledgers_*                  manuscript-test
-exclude  copyright_record_book_*              manuscript-test
-exclude  frederick_douglass_papers_*          manuscript-test
-exclude  polish_declarations_*                manuscript-test
-exclude  william_brewster_correspondence_*    manuscript-test
-exclude  goldsborough_papers*                 manuscript-test
-exclude  passenger_lists_of_ships_*           manuscript-test
-
-# --- language-of-flowers books --------------------------------------------
-# Deferred rather than rejected: Josh may return to these (2026-09-20). Flip
-# these lines to `include` to bring them back.
-exclude  *language_of_flowers*                deferred
-exclude  *language_and_sentiment_of_flowers*  deferred
-exclude  *languageofflower*                   deferred
-exclude  flower_lore_*                        deferred
-exclude  flora_s_dictionary_*                 deferred
-
-# --- other non-directory genres -------------------------------------------
-exclude  *cook_book*                          non-directory-test
-exclude  *cookbook*                           non-directory-test
-exclude  the_bavarchi_khana_*                 non-directory-test
-exclude  montgomery_s_tippecanoe_almanac_*    non-directory-test
-exclude  drives_about_san_jose_*              non-directory-test
-
-# Confirmed not directories, 2026-09-20.
-exclude  joh_leonhard_frisch_*                non-directory-test
-exclude  little_book_of_greenwich_village_*   non-directory-test
-exclude  e77514b9-*                           non-directory-test   # bare UUID, 202 pages
-
-# gazetteer_of_surface_waters_of_iowa_* is deliberately NOT excluded — it is a
-# gazetteer and counts as production (confirmed 2026-09-20).
+# --- evidence slices written by the harness under docs/evidence/ ----------
+exclude  harvest_*   evidence-slice

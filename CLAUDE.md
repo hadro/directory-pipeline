@@ -224,6 +224,37 @@ These scripts operate on already-extracted CSVs — they do not run pipeline sta
 | `review_entries.py` | Send extracted CSV to Gemini for systematic data-quality review. |
 | `check_manifest_staleness.py` | Compare cached `manifest.json` against live IIIF manifests to detect canvas-count drift after collection updates. |
 
+### Which collections count as evaluation data
+
+`output/` holds production volumes beside source probes, five-page evidence
+slices, backup directories and one-off genre experiments — 186 directories, 54 of
+them production. Cross-collection analysis must not average them together: a
+table in this repo once reported `_ocr_backups` (6,862 aligned files, zero
+images) as a collection, and an alignment threshold was argued for partly on the
+copyright ledgers, which are a pipeline test.
+
+`utils/collections.py` resolves this from two files, split on whether a rule is
+true for anyone or only for one working copy:
+
+- **`analysis/collection_registry.txt`** (tracked) — rules whose directories the
+  pipeline itself creates: `ia_*`/`nypl_*`/`loc_*` from `sources/`, `harvest_*`
+  from the evidence harness, `_*` from backup tooling. These fire in a fresh
+  clone.
+- **`analysis/collection_registry.local.txt`** (gitignored, see the `.example`)
+  — judgements about your own material: which volumes were manuscript tests,
+  which genres you tried once. A local `include` overrides a shared `exclude`.
+
+**Unregistered collections are kept.** Production is the norm and a new volume
+must not vanish from an evaluation because nobody registered it; the tools print
+what they excluded so the opposite mistake stays visible. `report_cost.py` and
+`analyze_retry_ladder.py` take `--all-collections` to opt back in, and a path
+naming one volume directly is always honoured.
+
+The same split is the general rule for anything in this repo: **if a collection
+name appears in the code, it is local; if the collection is an argument, it can
+be shared.** That is also the test for when a script graduates from
+`collections/` to `tools/`.
+
 ### Collection-specific scripts (`collections/` — local-only, not tracked in this repo)
 
 Collection-specific scripts live under `collections/`, which is **gitignored** (a fresh clone will not have it):

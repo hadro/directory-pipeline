@@ -10,6 +10,8 @@ directory in the corpus.
 import pytest
 
 from utils.collections import (
+    LOCAL_REGISTRY_PATH,
+    REGISTRY_PATH,
     Rule,
     classify,
     eval_collections,
@@ -123,8 +125,66 @@ def test_exclusions_are_summarised_for_a_report_header():
     note = summarize_exclusions([("a", "source-probe"), ("b", "source-probe"), ("c", "deferred")])
     assert "3 collection(s)" in note
     assert "2 source-probe" in note and "1 deferred" in note
-    assert "collection_registry.txt" in note, "the reader must know where to change it"
+    assert "collection_registry" in note, "the reader must know where to change it"
 
 
 def test_nothing_excluded_means_no_note():
     assert summarize_exclusions([]) == ""
+
+
+# --- shared vs local layering -----------------------------------------------
+#
+# The shared file holds rules whose directories the pipeline itself creates, so
+# they fire in a fresh clone. The local file names volumes in one working copy
+# and is gitignored. Mixing them put 186 of Josh's directory names into a
+# tracked file where they matched nothing for anyone else.
+
+
+def test_shared_rules_only_match_pipeline_generated_names():
+    """Every tracked rule must describe something the code produces.
+
+    ia_*/nypl_*/loc_* come from sources/, harvest_* from the evidence harness,
+    _* from backup tooling. A volume title in this file is a corpus judgement
+    and belongs in the local one.
+    """
+    shared = load_rules(REGISTRY_PATH)
+    assert shared, "shared registry should not be empty"
+    allowed = {"_*", "ia_*", "nypl_*", "loc_*", "harvest_*"}
+    assert {r.glob for r in shared} <= allowed, (
+        "a corpus-specific glob leaked into the tracked registry"
+    )
+
+
+def test_shared_and_local_are_both_loaded():
+    combined = {r.glob for r in load_rules()}
+    assert {r.glob for r in load_rules(REGISTRY_PATH)} <= combined
+    if LOCAL_REGISTRY_PATH.exists():
+        assert {r.glob for r in load_rules(LOCAL_REGISTRY_PATH)} <= combined
+
+
+def test_a_local_include_overrides_a_shared_exclude(tmp_path):
+    """Carving one volume out of a shared convention rule must be possible."""
+    shared = tmp_path / "shared.txt"
+    shared.write_text("exclude ia_* source-probe\n", encoding="utf-8")
+    local = tmp_path / "local.txt"
+    local.write_text("include ia_trow_1907_* promoted\n", encoding="utf-8")
+    rules = load_rules(shared) + load_rules(local)
+    assert classify("ia_trow_1907_trowsgen", rules) == (True, "promoted")
+    assert classify("ia_other_probe", rules)[0] is False
+
+
+def test_a_working_copy_with_no_local_file_still_works(tmp_path):
+    """A fresh clone has the shared file and no local one."""
+    shared = tmp_path / "shared.txt"
+    shared.write_text("exclude harvest_* evidence-slice\n", encoding="utf-8")
+    rules = load_rules(shared) + load_rules(tmp_path / "absent.txt")
+    assert classify("harvest_polk1933mb_a", rules)[0] is False
+    assert classify("green_books_and_related", rules)[0] is True
+
+
+def test_the_example_file_is_tracked_and_parses():
+    """The local file is gitignored, so the example is the only discoverable
+    record that the mechanism exists."""
+    example = REGISTRY_PATH.with_name("collection_registry.local.txt.example")
+    assert example.exists()
+    load_rules(example)  # must not raise; every live line is commented out

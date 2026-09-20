@@ -6,9 +6,20 @@ together describes nothing: a cross-collection table once reported a 6,862-file
 backup directory as a collection, and a rule calibrated on manuscript tests would
 have been wrong for every printed directory in the corpus.
 
-The classification lives in ``analysis/collection_registry.txt`` — in the repo
-rather than beside the data, because ``output/`` is gitignored and a judgement
-about what counts as evidence should be reviewable in a diff.
+The classification lives in two files, split along whether a rule is true for
+anyone or only for this working copy:
+
+``analysis/collection_registry.txt`` (tracked) holds rules whose directories the
+pipeline itself creates — ``sources/`` writes ``ia_*``/``nypl_*``/``loc_*``
+probes, the evidence harness writes ``harvest_*``, backup tooling writes ``_*``.
+Those fire in a fresh clone.
+
+``analysis/collection_registry.local.txt`` (gitignored) holds judgements about
+particular material in *your* ``output/`` — which volumes were manuscript tests,
+which genres you tried once. They name directories nobody else has.
+
+Both are loaded, local second, so a local ``include`` overrides a shared
+``exclude``. See ``collection_registry.local.txt.example``.
 
 Anything matching no rule is included. Production is the norm, and a new volume
 must not vanish from an evaluation because nobody registered it; the tools print
@@ -24,7 +35,9 @@ import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
 
-REGISTRY_PATH = Path(__file__).resolve().parent.parent / "analysis" / "collection_registry.txt"
+_ANALYSIS = Path(__file__).resolve().parent.parent / "analysis"
+REGISTRY_PATH = _ANALYSIS / "collection_registry.txt"
+LOCAL_REGISTRY_PATH = _ANALYSIS / "collection_registry.local.txt"
 
 
 @dataclass(frozen=True)
@@ -35,8 +48,18 @@ class Rule:
 
 
 def load_rules(path: "Path | None" = None) -> "list[Rule]":
-    """Parse the registry. A missing file means no rules — everything is kept."""
-    path = path or REGISTRY_PATH
+    """Rules from the shared registry, then the local one.
+
+    Pass *path* to read a single file instead (tests, or a one-off registry).
+    Either file may be absent; absent means no rules from it, and a working copy
+    with neither keeps everything.
+    """
+    if path is not None:
+        return _parse(path)
+    return _parse(REGISTRY_PATH) + _parse(LOCAL_REGISTRY_PATH)
+
+
+def _parse(path: Path) -> "list[Rule]":
     rules: list[Rule] = []
     if not path.exists():
         return rules
@@ -96,5 +119,5 @@ def summarize_exclusions(dropped: "list[tuple[str, str]]") -> str:
     for _, category in dropped:
         counts[category] = counts.get(category, 0) + 1
     parts = ", ".join(f"{n} {cat}" for cat, n in sorted(counts.items()))
-    return (f"Excluded {len(dropped)} collection(s) per analysis/collection_registry.txt "
-            f"({parts}).")
+    return (f"Excluded {len(dropped)} collection(s) per analysis/collection_registry"
+            f"{{,.local}}.txt ({parts}).")
