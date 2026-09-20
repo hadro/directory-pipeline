@@ -80,3 +80,52 @@ def test_section_field_meta_keeps_id_fields_regardless():
     names = {f["name"]: f for f in _section_field_meta(rows)}
     assert "unused" not in names
     assert "publication_name" in names
+
+
+# --- rows are embedded once -------------------------------------------------
+#
+# ALL_INITIAL_ENTRIES and VOLUMES[label].rows held the same data. They were
+# never both populated until sectioned single volumes started receiving the
+# per-volume payload, which took the 1869 Rowell explorer from 14.7 MB to
+# 29.2 MB — 78% of those bytes being empty fields from six schemas sharing one
+# table, written out twice.
+
+import json
+import re
+
+from pipeline.explore_entries import build_html
+
+
+def _const(html, name):
+    line = next(l for l in html.splitlines() if l.startswith(f"const {name}"))
+    return json.loads(line[line.index("=") + 1:].rstrip(";").strip())
+
+
+ROWS = [{"section": "catalog", "publication_name": "Herald", "image": "0009.jpg"},
+        {"section": "gazetteer", "town_name": "Lynn", "image": "0150.jpg"}]
+META = [{"name": "publication_name", "type": "search"},
+        {"name": "town_name", "type": "search"}]
+
+
+def test_a_sectioned_volume_embeds_rows_only_in_volumes():
+    vols = {"v1": {"rows": ROWS, "field_meta": META, "doc_meta": {},
+                   "sections": _group_by_section(ROWS)}}
+    html = build_html(ROWS, META, {}, "t", volumes=vols)
+    assert _const(html, "ALL_INITIAL_ENTRIES") == []
+    assert len(_const(html, "VOLUMES")["v1"]["rows"]) == 2
+
+
+def test_a_plain_volume_still_embeds_rows_in_all_initial_entries():
+    """No volumes payload: the original single-volume path is unchanged."""
+    html = build_html(ROWS, META, {}, "t", volumes=None)
+    assert len(_const(html, "ALL_INITIAL_ENTRIES")) == 2
+    assert _const(html, "VOLUMES") == {}
+
+
+def test_the_two_payloads_are_never_both_populated():
+    """Whichever path runs, the rows appear exactly once in the document."""
+    for vols in (None, {"v1": {"rows": ROWS, "field_meta": META, "doc_meta": {}, "sections": {}}}):
+        html = build_html(ROWS, META, {}, "t", volumes=vols)
+        initial = len(_const(html, "ALL_INITIAL_ENTRIES"))
+        in_vols = sum(len(v["rows"]) for v in _const(html, "VOLUMES").values())
+        assert bool(initial) != bool(in_vols), "rows embedded twice, or not at all"

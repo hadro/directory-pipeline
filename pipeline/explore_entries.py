@@ -573,7 +573,10 @@ def build_html(
     full_page_thumbs: bool = False,
 ) -> str:
     return _HTML_TEMPLATE.format(
-        entries_json     = _safe_json(list(rows)),
+        # Emitted empty when VOLUMES carries the rows: the two payloads held
+        # identical data and embedding both took the 1869 Rowell explorer from
+        # 14.7 MB to 29.2 MB. The template bootstraps from the first volume.
+        entries_json     = _safe_json([] if volumes else list(rows)),
         field_meta_json  = _safe_json(field_meta),
         canvas_map_json  = _safe_json(canvas_map),
         title_json       = _safe_json(title),

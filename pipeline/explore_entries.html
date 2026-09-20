@@ -253,7 +253,12 @@ const VIEWER_URL  = {viewer_url_json};
 const MANIFEST_URL = {manifest_url_json};
 const FULL_PAGE_THUMBS = {full_page_thumbs_json};
 let activeManifestUrl = MANIFEST_URL;
-let ALL_ENTRIES = ALL_INITIAL_ENTRIES;
+// Rows are embedded once. With several volumes (or one volume with sections)
+// they live on VOLUMES and ALL_INITIAL_ENTRIES is empty; otherwise the reverse.
+const FIRST_VOLUME = Object.keys(VOLUMES)[0];
+let ALL_ENTRIES = ALL_INITIAL_ENTRIES.length
+  ? ALL_INITIAL_ENTRIES
+  : (FIRST_VOLUME ? VOLUMES[FIRST_VOLUME].rows : []);
 
 // ── Field display-name and value-label overrides ──────────────────────────
 const FIELD_LABELS = {{
