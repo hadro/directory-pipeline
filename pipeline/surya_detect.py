@@ -13,15 +13,21 @@ Why Surya over pixel projection?
   structure from where text physically lives — more robust for mixed layouts.
 
 Column heuristic
-  Lines are split left/right at the image midpoint.  If the two groups
-  overlap vertically by ≥ 30% of their combined span, the page is 2-column.
-  Gutter x-position is the midpoint between the rightmost left-column edge
-  and the leftmost right-column edge.
+  Gutters come from utils.column_utils.column_breaks (coverage-valley
+  detection), the same detector align_ocr uses to build reading order, so the
+  report and the aligner cannot disagree about the layout.  Any number of
+  columns is supported.  A multi-column layout is accepted only when every
+  reported column holds ≥ MIN_COLUMN_FRAC of the body lines, the accepted
+  columns together cover ≥ MIN_COLUMN_COVERAGE of them, and adjacent columns
+  overlap vertically by ≥ MIN_OVERLAP_RATIO — otherwise the page is reported
+  as 1-column.  Reported gutters sit at the midpoint between neighbouring
+  columns' content edges, ";"-joined when there is more than one.
 
 Confidence mapping
-  2-col, overlap ≥ 0.60  → "high"
-  2-col, overlap 0.30–0.59 → "medium"
-  1-col (no gutter)        → "high"
+  multi-col, min adjacent overlap ≥ 0.60   → "high"
+  multi-col, min adjacent overlap 0.30–0.59 → "medium"
+  1-col (no accepted gutter)                → "high"
+  no text lines detected                    → "low"
 
 Output
   output_dir/columns_report.csv  (same fields as detect_columns.py)
@@ -53,44 +59,20 @@ os.environ.setdefault("SURYA_DISABLE_TQDM", "true")
 os.environ.setdefault("DISABLE_TQDM", "true")
 
 # ---------------------------------------------------------------------------
-# Constants — must match detect_columns.py so run_ocr.py reads the same file
+# Constants — the report schema detect_columns.py also writes, so run_ocr.py
+# reads the same file whichever detector produced it.  The column thresholds
+# themselves are imported from utils.column_utils, not restated here.
 # ---------------------------------------------------------------------------
 REPORT_FILENAME = "columns_report.csv"
 FIELDNAMES = [
     "image", "num_columns", "confidence", "gutter_x_positions",
 ]
 MIN_OVERLAP_RATIO = 0.3
-# Minimum gap between left- and right-column x1 clusters (as a fraction of
-# page width) needed to declare a 2-column layout.  8 % ≈ 150 px at 1920 px.
-MIN_GUTTER_GAP    = 0.08
 
 
 # ---------------------------------------------------------------------------
 # Column detection
 # ---------------------------------------------------------------------------
-
-def _find_gutter(bboxes: list, image_width: int) -> float | None:
-    """
-    Find the column gutter x-position by locating the largest gap in the
-    distribution of bbox left-edge (x1) positions.
-
-    Using x1 rather than x-centre means cross-column merges (bboxes whose
-    leader dots bridge the gutter) are invisible to the detector: they always
-    start at the left column's x1 and stay inside the left x1 cluster.
-
-    Returns the gap midpoint, or None when the gap is below MIN_GUTTER_GAP ×
-    image_width (single-column or unresolvable layout).
-    """
-    if len(bboxes) < 4:
-        return None
-    x1s = sorted(b[0] for b in bboxes)
-    max_gap, gutter_x = 0.0, None
-    for i in range(len(x1s) - 1):
-        gap = x1s[i + 1] - x1s[i]
-        if gap > max_gap:
-            max_gap, gutter_x = gap, (x1s[i] + x1s[i + 1]) / 2
-    return gutter_x if max_gap >= MIN_GUTTER_GAP * image_width else None
-
 
 def _analyze_bboxes(bboxes: list, image_width: int) -> dict:
     """
