@@ -14,6 +14,10 @@ A tiered review of what to borrow from [`UNDP-Serbia/lorya_`](https://github.com
 
 A phased implementation plan for a `detect_sections` stage — auto-drafts `sections.txt` for multi-section city directories (alphabetical / street / classified / frontmatter) so per-section NER prompts route correctly — lives at `docs/plans/section-detection-plan.md` (created 2026-06-15). The consumer side (`utils/section_utils.py` + `extract_entries.py`) already exists; only the producer is missing. Read it before starting section-detection work; best implemented locally where the gitignored `output/` data is on disk.
 
+## Evaluation: TypeSafe AI's Jev
+
+An assessment of [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) — TypeSafe AI's non-generative "System One" model (launched 2026-09-15) that returns calibrated typed decisions (`Noul` / `Choice` / `Score`) instead of text — lives at `docs/plans/jev-evaluation.md` (created 2026-09-20). **Bottom line: Jev cannot do NER or OCR** (it does not generate text, and rejects unconstrained string fields), so it is not a replacement for `extract_entries.py`, the sibling repo's Qwen fine-tune, or anything in the Hugging Face plan. It *is* a candidate for the routing/gating layer: non-entry rejection before NER, `detect_sections` Phase 5 boundary adjudication, and the `_INFER_RULES` category residue. Read it before evaluating any classification-only model backend; nothing is committed to, and the doc proposes one measured shadow run before any wiring.
+
 ## Setup
 
 ```bash
