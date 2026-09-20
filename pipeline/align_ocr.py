@@ -905,6 +905,64 @@ def _alignment_cost(lines: list[dict], unmatched: list[str]) -> float:
     return len(unmatched) + inv * len(lines)
 
 
+# Outlier reporting for unmatched rate.
+#
+# A page can lose 93% of its Gemini lines and still report needs_review=False:
+# that flag keys on Surya's median *confidence*, and a detector returning two
+# page-sized region blobs is perfectly confident about them. Three index pages of
+# the 1869 Rowell volume aligned at 93/92/71% unmatched without a single warning.
+#
+# An absolute threshold cannot do this job. Measured across 50 collections on
+# disk, median unmatched runs from 0.0% to 29.6% — manuscript material sits high
+# by nature — so a global ">10% is bad" rule flags 71% of the copyright ledgers
+# while a rule loose enough to spare them says nothing about Rowell.
+#
+# Nor does a multiple of the median: the Green Books have a low median (2.0%) and
+# a heavy tail (p95 56%), so median x3 reports 1,846 of 5,788 pages. A third of a
+# collection is not a set of outliers.
+#
+# So the cutoff is the volume's own 95th percentile, floored at _OUTLIER_FLOOR.
+# That is proportional by construction — never more than 5% of pages — and the
+# floor keeps a clean volume silent instead of reporting its best pages as its
+# worst. Reported at the end of the run rather than written into the JSON:
+# needs_review already drives the --review-alignment queue and should not be
+# flooded.
+#
+#   collection            pages   median   p95     reported
+#   Rowell 1869             330     0.5%   9.3%    14 (4%)
+#   green_books_and_related 5788    2.0%  56.1%   289 (5%)
+#   copyright_ledgers        211   20.0%  40.0%    10 (5%)
+#   tulsa_1921               833     0.0%   8.7%    30 (4%)
+_OUTLIER_PERCENTILE = 0.95
+_OUTLIER_FLOOR      = 10.0   # a volume whose worst pages are under this is fine
+_OUTLIER_MIN_PAGES  = 10     # below this a percentile means nothing
+_OUTLIER_MAX_LIST   = 15
+
+
+def _report_unmatched_outliers(rates: "list[tuple[str, float]]", log) -> None:
+    """Report the pages that left most Gemini text unboxed in this volume."""
+    if len(rates) < _OUTLIER_MIN_PAGES:
+        return
+    ordered = sorted(r for _, r in rates)
+    p95 = ordered[min(int(len(ordered) * _OUTLIER_PERCENTILE), len(ordered) - 1)]
+    cutoff = max(p95, _OUTLIER_FLOOR)
+    bad = sorted(((r, n) for n, r in rates if r > cutoff), reverse=True)
+    if not bad:
+        return
+    median = ordered[len(ordered) // 2]
+    log(
+        f"\n⚠  {len(bad)} page(s) ({len(bad) / len(rates) * 100:.0f}% of aligned) "
+        f"left the most Gemini text unboxed in this volume "
+        f"(median {median:.1f}%, reporting above {cutoff:.1f}%).\n"
+        "   A very high rate usually means Surya returned region blocks rather "
+        "than text lines — try --blank-threshold 0.5 on those pages."
+    )
+    for rate, name in bad[:_OUTLIER_MAX_LIST]:
+        log(f"  {rate:5.1f}%  {name}")
+    if len(bad) > _OUTLIER_MAX_LIST:
+        log(f"  … and {len(bad) - _OUTLIER_MAX_LIST} more")
+
+
 def build_aligned_lines(
     sorted_surya_lines: list[dict],
     gemini_lines: list[str],
@@ -1624,6 +1682,23 @@ def main() -> None:
         )
         for p in sorted(flagged_merge):
             print(f"  {p}", file=sys.stderr)
+
+    if not args.quiet:
+        # Read back from disk rather than from this run's results, so pages
+        # skipped as already-aligned are included: an outlier is an outlier
+        # whichever run produced it.
+        _slug = model_slug(args.model)
+        _rates: list[tuple[str, float]] = []
+        for _f in sorted(output_root.rglob(f"*_{_slug}_aligned.json")):
+            try:
+                _d = json.loads(_f.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            _m = len(_d.get("lines", []))
+            _u = len(_d.get("unmatched_gemini", []) or [])
+            if _m + _u:
+                _rates.append((_f.name, _u / (_m + _u) * 100))
+        _report_unmatched_outliers(_rates, lambda msg: print(msg, file=sys.stderr))
 
     # Record the stage so a direct invocation updates pipeline_state.json the
     # same way an orchestrated run does (main.py is otherwise the only writer).

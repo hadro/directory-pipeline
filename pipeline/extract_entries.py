@@ -391,6 +391,45 @@ def _normalize_line(text: str) -> str:
     return text.strip()
 
 
+# Gemini marks advertisement blocks with these delimiters (see the OCR prompts).
+# align_ocr consumes them to keep ad text out of the NW anchor set and then drops
+# them: they never enter gemini_lines, so they appear in neither "lines" nor
+# "unmatched_gemini" of the aligned JSON.
+_AD_DELIM_RX = re.compile(r"^=== .+ ===$", re.MULTILINE)
+
+
+def _page_text_for_ner(aligned: dict, ocr_path: "Path | None") -> str:
+    """Page transcript for the NER call.
+
+    Normally rebuilt from the aligned JSON. On a page carrying advertisement
+    delimiters the raw OCR text is used instead, because alignment strips them
+    and the advertisement NER prompts extract one record per delimiter pair —
+    without them ~468 advertisements on this volume alone run together with no
+    boundaries, and 11,756 delimiter lines are affected across the four
+    collections that use the convention.
+
+    Reading the raw text also restores printed line order, which the aligned
+    rebuild loses: unmatched lines are appended after the matched ones rather
+    than kept in place. That is a real improvement but it is *not* why this
+    exists, and it is deliberately not applied to pages without delimiters —
+    raw and aligned-derived text differ on 72% of pages, so switching wholesale
+    would change NER input for every existing collection. The narrow rule keeps
+    the blast radius to pages that are already broken.
+    """
+    if ocr_path is not None:
+        try:
+            raw = ocr_path.read_text(encoding="utf-8")
+        except OSError:
+            raw = ""
+        if raw and _AD_DELIM_RX.search(raw) is None:
+            raw = ""          # no delimiters on this page — keep existing behaviour
+        if raw:
+            return "\n".join(
+                _normalize_line(ln) for ln in raw.splitlines() if ln.strip()
+            )
+    return _page_text_from_aligned(aligned)
+
+
 def _page_text_from_aligned(aligned: dict) -> str:
     """Build a plain-text page transcript from an aligned JSON, in line order."""
     lines = [
@@ -745,7 +784,12 @@ def process_page(
     except Exception as exc:
         return {"entries": [], "page_context": prior_context, "status": f"error:{exc}"}
 
-    page_text = _page_text_from_aligned(aligned)
+    # Raw OCR text sits beside the aligned JSON; _page_text_for_ner uses it only
+    # when the page carries advertisement delimiters.
+    _ocr_path = aligned_path.with_name(
+        aligned_path.name.replace("_aligned.json", ".txt")
+    )
+    page_text = _page_text_for_ner(aligned, _ocr_path if _ocr_path.exists() else None)
     if not page_text.strip():
         return {"entries": [], "page_context": prior_context, "status": "empty"}
 
