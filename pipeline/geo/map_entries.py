@@ -155,9 +155,17 @@ def _iiif_region_url(
     y_pct = ry / canvas_h * 100
     w_pct = rw / canvas_w * 100
     h_pct = rh / canvas_h * 100
+    # Never ask for a width at or above the region's own pixel count. An image
+    # service asked to upscale serves from a coarse pyramid level and compresses
+    # far harder: on tile.loc.gov a 737px-wide crop requested at 800 came back
+    # 3 KB against 40 KB for the same region at /full/, visually unreadable. With
+    # pct: even the native width trips it, because the percentage rounds down and
+    # the request becomes an upscale. thumb_width is small enough that this is
+    # usually a downscale anyway, but a narrow region would otherwise hit it.
+    size = "full" if rw <= thumb_width else f"{thumb_width},"
     return (
         f"{service_id}/pct:{x_pct:.4f},{y_pct:.4f},"
-        f"{w_pct:.4f},{h_pct:.4f}/{thumb_width},/0/default.jpg"
+        f"{w_pct:.4f},{h_pct:.4f}/{size}/0/default.jpg"
     )
 
 

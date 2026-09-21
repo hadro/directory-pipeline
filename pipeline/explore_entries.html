@@ -766,6 +766,14 @@ function thumbUrl(row) {{
     const [cw, ch] = [svc[1], svc[2]];
     if (!cw || !ch) return "";
     const padV = Math.max(xywh[3], 60), tw = 800;
+    // Asking an image service for a width at or above the region's own pixel
+    // count makes it upscale from a coarse pyramid level and compress far
+    // harder. On tile.loc.gov a 737px-wide crop requested at 800 came back
+    // 3 KB (25 KB/Mpx) against 40 KB (363 KB/Mpx) for the same region at
+    // /full/ — visually unreadable. With pct: even the native width trips it,
+    // because the percentage rounds down and the request is then an upscale.
+    // So: /full/ for a region already smaller than the display size, and an
+    // explicit width only when it would be a genuine downscale.
     // Ensure the crop is at least 600px wide so narrow Surya detections
     // (e.g. short names in classified directories) show enough context.
     const minW = 600;
@@ -778,7 +786,8 @@ function thumbUrl(row) {{
     const yp = (ry / ch * 100).toFixed(4);
     const wp = (rw / cw * 100).toFixed(4);
     const hp = (rh / ch * 100).toFixed(4);
-    return `${{svc[0]}}/pct:${{xp}},${{yp}},${{wp}},${{hp}}/${{tw}},/0/default.jpg`;
+    const size = rw <= tw ? "full" : `${{tw}},`;
+    return `${{svc[0]}}/pct:${{xp}},${{yp}},${{wp}},${{hp}}/${{size}}/0/default.jpg`;
   }}
   return `${{svc[0]}}/full/400,/0/default.jpg`;
 }}
