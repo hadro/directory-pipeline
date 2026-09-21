@@ -54,3 +54,28 @@ def test_the_region_is_still_addressed_by_percentage():
 def test_a_malformed_fragment_yields_no_url():
     assert _iiif_region_url("no-fragment-here", SVC_MAP) == ""
     assert _url("1,2,0,0") == ""
+
+
+# --- context lines ----------------------------------------------------------
+
+from pipeline.explore_entries import build_html
+
+
+def _template(**kw):
+    return build_html([{"image": "0009.jpg"}], [{"name": "image", "type": "id"}],
+                      {}, "t", **kw)
+
+
+def test_context_lines_defaults_to_three():
+    assert "const CONTEXT_LINES = 3;" in _template()
+
+
+def test_context_lines_is_configurable():
+    assert "const CONTEXT_LINES = 7;" in _template(context_lines=7)
+
+
+def test_context_lines_cannot_be_zero_or_negative():
+    """A zero would crop to the line's own bbox with no surrounding text, and a
+    negative would invert the region."""
+    assert "const CONTEXT_LINES = 1;" in _template(context_lines=0)
+    assert "const CONTEXT_LINES = 1;" in _template(context_lines=-4)

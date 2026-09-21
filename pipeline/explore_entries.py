@@ -571,6 +571,7 @@ def build_html(
     viewer_url: str = "",
     manifest_url: str = "",
     full_page_thumbs: bool = False,
+    context_lines: int = 3,
 ) -> str:
     return _HTML_TEMPLATE.format(
         # Emitted empty when VOLUMES carries the rows: the two payloads held
@@ -590,6 +591,7 @@ def build_html(
         viewer_url_json  = _safe_json(viewer_url),
         manifest_url_json = _safe_json(manifest_url),
         full_page_thumbs_json = _safe_json(full_page_thumbs),
+        context_lines_json = _safe_json(max(1, int(context_lines))),
     )
 
 
@@ -647,6 +649,15 @@ def main() -> None:
         metavar="URL",
         help="Explicit URL of the IIIF manifest served with the viewer. "
              "Defaults to <viewer-url>/manifest.json.",
+    )
+    parser.add_argument(
+        "--context-lines",
+        type=int,
+        default=3,
+        metavar="N",
+        help="Lines of surrounding text to show above and below an entry in the "
+             "detail crop (default: 3). The entry's own bbox height is used as the "
+             "line-height estimate, so this scales with the page's typography.",
     )
     parser.add_argument(
         "--full-page-thumbs",
@@ -819,7 +830,8 @@ def main() -> None:
                       volumes=volumes if (collection_mode or _has_sections) else None,
                       viewer_url=viewer_url,
                       manifest_url=manifest_url,
-                      full_page_thumbs=args.full_page_thumbs)
+                      full_page_thumbs=args.full_page_thumbs,
+                      context_lines=args.context_lines)
     out_path.write_text(html, encoding="utf-8")
     if not args.quiet:
         print(f"Explorer written to {out_path}", file=sys.stderr)
