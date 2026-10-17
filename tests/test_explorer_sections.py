@@ -12,11 +12,11 @@ from pipeline.explore_entries import _group_by_section, _section_field_meta
 
 def _rows():
     return [
-        {"section": "catalog", "publication_name": "Herald", "frequency": "daily",
+        {"volume_section": "catalog", "publication_name": "Herald", "frequency": "daily",
          "town_name": "", "description": "", "image": "0009.jpg"},
-        {"section": "catalog", "publication_name": "Post", "frequency": "weekly",
+        {"volume_section": "catalog", "publication_name": "Post", "frequency": "weekly",
          "town_name": "", "description": "", "image": "0010.jpg"},
-        {"section": "gazetteer", "publication_name": "", "frequency": "",
+        {"volume_section": "gazetteer", "publication_name": "", "frequency": "",
          "town_name": "Lynn", "description": "a city of 25,000 pop.", "image": "0150.jpg"},
     ]
 
@@ -28,13 +28,22 @@ def test_rows_are_grouped_by_section():
     assert g["gazetteer"]["count"] == 1
 
 
+
+def test_a_ner_section_field_does_not_drive_the_switch():
+    """Several NER schemas emit their own `section` (Tulsa's, the London
+    booksellers'). Only the structural volume_section, written from
+    sections.txt, splits a volume."""
+    rows = [{"section": "Alphabetical List of Names", "name": "Abbott"},
+            {"section": "Classified Business Directory", "name": "Acme"}]
+    assert _group_by_section(rows) == {}
+
 def test_sections_keep_the_order_of_the_book():
     """Not alphabetical: catalog precedes gazetteer because the book does."""
     assert list(_group_by_section(_rows())) == ["catalog", "gazetteer"]
 
 
 def test_rows_are_not_duplicated_into_the_sections():
-    """Every row carries its own `section`, so the template filters the volume's
+    """Every row carries its own `volume_section`, so the template filters the volume's
     rows. Embedding both doubled the Rowell explorer to 42 MB for no new data."""
     for payload in _group_by_section(_rows()).values():
         assert "rows" not in payload
@@ -58,12 +67,12 @@ def test_a_volume_with_no_section_column_is_unchanged():
 
 def test_a_single_section_volume_gets_no_grouping():
     """One section is not a choice — the dropdown would have one option."""
-    rows = [{"section": "catalog", "publication_name": "Herald"}]
+    rows = [{"volume_section": "catalog", "publication_name": "Herald"}]
     assert _group_by_section(rows) == {}
 
 
 def test_rows_with_a_blank_section_are_skipped_not_grouped():
-    rows = _rows() + [{"section": "", "publication_name": "Orphan"}]
+    rows = _rows() + [{"volume_section": "", "publication_name": "Orphan"}]
     g = _group_by_section(rows)
     assert set(g) == {"catalog", "gazetteer"}
     assert sum(v["count"] for v in g.values()) == 3
@@ -99,8 +108,8 @@ def _const(html, name):
     return json.loads(line[line.index("=") + 1:].rstrip(";").strip())
 
 
-ROWS = [{"section": "catalog", "publication_name": "Herald", "image": "0009.jpg"},
-        {"section": "gazetteer", "town_name": "Lynn", "image": "0150.jpg"}]
+ROWS = [{"volume_section": "catalog", "publication_name": "Herald", "image": "0009.jpg"},
+        {"volume_section": "gazetteer", "town_name": "Lynn", "image": "0150.jpg"}]
 META = [{"name": "publication_name", "type": "search"},
         {"name": "town_name", "type": "search"}]
 

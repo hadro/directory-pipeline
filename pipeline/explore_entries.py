@@ -504,7 +504,8 @@ def _safe_json(obj: object) -> str:
 
 
 # Section column written by extract_entries when a volume has a sections.txt.
-SECTION_FIELD = "section"
+# Not `section`, which several NER schemas already use for their own field.
+SECTION_FIELD = "volume_section"
 
 
 def _group_by_section(rows: "list[dict]") -> "dict[str, dict]":
@@ -537,7 +538,7 @@ def _group_by_section(rows: "list[dict]") -> "dict[str, dict]":
         if label and label not in seen:
             seen.append(label)
     # Carry the column set and a count, not the rows: every row already holds
-    # its own `section`, so the template filters the volume's rows rather than
+    # its own `volume_section`, so the template filters the volume's rows rather than
     # receiving a second copy of them. Embedding both doubled the 1869 Rowell
     # explorer to 42 MB for no added information.
     return {

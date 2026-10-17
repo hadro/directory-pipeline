@@ -385,7 +385,7 @@ function loadSection(secLabel) {{
   const sec = secLabel && vol.sections ? vol.sections[secLabel] : null;
   // Rows are stored once, on the volume; a section is a column set plus a
   // filter over them.
-  ALL_ENTRIES = sec ? vol.rows.filter(r => r.section === secLabel) : vol.rows;
+  ALL_ENTRIES = sec ? vol.rows.filter(r => (r.volume_section || "").trim() === secLabel) : vol.rows;
   const meta = sec ? sec.field_meta : vol.field_meta;
   facetFields = meta.filter(f => f.type === "facet");
   displayFields = meta.filter(f => f.type !== "id");

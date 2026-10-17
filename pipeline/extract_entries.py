@@ -1165,7 +1165,7 @@ def process_item(
             page_entries = result.get("entries", [])
             if page_section:
                 for entry in page_entries:
-                    entry.setdefault("section", page_section)
+                    entry["volume_section"] = page_section
             all_entries.extend(page_entries)
             if not dry_run:
                 context_file.write_text(json.dumps(context, ensure_ascii=False), encoding="utf-8")
@@ -1234,8 +1234,13 @@ def process_item(
             # an advertisement is to guess from page number ranges. Recorded
             # only when sections.txt exists; single-section volumes are
             # unchanged.
+            #
+            # Its own column rather than `section`: NER prompts already emit a
+            # `section` field (Tulsa's with this meaning, often as "" when
+            # unsure, which a setdefault would have kept), and combine_volumes
+            # maps `section` onto `category`.
             for entry in page_entries:
-                entry.setdefault("section", page_section)
+                entry["volume_section"] = page_section
         all_entries.extend(page_entries)
 
         # Persist context so runs can be resumed
