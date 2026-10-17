@@ -13,7 +13,6 @@ delimiters. Raw and aligned-derived text differ on 72% of pages, so switching
 wholesale would change NER input for every existing collection.
 """
 
-import json
 import re
 
 import pytest

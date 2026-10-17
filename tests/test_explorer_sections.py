@@ -6,7 +6,6 @@ row and an advertisement row share almost nothing. Grouping by section gives
 each one its own column set and its own facets.
 """
 
-import pytest
 
 from pipeline.explore_entries import _group_by_section, _section_field_meta
 
@@ -91,7 +90,6 @@ def test_section_field_meta_keeps_id_fields_regardless():
 # table, written out twice.
 
 import json
-import re
 
 from pipeline.explore_entries import build_html
 
