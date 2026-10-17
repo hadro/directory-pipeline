@@ -336,7 +336,10 @@ _CONTENTDM_SERVICE_RE = re.compile(
 def _build_canvas_thumb_map(
     search_root: Path,
 ) -> dict[str, list]:
-    """Return {canvas_id: [service_id, canvas_w, canvas_h, viewer_url]} for JS.
+    """Return {canvas_id: [service_id, canvas_w, canvas_h, viewer_url, version]} for JS.
+
+    version is the image service's IIIF Image API version (2 or 3), which
+    decides the size keyword for an unscaled crop (see iiif_utils.full_size).
 
     viewer_url is a human-browseable page for sources that have one
     (currently NYPL Digital Collections). IA and LoC viewer URLs are derived
@@ -368,6 +371,7 @@ def _build_canvas_thumb_map(
                 canvas["canvas_width"],
                 canvas["canvas_height"],
                 viewer_url,
+                canvas.get("service_version", 2),
             ]
 
     # Override canvas dimensions from aligned JSON coordinate space

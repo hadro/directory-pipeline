@@ -76,6 +76,49 @@ def _svc_max_width(service) -> int | None:
     return None
 
 
+def _svc_version(service, default: int = 2) -> int:
+    """IIIF Image API version (2 or 3) of an image service.
+
+    Read off the service itself where it says: a Presentation 3 manifest can
+    point at a v2 image service. Checks type, @context and profile, then a
+    /iiif/3/ or /iiif/2/ path segment, and only then falls back to *default*,
+    which callers set to the manifest's own Presentation version.
+    """
+    if isinstance(service, list):
+        service = service[0] if service else {}
+    if isinstance(service, dict):
+        for key in ("type", "@type"):
+            kind = str(service.get(key) or "")
+            if kind.startswith("ImageService"):
+                return 3 if kind.endswith("3") else 2
+        context = str(service.get("@context") or "")
+        if "/image/3/" in context:
+            return 3
+        if "/image/2/" in context:
+            return 2
+        profile = service.get("profile")
+        if isinstance(profile, list):
+            profile = profile[0] if profile else ""
+        if "/image/2/" in str(profile or ""):
+            return 2
+        service = str(service.get("id") or service.get("@id") or "")
+    url = str(service or "")
+    if "/iiif/3/" in url:
+        return 3
+    if "/iiif/2/" in url:
+        return 2
+    return default
+
+
+def full_size(iiif_version: int) -> str:
+    """Size keyword for an image region at its own pixel count.
+
+    No one keyword works everywhere: v3 servers reject "full" (iiif.nypl.org
+    answers 400 "Invalid size") and v2 servers such as tile.loc.gov reject "max".
+    """
+    return "max" if iiif_version >= 3 else "full"
+
+
 def _canvas_label(canvas: dict) -> str:
     """
     Extract a plain-text canvas label, handling every shape both versions use:
@@ -121,6 +164,7 @@ def _iter_v3(manifest: dict) -> Iterator[dict]:
             "canvas_width": canvas_w,
             "canvas_height": canvas_h,
             "service_id": svc_id,
+            "service_version": _svc_version(service, default=3),
             "image_id": svc_id.rsplit("/", 1)[-1],
             "max_width": _svc_max_width(service),
             "label": _canvas_label(canvas),
@@ -150,6 +194,7 @@ def _iter_v2(manifest: dict) -> Iterator[dict]:
                 "canvas_width": canvas_w,
                 "canvas_height": canvas_h,
                 "service_id": svc_id,
+                "service_version": _svc_version(service),
                 "image_id": svc_id.rsplit("/", 1)[-1],
                 "max_width": _svc_max_width(service),
                 "label": _canvas_label(canvas),
@@ -169,6 +214,7 @@ def iter_canvases(manifest: dict) -> Iterator[dict]:
         canvas_width  int       canvas width in pixels  (0 if unknown)
         canvas_height int       canvas height in pixels (0 if unknown)
         service_id    str       IIIF Image Service base URL (no trailing slash)
+        service_version int     Image API version of that service, 2 or 3
         image_id      str       last path segment of service_id
         max_width     int|None  server-advertised max width, if any
         label         str       canvas label as plain text ('' if absent)
@@ -194,7 +240,7 @@ def image_url(service_id: str, width: int, iiif_version: int = 2) -> str:
     For v3 servers (Internet Archive) 'max' is required; 'full' returns HTTP 400.
     """
     if width == 0:
-        size = "max" if iiif_version >= 3 else "full"
+        size = full_size(iiif_version)
     else:
         size = f"{width},"
     return f"{service_id}/full/{size}/0/default.jpg"

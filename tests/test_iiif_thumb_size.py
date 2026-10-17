@@ -56,6 +56,38 @@ def test_a_malformed_fragment_yields_no_url():
     assert _url("1,2,0,0") == ""
 
 
+
+# --- Image API version ------------------------------------------------------
+
+NYPL = "https://iiif.nypl.org/iiif/3/56855255"
+V3_MAP = {NYPL: (NYPL, 1600, 2514, "", 3)}
+
+
+def test_a_v3_service_is_asked_for_max_not_full():
+    """iiif.nypl.org speaks Image API 3 and answers 400 "Invalid size" to /full/,
+    which broke every narrow Green Book thumbnail."""
+    url = _iiif_region_url(f"{NYPL}#xywh=100,100,40,20", V3_MAP, thumb_width=220, pad=20)
+    assert "/max/0/default.jpg" in url
+    assert "/full/" not in url
+
+
+def test_a_v3_downscale_keeps_the_explicit_width():
+    url = _iiif_region_url(f"{NYPL}#xywh=100,100,900,40", V3_MAP, thumb_width=220, pad=20)
+    assert "/220,/" in url
+
+
+def test_the_explorer_canvas_map_carries_the_service_version(tmp_path):
+    import json
+    from pipeline.explore_entries import _build_canvas_thumb_map
+    (tmp_path / "vol").mkdir()
+    (tmp_path / "vol" / "manifest.json").write_text(json.dumps({
+        "@context": "http://iiif.io/api/presentation/3/context.json",
+        "items": [{"id": "https://ex.org/canvas/1", "width": 10, "height": 10,
+                   "items": [{"items": [{"body": {"service": [
+                       {"id": NYPL, "type": "ImageService3"}]}}]}]}],
+    }), encoding="utf-8")
+    assert _build_canvas_thumb_map(tmp_path)["https://ex.org/canvas/1"][4] == 3
+
 # --- context lines ----------------------------------------------------------
 
 from pipeline.explore_entries import build_html
@@ -79,3 +111,7 @@ def test_context_lines_cannot_be_zero_or_negative():
     negative would invert the region."""
     assert "const CONTEXT_LINES = 1;" in _template(context_lines=0)
     assert "const CONTEXT_LINES = 1;" in _template(context_lines=-4)
+
+
+def test_the_explorer_picks_the_keyword_by_version():
+    assert '(svc[4] || 2) >= 3 ? "max" : "full"' in _template()

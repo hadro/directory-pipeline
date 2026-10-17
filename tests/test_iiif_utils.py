@@ -6,7 +6,11 @@ slash, v2 maxWidth); the richer two-canvas fixtures in conftest.py
 (v2_manifest / v3_manifest) cover the spec-shaped happy paths.
 """
 
+import pytest
+
 from utils.iiif_utils import (
+    _svc_version,
+    full_size,
     image_url,
     iter_canvases,
     manifest_item_id,
@@ -391,3 +395,33 @@ class TestCanvasLabel:
         manifest = _v3_with_label({})
         del manifest["items"][0]["label"]
         assert list(iter_canvases(manifest))[0]["label"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Image API version, and the keyword for a region at its own size
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("service, default, expected", [
+    ({"id": "https://ex.org/s", "type": "ImageService3"}, 2, 3),
+    ({"id": "https://ex.org/s", "type": "ImageService2"}, 3, 2),   # v3 manifest, v2 service
+    ({"@id": "https://ex.org/s", "@type": "ImageService2"}, 3, 2),
+    ({"@id": "https://ex.org/s", "@context": "http://iiif.io/api/image/2/context.json"}, 3, 2),
+    ({"@id": "https://ex.org/s", "profile": ["http://iiif.io/api/image/2/level2.json", {}]}, 3, 2),
+    ([{"id": "https://iiif.nypl.org/iiif/3/56855255"}], 2, 3),        # URL hint, list form
+    ("https://cdm.example.org/iiif/2/greenbook:88", 3, 2),            # plain string, URL hint
+    ({"id": "https://ex.org/iiif/img1"}, 3, 3),                       # says nothing: manifest's
+    ({"id": "https://ex.org/iiif/img1"}, 2, 2),
+])
+def test_service_version(service, default, expected):
+    assert _svc_version(service, default=default) == expected
+
+
+def test_iter_canvases_reports_the_service_version():
+    assert next(iter_canvases(V2))["service_version"] == 2
+    assert next(iter_canvases(V3))["service_version"] == 3
+
+
+def test_full_size_keyword_differs_by_version():
+    """iiif.nypl.org (v3) answers 400 to "full"; tile.loc.gov (v2) to "max"."""
+    assert full_size(3) == "max"
+    assert full_size(2) == "full"

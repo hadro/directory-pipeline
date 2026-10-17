@@ -776,8 +776,11 @@ function thumbUrl(row) {{
     // 3 KB (25 KB/Mpx) against 40 KB (363 KB/Mpx) for the same region at
     // /full/ — visually unreadable. With pct: even the native width trips it,
     // because the percentage rounds down and the request is then an upscale.
-    // So: /full/ for a region already smaller than the display size, and an
-    // explicit width only when it would be a genuine downscale.
+    // So: the region's own size for a region already smaller than the display
+    // size, and an explicit width only when it would be a genuine downscale.
+    // "Own size" is "max" on Image API v3 and "full" on v2: iiif.nypl.org (v3)
+    // answers 400 to "full" and tile.loc.gov (v2) answers 400 to "max".
+    // svc[4] is the service's version; older canvas maps lack it, so default 2.
     // Ensure the crop is at least 600px wide so narrow Surya detections
     // (e.g. short names in classified directories) show enough context.
     const minW = 600;
@@ -790,7 +793,7 @@ function thumbUrl(row) {{
     const yp = (ry / ch * 100).toFixed(4);
     const wp = (rw / cw * 100).toFixed(4);
     const hp = (rh / ch * 100).toFixed(4);
-    const size = rw <= tw ? "full" : `${{tw}},`;
+    const size = rw <= tw ? ((svc[4] || 2) >= 3 ? "max" : "full") : `${{tw}},`;
     return `${{svc[0]}}/pct:${{xp}},${{yp}},${{wp}},${{hp}}/${{size}}/0/default.jpg`;
   }}
   return `${{svc[0]}}/full/400,/0/default.jpg`;
