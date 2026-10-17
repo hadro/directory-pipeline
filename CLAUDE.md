@@ -23,6 +23,15 @@ Fixing them needs per-page (not per-directory) alignment-model selection. Page l
 blocker detail and the two implementation options: `docs/plans/degenerate-page-reocr.md`
 (created 2026-09-04). Deferred until after the re-align and entry-binder work.
 
+## Deferred work: mid-page body lines hoisted as headers
+
+`plan_columns()` hoists any gutter-crossing line ≥30% of page width, wherever it sits, and
+gutters sit at a coverage-valley midpoint, so long ragged-right entries qualify. That
+mis-binds ~450 lines on 1,676 pages. It also trips Guard 1 on 960 more pages, which then
+lose per-column alignment. Evidence: `docs/evidence/2026-09-22-gutter-hoist/`. The
+suggested branch (a "band of its own" test in `is_header`), how to measure it, and the
+rollout: `docs/plans/gutter-hoist-fix.md` (created 2026-09-23).
+
 ## Setup
 
 ```bash

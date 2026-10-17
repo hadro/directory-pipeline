@@ -1,0 +1,38 @@
+10406 surya files in 54 kept collections
+{'guard1_pages': 997, 'guard1_would_clear': 960, 'pages': 1676, 'base_lines': 232537, 'base_ok': 159818, 'mid_lines': 7346, 'cur_ok': 5149, 'cf_ok': 5556, 'cur_unmatched': 12326, 'cf_unmatched': 11873, 'pages_cf_better': 184, 'pages_cf_worse': 67, 'fixed': 450, 'broken': 43}
+mid-page hoisted lines bound to own text: current 70.1%  counterfactual 75.6%
+baseline (column lines, same pages): 68.7%
+lines fixed by counterfactual, by collection:
+    196  green_books_and_related
+    119  the_national_directory_of_morticians_nationaldirectornati
+     32  tulsa_1921
+     27  tulsa_1922
+     17  lain_s_brooklyn_street_directory_and_buy_ldpd_11290437_000
+     17  new_harlem_blue_book_e8de8ea0
+     15  woods_directory_73644404
+     11  afro-american-travel-guide-1958
+      6  lain_healy_s_brooklyn_directory_for_the_1897BPL
+      4  1869_geo_p_rowell_and_co_s_american_news_sn82007064_gdc_sn82007064_1869
+      3  afro-american-travel-guide-1957
+      2  afro-american-travel-guide-1956
+examples (surya text  ->  gemini text bound today):
+   ('green_books_and_related', '0063_5210168_surya.json', 'Vandorf-Broadway & Washington', 'Ohio')
+   ('the_national_directory_of_morticians_nationaldirectornati', '0112_nationaldirectornati%2Fnationaldirectornati_jp2.zip%2Fnationaldirectornati_jp2%2Fnationaldirectornati_0112.jp2_surya.json', 'Member N.S.M. and N.F.D.A.', '')
+   ('tulsa_1921', '0325_p15020coll12:2763_left_surya.json', '303 Midwest Marketing Co.', '')
+   ('green_books_and_related', '0022_5214009_surya.json', 'Parkview, 321 N. California Ave.', '')
+   ('green_books_and_related', '0012_5207009_surya.json', 'IN PATRONIZING THESE PLACES', '')
+   ('green_books_and_related', '0059_5214046_surya.json', 'K. P. Imp. Club, S. Yellow Spring', '')
+   ('new_harlem_blue_book_e8de8ea0', '0092_59014286_surya.json', 'The Harriet Extension, 841-47 St. Nicholas Av.', '84')
+   ('tulsa_1921', '0325_p15020coll12:2763_left_surya.json', '10bby First Natl Bank Cigar Stand.', '')
+   ('lain_s_brooklyn_street_directory_and_buy_ldpd_11290437_000', '0272_ldpd_11290437_000%2Fldpd_11290437_000_jp2.zip%2Fldpd_11290437_000_jp2%2Fldpd_11290437_000_0271.jp2_surya.json', '455 Eng. 13-Powers, n. Ewen', '')
+   ('new_harlem_blue_book_e8de8ea0', '0091_59014285_surya.json', 'Majestic Hotel, McCullo & McMechen Stns.', '')
+   ('the_national_directory_of_morticians_nationaldirectornati', '0296_nationaldirectornati%2Fnationaldirectornati_jp2.zip%2Fnationaldirectornati_jp2%2Fnationaldirectornati_0296.jp2_surya.json', 'PHILLIPS MEMORIAL HOME', '')
+   ('green_books_and_related', '0021_5208017_surya.json', 'Y. W. C. A.—901 Rhode Is. Ave. N. W.', '')
+   ('green_books_and_related', '0069_5207594_surya.json', 'Underwood—1303 S. Yellow Spring St.', 'OHIO')
+   ('green_books_and_related', '0017_5214004_surya.json', 'Miss W. A. Brown, 1306 Tatnall St.', '')
+   ('new_harlem_blue_book_e8de8ea0', '0045_59014239_surya.json', 'Locker Geo Process Server 211 W 145 St', '')
+   ('afro-american-travel-guide-1958', '0036_59099106_surya.json', 'CLOVE VALLEY DUDE RANCH', '')
+   ('green_books_and_related', '0037_5213549_surya.json', 'Mrs. W. Harrison-1215 Greenwood Ave.', '')
+   ('lain_healy_s_brooklyn_directory_for_the_1897BPL', '0081_1897BPL%2F1897BPL_jp2.zip%2F1897BPL_jp2%2F1897BPL_0080.jp2_surya.json', '394 Gates Avenue, cor. Nostrand.', '')
+   ('the_national_directory_of_morticians_nationaldirectornati', '0333_nationaldirectornati%2Fnationaldirectornati_jp2.zip%2Fnationaldirectornati_jp2%2Fnationaldirectornati_0333.jp2_surya.json', 'HEYL FUNERAL HOME', 'OHIO—Continued 325')
+   ('tulsa_1921', '0325_p15020coll12:2763_left_surya.json', '303 L K Cone, investments.', '')
