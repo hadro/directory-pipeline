@@ -28,12 +28,32 @@ def _reg(tmp_path, body):
 
 # --- the real registry ------------------------------------------------------
 
+# Judgements about one working copy's output/ live in the gitignored local
+# registry, so a fresh clone (CI included) has none of them. Tests of those
+# judgements run where the file exists and skip elsewhere; tests of the shared
+# rules run everywhere.
+needs_local_registry = pytest.mark.skipif(
+    not LOCAL_REGISTRY_PATH.exists(),
+    reason="judgements about this working copy's output/; "
+           "see analysis/collection_registry.local.txt.example",
+)
+
+
 @pytest.mark.parametrize("name", [
     "_ocr_backups",
     "ia_trow_1907_trowsgen",
     "nypl_polk_1917_4c08ab00",
     "loc_spooner_01015253",
     "harvest_polk1933mb_a",
+])
+def test_pipeline_generated_names_are_excluded(name):
+    """Shared rules: directories the pipeline itself creates."""
+    keep, _ = classify(name)
+    assert not keep
+
+
+@needs_local_registry
+@pytest.mark.parametrize("name", [
     "copyright_ledgers_copyright_records_new_2022657932",
     "frederick_douglass_papers_financial_pape_mss118790088",
     "polish_declarations_of_admiration_and_fr_pldec.104",
@@ -51,6 +71,7 @@ def test_known_non_collections_are_excluded(name):
     assert not keep
 
 
+@needs_local_registry
 @pytest.mark.parametrize("name", [
     "the_artistic_language_of_flowers_cu31924074093760",
     "the_language_and_sentiment_of_flowers_languagese",
