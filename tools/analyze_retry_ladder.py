@@ -58,7 +58,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from utils.collections import classify  # noqa: E402
+# Aliased: this module defines its own classify() for log messages, which used
+# to shadow this import and quietly turn the collection filter into a no-op.
+from utils.collections import classify as classify_collection  # noqa: E402
 
 # Message prefix -> _output_issue kind. Order matters: the first match wins.
 _KIND_PATTERNS = [
@@ -223,6 +225,18 @@ def report(pages: dict) -> None:
             print(f"{label}: no data ({len(recs)} page(s) of this class seen)")
 
 
+def logs_under(root: Path, all_collections: bool = False) -> "list[Path]":
+    """Log files under *root*, minus those inside excluded collections.
+
+    A log inside a test collection describes a test, not the corpus.
+    """
+    found = sorted(root.rglob("*.txt")) + sorted(root.rglob("*.log"))
+    if all_collections:
+        return found
+    return [f for f in found
+            if all(classify_collection(part)[0] for part in f.relative_to(root).parts[:-1])]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Measure which retry-ladder rungs actually rescue a page.",
@@ -237,12 +251,7 @@ def main() -> int:
     files: "list[Path]" = []
     for p in args.paths:
         if p.is_dir():
-            found = sorted(p.rglob("*.txt")) + sorted(p.rglob("*.log"))
-            if not args.all_collections:
-                # A log inside a test collection describes a test, not the corpus.
-                found = [f for f in found
-                         if all(classify(part)[0] for part in f.relative_to(p).parts[:-1])]
-            files.extend(found)
+            files.extend(logs_under(p, args.all_collections))
         elif p.exists():
             files.append(p)
         else:

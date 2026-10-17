@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 
-from analyze_retry_ladder import classify, parse  # noqa: E402
+from analyze_retry_ladder import classify, logs_under, parse  # noqa: E402
 
 MODEL = "gemini-3.1-flash-lite"
 
@@ -164,3 +164,16 @@ def test_interleaved_pages_are_kept_apart(tmp_path):
     pages = parse([log])
     assert pages[a]["kind"] == "repetition" and not pages[a]["simple"]
     assert pages[b]["kind"] == "long_line" and pages[b]["simple_ok"]
+
+
+# --- which logs are read ----------------------------------------------------
+
+def test_logs_inside_excluded_collections_are_skipped(tmp_path):
+    """The registry's classify() was once shadowed by this module's own, whose
+    string result made every directory look included, so nothing was skipped."""
+    for coll in ("ia_probe", "tulsa_1921"):
+        (tmp_path / coll).mkdir()
+        (tmp_path / coll / "run.log").write_text("x\n", encoding="utf-8")
+    assert {p.parent.name for p in logs_under(tmp_path)} == {"tulsa_1921"}
+    assert {p.parent.name for p in logs_under(tmp_path, all_collections=True)} == {
+        "ia_probe", "tulsa_1921"}
