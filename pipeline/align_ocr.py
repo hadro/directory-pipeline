@@ -1709,7 +1709,9 @@ def main() -> None:
 
     # Record the stage so a direct invocation updates pipeline_state.json the
     # same way an orchestrated run does (main.py is otherwise the only writer).
-    if counts["ok"]:
+    # Gated on no failures, as the OCR stage is: main.py trusts this file, and
+    # a run that aligned 1 page of 80 must not look like a finished one.
+    if counts["ok"] and not counts["failed"]:
         record_stage(find_state_dir(output_root), "align_ocr")
 
 
