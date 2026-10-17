@@ -1,34 +1,35 @@
 # Known failure modes and gotchas
 
-## 1. `--aligned-model` mismatch
+## 1. Several OCR models' alignments in one volume
 
-**Symptom:** `canvas_fragment` has no `#xywh=` even though `*_aligned.json` files exist.
+**Symptom:** Boxes land on the wrong lines, or come from an older alignment, after a
+volume was re-OCR'd with a different model.
 
-**Cause:** OCR was run with one model (e.g. `gemini-2.0-flash`), producing files named
-`*_gemini-2.0-flash_aligned.json`. Extraction was called without `--aligned-model`, so
-it looks for `*_{ner_model}_aligned.json` and finds nothing, silently falling back to
-text-only mode.
+**Cause:** Extraction picks which `*_{ocr_model}_aligned.json` set to read. If no files
+exist for the expected model, it auto-detects one from the files present and prints
+"Auto-detected OCR model …". Where several models' alignments exist, the one with the best
+line coverage wins. (Before this, a plain alphabetical glob picked `gemini-2.0-flash`
+over newer models deterministically.)
 
-**Detection:** `entries_*.json` files have `"mode": "text-only"`. The aligned JSON
-filenames contain a different model slug than the entries CSV filename.
+**Detection:** The `"aligned_model"` field in each page's `*_entries.json` names the
+alignment that produced its boxes.
 
-**Fix:**
+**Fix:** To use a specific alignment:
 ```bash
-python main.py output/{slug} --extract-entries \
-  --aligned-model gemini-2.0-flash \
-  --force
+pipeline extract output/{slug} --aligned-model {ocr_model} --force
 ```
 
 ---
 
 ## 2. Scope filter extension mismatch
 
-**Symptom:** Same as above — text-only fallback despite aligned files existing.
+**Symptom:** Aligned files exist but extraction processes no pages, or falls back to
+raw text.
 
 **Cause:** `included_pages.txt` (written by `--select-pages`) stores image filenames
 ending in `.jpg`. The scope filter in `extract_entries.py` strips the last extension
 to get the stem (e.g. `foo.jp2.jpg` → stem `foo.jp2`). But aligned JSON filenames
-use `.jp2` as their stem (e.g. `foo_gemini-2.0-flash_aligned.json`). When the scope
+use `.jp2` as their stem (e.g. `foo_{ocr_model}_aligned.json`). When the scope
 filter compares `foo.jp2` (from `included_pages.txt`) against aligned file stems, it
 may fail to match if the `.jp2` is in one place but not the other.
 
@@ -40,52 +41,60 @@ exact stem format used in the aligned JSON filenames.
 
 ---
 
-## 3. Cached text-only entries blocking re-run
+## 3. Cached entries, and what `"mode"` means
 
-**Symptom:** Re-running `--extract-entries` with `--aligned-model` still produces
-no `#xywh=` fragments.
+**Symptom:** Re-running extraction does not change a page's entries.
 
-**Cause:** `extract_entries.py` skips pages whose `*_entries.json` output file already
-exists (line 464–471 in `pipeline/extract_entries.py`). If a prior run produced
-text-only entries, those cached files block the fresh aligned run.
+**Cause:** `extract_entries.py` reuses a page's `*_entries.json` unless the aligned JSON
+it was built from is newer, so re-aligning a page re-extracts it automatically. A page
+extracted from raw text before alignment existed is re-extracted once its alignment is
+written.
 
-**Detection:** `entries_*.json` files exist and have `"mode": "text-only"`.
+**Detection:** Don't use the `"mode"` field. It is the NER input mode, `"text-only"`
+(the default) or `"multimodal"`, and is unrelated to alignment. A page extracted from
+aligned JSON carries `"aligned_model"`; one extracted from raw text does not.
 
-**Fix:** Add `--force` to the extraction command to overwrite cached files.
-
----
-
-## 4. `line_text` empty → wrong fallback field used for bbox matching
-
-**Symptom:** Most entries on certain pages (e.g. ship name indexes, bibliography
-sections) have page-level thumbnails instead of entry-level crops, even after
-alignment runs correctly.
-
-**Cause:** The NER extraction didn't populate `line_text`. The bbox-matching fallback
-tries field values in dict order — for schema types where a generic field like
-`section = "INDEX OF SHIP NAMES"` comes first, it fails to match any aligned line
-and falls back to the full canvas URI. The `ship_name` or other distinctive field
-that would have matched comes later in the dict.
-
-**Status:** Fixed in `pipeline/extract_entries.py` — the fallback now tries all
-non-trivial string field values in order until one matches.
-
-**If still occurring:** Re-run `--extract-entries --force` with the latest code.
+**Fix:** `--force` re-runs NER on every page. That costs API calls, so use it only when
+the cache really is stale.
 
 ---
 
-## 5. Explorer shows no thumbnails (`--output-dir` not passed)
+## 4. Entries without a box: the binder refused them
+
+**Symptom:** After a correct alignment, some entries still have a page-level
+`canvas_fragment` (no `#xywh=`), so the explorer shows the full page for them.
+
+**Cause:** `utils/entry_binding.py` lets only identity fields supply a box: `line_text`,
+`name`, `subject`, `title`, `caption`, anything ending `_name`, plus address-like
+fields. An entry with no confident match gets no box rather than a best guess. The old
+matcher fell through to any string field, so a Green Book entry matched its own
+`category` to the printed section heading. That was 489 of about 900 misplacements.
+Context fields named after the set (`section_name`, `list_name`, `index_name`, …) are
+excluded too.
+
+**Detection:** The page's `*_entries.json` lists the entry under `unplaced_entries`, with
+its nearest miss and score.
+
+**Fix:** Usually none needed. A refusal is a result, not an error. For a volume-wide
+review list:
+```bash
+python tools/collate_review_queue.py output/{slug}/
+```
+To measure placement before and after a change: `python tools/audit_entry_bindings.py`.
+
+---
+
+## 5. Explorer shows no thumbnails (CSV outside the volume directory)
 
 **Symptom:** The data explorer HTML opens but shows no images.
 
-**Cause:** `explore_entries.py` needs to know where the images and `manifest.json`
-are. When called on a CSV that lives in a different directory from the images,
-`--output-dir` must be passed explicitly.
+**Cause:** `explore_entries.py` finds `manifest.json` through `--output-dir`, which
+defaults to the CSV's parent directory. A CSV that lives elsewhere (a combined CSV, a
+copy) finds no manifest.
 
 **Fix:**
 ```bash
-python -m pipeline.explore_entries output/{slug}/entries_{model}.csv \
-  --output-dir output/{slug}/
+python -m pipeline.explore_entries path/to/entries.csv --output-dir output/{slug}/
 ```
 
 ---
@@ -115,3 +124,67 @@ is found and the global default is used.
 
 **Fix:** Always pass `--ner-prompt output/{first-slug}/ner_prompt.md` when processing
 additional volumes in the same series.
+
+---
+
+## 8. Pages silently missing: the blank-page check
+
+**Symptom:** Some pages have an image but no `*_{model}.txt`, and never reach align or
+extract.
+
+**Cause:** `is_blank_page()` skips pages it judges blank before any Gemini call, and a
+skipped page writes nothing. Until 2026-10-16 it skipped 1,142 pages that had ink: small
+type on toned paper, grey-printed Green Books, light microfilm. The fixed rule keeps any
+page with measurable ink. Details: `docs/evidence/2026-10-16-blank-page/`.
+
+**Detection:** The OCR run's summary line counts "blank" pages. Compare images against
+`.txt` files.
+
+**Fix:** Re-run `pipeline ocr output/{slug}`, which OCRs any page the fixed check passes.
+`--no-blank-skip` forces every page.
+
+**The reverse case:** OCR written before the check existed (2026-06-11) can be text
+Gemini *invented* for a blank page. 44 such pages were quarantined under
+`output/_quarantine/hallucinated-blank-pages-2026-10-17/`. Restoring the 2026-09-04
+alignment backup needs that folder's `exclude-from-restore.txt` (`tar -X`).
+
+---
+
+## 9. `[OCR FAILED: …]` placeholder text files
+
+**Symptom:** A page's `.txt` is one line starting `[OCR FAILED`, and its entries are
+nonsense or empty.
+
+**Cause:** Versions before 0.3 wrote that placeholder when every attempt failed. A
+non-empty `.txt` counted as done, so the page was never retried, and align and extract
+read the placeholder as page text.
+
+**Fix:** In 0.3 and later, `pipeline ocr` deletes and retries placeholders. Then re-run
+`pipeline extract`.
+
+---
+
+## 10. Thumbnails broken only for narrow crops, on NYPL or Internet Archive images
+
+**Symptom:** Some entry thumbnails are broken images; others work.
+
+**Cause:** Explorers and maps built before 0.3 requested size `full` for crops narrower
+than the display width. IIIF Image API 3 servers such as iiif.nypl.org answer 400 to
+`full`; they need `max`, and v2 servers such as tile.loc.gov need `full`.
+
+**Fix:** Rebuild the explorer (or map) with 0.3 or later, which picks the keyword per
+service.
+
+---
+
+## 11. Two different "section" columns
+
+**Symptom:** A CSV has both `section` and `volume_section`, or the explorer's section
+switch shows unexpected values.
+
+**Cause:** `volume_section` is the structural section from `sections.txt`, written by
+extraction and used by the explorer's section switch. `section` is whatever the NER schema
+defines; Tulsa's and others' prompts use that name for their own field.
+
+**Fix:** None needed. They are separate on purpose. The switch appears only for volumes
+with a `sections.txt` and two or more sections.
