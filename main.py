@@ -823,6 +823,19 @@ def main() -> None:
         help="Images per Surya inference batch (default: 4; reduce if OOM)",
     )
     opts.add_argument(
+        "--blank-threshold",
+        type=float,
+        default=None,
+        dest="blank_threshold",
+        metavar="F",
+        help=(
+            "For --surya-ocr: Surya detector blank threshold (default: Surya's "
+            "own, 0.35). Raise to ~0.5 for pages Surya reads as tables, such as "
+            "dot-leader indexes, which otherwise come back as page-sized region "
+            "blocks alignment cannot use."
+        ),
+    )
+    opts.add_argument(
         "--max-output-tokens",
         type=int,
         default=None,
@@ -832,6 +845,16 @@ def main() -> None:
             "For --gemini-ocr: cap output tokens per call (default: 24576). Bounds "
             "the cost of a page that starts looping. Raise it if dense pages come "
             "back truncated; 0 disables the cap."
+        ),
+    )
+    opts.add_argument(
+        "--no-blank-skip",
+        action="store_true",
+        dest="no_blank_skip",
+        help=(
+            "For --gemini-ocr: OCR every page, including pages the blank-page "
+            "check would skip. A skipped page writes no .txt and drops out of "
+            "align and extract."
         ),
     )
     opts.add_argument(

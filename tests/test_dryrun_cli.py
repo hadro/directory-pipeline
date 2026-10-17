@@ -59,6 +59,18 @@ def test_max_output_tokens_passthrough(workdir):
     assert "--max-output-tokens 0" in out
 
 
+
+def test_blank_page_flags_passthrough(workdir):
+    """Both flags used to exist only on the leaf scripts, so the align stage's
+    outlier report gave advice the pipeline command could not follow."""
+    assert "--no-blank-skip" not in run_main(workdir, VOL, "--gemini-ocr")
+    out = run_main(workdir, VOL, "--gemini-ocr", "--no-blank-skip")
+    assert "-m pipeline.run_gemini_ocr" in out and "--no-blank-skip" in out
+
+    assert "--blank-threshold" not in run_main(workdir, VOL, "--surya-ocr")
+    out = run_main(workdir, VOL, "--surya-ocr", "--blank-threshold", "0.5")
+    assert "-m pipeline.run_surya_ocr" in out and "--blank-threshold 0.5" in out
+
 def test_extract_shorthand_expands(workdir):
     out = run_main(workdir, VOL, "--extract")
     for module in ("pipeline.download_images", "pipeline.run_gemini_ocr",

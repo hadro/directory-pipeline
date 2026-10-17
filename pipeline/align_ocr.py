@@ -955,7 +955,10 @@ def _report_unmatched_outliers(rates: "list[tuple[str, float]]", log) -> None:
         f"left the most Gemini text unboxed in this volume "
         f"(median {median:.1f}%, reporting above {cutoff:.1f}%).\n"
         "   A very high rate usually means Surya returned region blocks rather "
-        "than text lines — try --blank-threshold 0.5 on those pages."
+        "than text lines. To re-detect those pages: delete their *_surya.json "
+        "and *_aligned.json, then run `pipeline ocr <dir> --blank-threshold 0.5`. "
+        "Surya redoes only the deleted pages, Gemini skips pages already "
+        "transcribed, and align fills in the gaps."
     )
     for rate, name in bad[:_OUTLIER_MAX_LIST]:
         log(f"  {rate:5.1f}%  {name}")
