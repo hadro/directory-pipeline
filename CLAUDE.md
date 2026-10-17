@@ -21,7 +21,7 @@ A phased implementation plan for a `detect_sections` stage — auto-drafts `sect
 of the collection — **`gemini-2.0-flash` was retired and returns 404 as of 2026-09-04**.
 Fixing them needs per-page (not per-directory) alignment-model selection. Page list,
 blocker detail and the two implementation options: `docs/plans/degenerate-page-reocr.md`
-(created 2026-09-04). Deferred until after the re-align and entry-binder work.
+(created 2026-09-04). It waited on the re-align and entry-binder work, both in 0.3.
 
 ## Deferred work: mid-page body lines hoisted as headers
 
@@ -145,11 +145,27 @@ Loop failures skip the temperature rungs (they never rescue a loop) and go strai
 simple-prompt fallback. Every attempt is kept as a candidate and the best is chosen at the
 end, ranked by distinct line count — raw length would systematically select the runaway.
 
+## Blank pages
+
+`is_blank_page()` (`utils/image_utils.py`) gates every Gemini OCR call. A page it skips
+writes no `.txt` and drops out of align and extract without a trace, so it is tuned to keep any
+page with ink. Until 2026-10-16 it measured a 512 px thumbnail at 0.5 × background and
+skipped 1,142 pages that had text. The fixed rule (1,600 px, 0.75 ×, 0.1%) and its measurement:
+`docs/evidence/2026-10-16-blank-page/`. `--no-blank-skip` OCRs every page regardless.
+
+OCR written before the check existed (2026-06-11) can be text Gemini invented for a blank
+page. 44 such pages were quarantined on 2026-10-17 under
+`output/_quarantine/hallucinated-blank-pages-2026-10-17/`. Restoring the 2026-09-04 alignment
+backup puts 50 of their files back unless you pass that folder's `exclude-from-restore.txt` to
+`tar -X`.
+
 ## Surya and alignment
 
 - `--surya-ocr` requires GPU or Apple Silicon; slow on CPU
 - `--align-ocr` uses Needleman-Wunsch with city/state headings as anchors; runs a second pass on unmatched lines to catch missed columns
 - Multi-column pages are resolved by `plan_columns()` (coverage-valley gutter detection, any number of columns) and each column is aligned against its own slice of the Gemini text, so a bad anchor can no longer corrupt the rest of the page. Two guards revert to whole-page alignment: an over-large hoisted header group, and a Surya:Gemini line ratio that indicates Gemini read *across* the columns (common in city-directory cross-reference tables)
+- When the column path completes, `_alignment_cost()` (unboxed lines + inversion rate) picks between it and whole-page. That is right where it runs: travel guides and national/business directories. **On city directories the column path rarely completes** (Guard 1 via the gutter hoist on two-column pages, no locatable column start on dense ones), so the rule rarely runs there. The 2026-09-04 evidence's "fails on city directories" table was a harness artifact; see its erratum and `docs/evidence/2026-10-17-column-alignment-panel/`
+- A no-gold placement check: compare each aligned line's `gemini_text` with Surya's own text at the same bbox. Pages where most bound lines disagree are mis-bound even when nearly everything is boxed, which the unmatched-rate outlier report cannot see
 - `--review-alignment` is a Flask server — access via `localhost:5000` locally or ngrok/Colab proxy in Colab
 - Aligned JSON confidence values: `"line"` (Surya), `"manual"` (user-confirmed via review UI)
 
@@ -209,6 +225,10 @@ Run `--select-pages` and `--generate-prompts` once per collection type. For addi
 ## Output schema
 
 Every row in the CSV has a `canvas_fragment` column — a IIIF URI pointing back to the exact page (with `#xywh=` bounding box if alignment was run). The slug is auto-derived from collection metadata; override with `--slug`.
+
+A volume with a `sections.txt` also gets a `volume_section` column: the structural section
+each row came from, which drives the explorer's section switch. It is deliberately not
+`section`, a name several NER schemas already use for their own field.
 
 After each run, `pipeline_state.json` is written to `output/{slug}/` recording the model used, the stages completed, and the command line behind the most recent write (`last_run_args`). Both `main.py` and the OCR/align/extract leaf scripts write it, so re-running a single stage directly keeps it current. Downstream scripts (`align_ocr.py`, `fix_entries.py`) read it automatically — no `--model` flag needed.
 
