@@ -11,6 +11,28 @@ The headline, because it will be re-proposed by someone reasonable in a year:
 > text" — silently traded placement on 1 in 6 multi-column pages, putting text on the
 > wrong line at more than four times the geometric disorder.**
 
+**Erratum, 2026-10-17.** The harness that produced the tables below was flawed in two
+ways:
+
+- Its "whole-page" candidate called `build_aligned_lines(column_groups=None)`. That branch
+  ignores `fallback_order` and aligns over column-major order. Production's whole-page
+  path aligns over the legacy reading order, so the harness measured a candidate
+  production never computes.
+- It inferred which candidate the shipped rule picked from equal line counts.
+
+Both are fixed in `harness.py`, `compare_criteria.py` and `known_cols_experiment.py`.
+
+Read with that in mind:
+
+- The 1-in-6 figure, the 250-page and 120-page tables, the six-corpus table and the
+  known-column numbers are superseded by the corrected run in
+  [Corrected results](#corrected-results-2026-10-17).
+- The conclusion for travel guides and national/business directories stands, and is
+  stronger.
+- The city-directory "does not hold" finding was an artifact. On city directories the
+  column path almost never completes, so the selection rule almost never runs.
+- [Outcome on placement](#outcome-on-placement) measured a real re-align and is unaffected.
+
 ---
 
 ## Why a selection step exists at all
@@ -88,7 +110,41 @@ Result on 120 multi-column pages:
 Bad picks down 76%, for 89 more unboxed lines across 120 pages. That is the intended
 trade: give up a little coverage to avoid putting text on the wrong line.
 
+## Corrected results (2026-10-17)
+
+This is `compare_criteria.py` with the harness fixed. The whole-page candidate is now
+production's revert path (`_build_line_aligned_lines` over `fallback_order`), and the
+shipped rule's pick is read by comparing alignments, not counts. Only pages where the column
+path actually ran can involve a choice; *ran* counts them. The same six corpora and sample
+sizes were used.
+
+| corpus | genre | multi-col pages | ran | coverage-only | inversion-aware | unmatched |
+|---|---|---|---|---|---|---|
+| green books | travel guides | 120 | 29 | 3/20 | **1/21** | 60 → 69 |
+| morticians | national directory | 120 | 97 | 35/37 | **1/4** | 31 → 96 |
+| woods directory | business directory | 120 | 74 | 15/34 | **1/23** | 93 → 121 |
+| hearne's brooklyn | city directory | 34 | 4 | 0/3 | **0/4** | 2 → 2 |
+| tulsa 1921 | city directory | 120 | 1 | 1/1 | **0/0** | 16 → 21 |
+| tulsa 1922 | city directory | 120 | 1 | 1/1 | **0/0** | 2 → 16 |
+
+Read the two rule columns as *bad picks / whole-page picks*, on the pages that ran.
+
+- **Where the column path runs**, the coverage-only rule takes the more disordered whole-page
+  alignment again and again: 35 of 37 picks on the morticians directory. The inversion-aware
+  rule almost never does, in any corpus.
+- **On city directories the column path completes on almost no page.** Guard 1 (the
+  gutter-hoist over-collection) and failure to locate a column's start send them back to
+  whole-page first. So the rule has nothing to choose between.
+
+A gold-backed placement check on city directories reaches the same conclusion:
+`docs/evidence/2026-10-17-column-alignment-panel/`.
+
 ## Where it does not hold
+
+*Superseded by [Corrected results](#corrected-results-2026-10-17): this section's table and its
+city-directory conclusion came from the flawed harness. The mechanism analysis that follows is
+about `inversion_rate` itself and remains accurate, but it describes pages where, in
+production, the column path rarely runs at all.*
 
 **Everything above was measured on Green Books alone.** That corpus is 8 travel-guide
 volumes, and the result does not carry to every genre in `output/`. Re-running the same
@@ -190,6 +246,13 @@ matter and both were got wrong first time:**
    choice, not the candidates. `harness.py` materialises the pre-fix module out of git
    to get an honest column-only result. The commit is **pinned** (`PREFIX_COMMIT`), not
    `HEAD`, precisely because `HEAD` moves once the fix is committed — which it now has.
+3. *(Added 2026-10-17.)* The whole-page candidate must be production's revert path:
+   `_build_line_aligned_lines(fallback_order, …)`, which is `WHOLE` in `harness.py`.
+   `build_aligned_lines(column_groups=None)` ignores `fallback_order` and aligns over the
+   column-major order it was handed. That is item 1's mistake by another route, and it
+   stood until 2026-10-17. Read the shipped rule's pick by comparing alignments, never
+   counts, because two different alignments often bind the same number of lines.
+   `results-2026-10-17.txt` holds the corrected run.
 
 ## The general lesson
 

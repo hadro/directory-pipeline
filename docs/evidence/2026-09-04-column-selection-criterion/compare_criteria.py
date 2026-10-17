@@ -28,7 +28,7 @@ import random
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import FIXED, FRAG, RAW, bbox_centre, inversion_rate, load, prep  # noqa: E402
+from harness import FIXED, FRAG, RAW, WHOLE, bbox_centre, inversion_rate, load, prep  # noqa: E402
 
 # (label, glob). Kept short enough to run in a couple of minutes.
 DEFAULT_CORPORA = [
@@ -49,7 +49,7 @@ def score(pattern: str, limit: int, seed: int = 9) -> dict | None:
     pages = glob.glob(pattern, recursive=True)
     random.shuffle(pages)
 
-    n = 0
+    n = ran = drift = 0
     cov_whole = cov_bad = new_whole = new_bad = unm_cov = unm_new = 0
     inv_c_sum = inv_w_sum = 0.0
 
@@ -69,7 +69,12 @@ def score(pattern: str, limit: int, seed: int = 9) -> dict | None:
         lines, groups, fb = pr
 
         col, col_um = RAW(lines, gl, FRAG, ad, column_groups=groups, fallback_order=fb)
-        whole, whole_um = RAW(lines, gl, FRAG, ad, column_groups=None, fallback_order=fb)
+        whole, whole_um = WHOLE(fb, gl, FRAG, ad)
+        if col == whole:
+            # The column path reverted (a guard tripped, or a column could not
+            # be located), so neither rule had a choice to make on this page.
+            continue
+        ran += 1
         inv_c = inversion_rate([bbox_centre(x["bbox"]) for x in col])
         inv_w = inversion_rate([bbox_centre(x["bbox"]) for x in whole])
         inv_c_sum += inv_c
@@ -88,18 +93,21 @@ def score(pattern: str, limit: int, seed: int = 9) -> dict | None:
 
         fixed, fixed_um = FIXED(lines, gl, FRAG, ad, column_groups=groups, fallback_order=fb)
         unm_new += len(fixed_um)
-        # The current code returns one candidate or the other; infer which by
-        # matching counts. Ambiguous only when both candidates agree on both
-        # counts, in which case the choice does not matter.
-        if len(fixed_um) == len(whole_um) and len(fixed) == len(whole):
+        # The current code returns one candidate or the other; compare the
+        # alignments themselves. Matching counts instead (as before 2026-10-17)
+        # miscounted every page where two different alignments bound the same
+        # number of lines.
+        if fixed == whole:
             new_whole += 1
             if whole_is_worse:
                 new_bad += 1
+        elif fixed != col:
+            drift += 1      # neither candidate: the pinned module has drifted
 
     if not n:
         return None
-    return dict(pages=n, found=len(pages),
-                inv_col=inv_c_sum / n, inv_whole=inv_w_sum / n,
+    return dict(pages=n, ran=ran, drift=drift, found=len(pages),
+                inv_col=inv_c_sum / max(ran, 1), inv_whole=inv_w_sum / max(ran, 1),
                 cov_whole=cov_whole, cov_bad=cov_bad, unm_cov=unm_cov,
                 new_whole=new_whole, new_bad=new_bad, unm_new=unm_new)
 
@@ -115,9 +123,9 @@ def main() -> None:
 
     corpora = ([(g, g) for g in args.corpus] if args.corpus else DEFAULT_CORPORA)
 
-    print(f"{'corpus':36} {'pages':>6} {'coverage-only':>16} {'inversion-aware':>16}")
-    print(f"{'':36} {'':>6} {'bad/picks':>16} {'bad/picks':>16}")
-    print("-" * 78)
+    print(f"{'corpus':36} {'pages':>6} {'ran':>5} {'coverage-only':>16} {'inversion-aware':>16}")
+    print(f"{'':36} {'':>6} {'':>5} {'bad/picks':>16} {'bad/picks':>16}")
+    print("-" * 84)
     rows = []
     for label, pattern in corpora:
         r = score(pattern, args.limit)
@@ -127,12 +135,15 @@ def main() -> None:
         rows.append((label, r))
         cov = "{}/{}".format(r["cov_bad"], r["cov_whole"])
         new = "{}/{}".format(r["new_bad"], r["new_whole"])
-        print(f"{label:36} {r['pages']:>6} {cov:>16} {new:>16}")
+        print(f"{label:36} {r['pages']:>6} {r['ran']:>5} {cov:>16} {new:>16}")
 
     print()
     for label, r in rows:
         print(f"{label}:")
-        print(f"    mean inversion   column {r['inv_col']:.3f}   whole-page {r['inv_whole']:.3f}")
+        if r["drift"]:
+            print(f"    WARNING: {r['drift']} page(s) matched neither candidate (module drift)")
+        print(f"    mean inversion   column {r['inv_col']:.3f}   whole-page {r['inv_whole']:.3f}"
+              "   (pages where the column path ran)")
         print(f"    total unmatched  coverage-only {r['unm_cov']}   inversion-aware {r['unm_new']}")
 
 

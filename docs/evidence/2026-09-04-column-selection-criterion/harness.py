@@ -5,7 +5,7 @@ Imported by compare_criteria.py; the names below are its public surface.
 """
 import sys,os,json,glob,re
 
-__all__ = ["RAW", "FIXED", "FRAG", "load", "prep",
+__all__ = ["RAW", "WHOLE", "FIXED", "FRAG", "load", "prep",
            "plan_columns", "_legacy_reading_order",
            "inversion_rate", "bbox_centre"]
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
@@ -25,6 +25,15 @@ if not os.path.exists(_prefix):
                        cwd=_repo, stdout=fh, check=True)
 import align_prefix
 RAW=align_prefix.build_aligned_lines
+# Production's whole-page candidate: when the column path reverts, or loses,
+# build_aligned_lines aligns the whole page over fallback_order (the legacy
+# reading order). Calling build_aligned_lines with column_groups=None is NOT
+# that -- that branch ignores fallback_order and aligns over the column-major
+# order it was handed. Until 2026-10-17 the scripts here used that call; see
+# "Erratum" in README.md.
+def WHOLE(fallback_order, gemini_lines, fragment_fn, non_anchor):
+    return align_prefix._build_line_aligned_lines(fallback_order, gemini_lines,
+                                                  fragment_fn, non_anchor)
 from utils.column_utils import inversion_rate, bbox_centre
 FRAG=lambda b: f"#xywh={b[0]},{b[1]},{b[2]-b[0]},{b[3]-b[1]}"
 

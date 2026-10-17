@@ -1,0 +1,29 @@
+# compare_criteria.py, harness corrected (2026-10-17), default six corpora
+corpus                                pages   ran    coverage-only  inversion-aware
+                                                         bad/picks        bad/picks
+------------------------------------------------------------------------------------
+green books (travel guides)             120    29             3/20             1/21
+morticians (national directory)         120    97            35/37              1/4
+woods (business directory)              120    74            15/34             1/23
+tulsa 1921 (city directory)             120     1              1/1              0/0
+tulsa 1922 (city directory)             120     1              1/1              0/0
+hearne's brooklyn (city directory)       34     4              0/3              0/4
+
+green books (travel guides):
+    mean inversion   column 0.018   whole-page 0.064   (pages where the column path ran)
+    total unmatched  coverage-only 60   inversion-aware 69
+morticians (national directory):
+    mean inversion   column 0.015   whole-page 0.311   (pages where the column path ran)
+    total unmatched  coverage-only 31   inversion-aware 96
+woods (business directory):
+    mean inversion   column 0.022   whole-page 0.090   (pages where the column path ran)
+    total unmatched  coverage-only 93   inversion-aware 121
+tulsa 1921 (city directory):
+    mean inversion   column 0.058   whole-page 0.254   (pages where the column path ran)
+    total unmatched  coverage-only 16   inversion-aware 21
+tulsa 1922 (city directory):
+    mean inversion   column 0.092   whole-page 0.372   (pages where the column path ran)
+    total unmatched  coverage-only 2   inversion-aware 16
+hearne's brooklyn (city directory):
+    mean inversion   column 0.057   whole-page 0.010   (pages where the column path ran)
+    total unmatched  coverage-only 2   inversion-aware 2

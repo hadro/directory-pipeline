@@ -16,7 +16,7 @@ sys.path.insert(0, "/Users/joshhadro/github/directory-pipeline/docs/evidence/202
 sys.path.insert(0, "/Users/joshhadro/github/directory-pipeline")
 
 from utils.column_utils import bbox_centre, inversion_rate
-from harness import load, prep, RAW, FRAG
+from harness import load, prep, RAW, WHOLE, FRAG
 
 
 def ranges_from_groups(groups):
@@ -101,7 +101,9 @@ for label, pattern in CORPORA:
         ranges = ranges_from_groups(groups)
 
         col, col_um = RAW(lines, gl, FRAG, ad, column_groups=groups, fallback_order=fb)
-        whole, whole_um = RAW(lines, gl, FRAG, ad, column_groups=None, fallback_order=fb)
+        whole, whole_um = WHOLE(fb, gl, FRAG, ad)
+        if col == whole:
+            continue    # the column path reverted: no choice for either rule
 
         # ground-truth-ish judge: the known-column inversion of each candidate
         truth_c = inversion_known(col, ranges)
