@@ -41,7 +41,8 @@ from utils.gemini import (
     get_client,
     thinking_config_for,
 )
-from utils.image_utils import is_blank_page
+from utils.image_utils import image_is_complete, is_blank_page
+from pipeline.download_images import redownload_page
 from pipeline.state import add_usage, find_state_dir, record_stage
 from utils.models import DEFAULT_OCR_MODEL, FALLBACK_MODEL, model_slug
 
@@ -385,7 +386,7 @@ def process_image(
 ) -> tuple[str, bool | None]:
     """
     OCR one image via Gemini. Returns (status, success) where status is one of
-    'skipped', 'blank', 'ok', 'failed'.
+    'skipped', 'blank', 'corrupt', 'empty', 'ok', 'failed'.
     """
     txt_path = image_path.parent / f"{image_path.stem}_{model_slug(model)}.txt"
     if txt_path.exists():
@@ -395,16 +396,26 @@ def process_image(
         _log(f"  Re-running (empty output file): {txt_path.name}")
         txt_path.unlink()
 
+    # An interrupted download leaves an empty or truncated image. The blank
+    # check cannot read one, and the API would be paid to read half a page, so
+    # fetch it again first. If that fails the page is 'corrupt', which, like
+    # 'failed', keeps the stage from being recorded complete.
+    if not image_is_complete(image_path):
+        _log(f"  Corrupt image — downloading again: {image_path.name}")
+        if not redownload_page(image_path):
+            return "corrupt", None
+
     # Blank pages are hallucination magnets — the model invents the text the
     # prompt describes instead of returning nothing. Detect and skip them
     # before spending an API call. No .txt is written, so downstream stages
     # (align, extract) never see the page; re-runs just re-check (cheap).
     #
-    # The check is a contrast heuristic and it FALSE-POSITIVES on low-contrast
-    # scans: on some NYPL microfilm the darkest pixel is ~106 against a ~217
-    # background, so text never crosses the 0.5x-background threshold and a full
-    # page of entries measures as 0.001% dark. Pass --no-blank-skip when you know
-    # the page has content (evaluation runs, or a volume that scans light).
+    # Because a skip is silent, the check is tuned to return False when in
+    # doubt. Until 2026-10-16 it measured a 512 px thumbnail against a 0.5x
+    # background cutoff and called full pages of text blank — small type on
+    # toned paper, grey-printed Green Books, light microfilm. See is_blank_page
+    # and docs/evidence/2026-10-16-blank-page/. --no-blank-skip remains for runs
+    # that must OCR every page regardless.
     if skip_blank and is_blank_page(image_path):
         return "blank", None
 
@@ -660,11 +671,11 @@ def main() -> None:
         dest="no_blank_skip",
         action="store_true",
         help=(
-            "Do not skip pages the blank-page heuristic flags. That heuristic "
-            "measures contrast and false-positives on low-contrast scans (some "
-            "NYPL microfilm reads as 0.001%% dark despite a full page of "
-            "entries), silently dropping real pages. Use when you know the pages "
-            "have content — evaluation runs, or a volume that scans light."
+            "Do not skip pages the blank-page heuristic flags. A skipped page "
+            "writes no .txt and silently drops out of align and extract. The "
+            "heuristic is tuned to keep any page with measurable ink, but use "
+            "this when every page must be OCR'd regardless — evaluation runs, "
+            "or a volume whose content is a single faint line per page."
         ),
     )
     parser.add_argument(
@@ -796,7 +807,7 @@ def main() -> None:
         )
 
     client = get_client()
-    counts = {"ok": 0, "skipped": 0, "blank": 0, "empty": 0, "failed": 0}
+    counts = {"ok": 0, "skipped": 0, "blank": 0, "corrupt": 0, "empty": 0, "failed": 0}
     completed = 0
 
     fallback_model = args.fallback_model.strip() or None
@@ -843,6 +854,8 @@ def main() -> None:
                         _log(f"[{completed:04d}/{total}] Skipped (exists): {txt_name}")
                     elif status == "blank":
                         _log(f"[{completed:04d}/{total}] Blank page — no OCR: {image_path.name}")
+                    elif status == "corrupt":
+                        _log(f"[{completed:04d}/{total}] CORRUPT image, download failed — no OCR: {image_path.name}")
                     elif status == "empty":
                         _log(f"[{completed:04d}/{total}] Empty response — nothing written: {image_path.name}")
                     elif status == "ok":
@@ -858,8 +871,8 @@ def main() -> None:
         print(
             f"\nDone. {total} image(s): "
             f"{counts['ok']} processed, {counts['skipped']} skipped, "
-            f"{counts['blank']} blank, {counts['empty']} empty, "
-            f"{counts['failed']} failed.",
+            f"{counts['blank']} blank, {counts['corrupt']} corrupt, "
+            f"{counts['empty']} empty, {counts['failed']} failed.",
             file=sys.stderr,
         )
 
@@ -868,14 +881,16 @@ def main() -> None:
     # Gated on there being no failures, not merely one success: recording the
     # stage complete after 1 of 83 pages made a 1%-finished run indistinguishable
     # from a clean one, and main.py trusts this file.
-    if counts["ok"] and not counts["failed"]:
+    if counts["ok"] and not counts["failed"] and not counts["corrupt"]:
         record_stage(find_state_dir(output_root), "gemini_ocr",
                      updates={"ocr_model": args.model})
 
-    if counts["failed"]:
+    if counts["failed"] or counts["corrupt"]:
         print(
-            f"Error: {counts['failed']} page(s) failed; stage not recorded as complete. "
-            "Re-run to retry them — failed pages write no .txt, so they are not skipped.",
+            f"Error: {counts['failed']} page(s) failed and {counts['corrupt']} image(s) "
+            "are corrupt and could not be downloaded again; stage not recorded as "
+            "complete. Re-run to retry them — neither writes a .txt, so they are "
+            "not skipped.",
             file=sys.stderr,
         )
         sys.exit(1)

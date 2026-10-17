@@ -172,6 +172,27 @@ def main() -> None:
 
     from PIL import Image
 
+    from pipeline.download_images import redownload_page
+    from utils.image_utils import image_is_complete
+
+    # An interrupted download leaves an empty or truncated image, and one such
+    # file fails its whole batch at Image.open below. Fetch corrupt pages again
+    # first, and drop any that still will not decode.
+    unreadable = 0
+    usable: list[Path] = []
+    for p in images_to_run:
+        if image_is_complete(p):
+            usable.append(p)
+            continue
+        print(f"Corrupt image — downloading again: {p.name}", file=sys.stderr)
+        if redownload_page(p):
+            usable.append(p)
+        else:
+            print(f"FAILED: corrupt and could not be downloaded again: {p.name}",
+                  file=sys.stderr)
+            unreadable += 1
+    images_to_run = usable
+
     ok_count = 0
     fail_count = 0
     total = len(images_to_run)
@@ -272,8 +293,8 @@ def main() -> None:
         rate = ok_count / total_elapsed if total_elapsed > 0 and ok_count > 0 else 0
         print(
             f"\nDone in {total_elapsed:.1f}s ({rate:.2f} img/s). "
-            f"{total} image(s): {ok_count} processed, "
-            f"{skipped} already done, {fail_count} failed.",
+            f"{total + unreadable} image(s): {ok_count} processed, "
+            f"{skipped} already done, {fail_count + unreadable} failed.",
             file=sys.stderr,
         )
 

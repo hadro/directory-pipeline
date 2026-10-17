@@ -202,17 +202,49 @@ class _Recorder:
 
 @pytest.fixture
 def page(tmp_path, monkeypatch):
-    """A real file on disk plus a stubbed blank-page check."""
+    """A real file on disk plus stubbed image-integrity and blank-page checks."""
     import pipeline.run_gemini_ocr as mod
 
     img = tmp_path / "0001_page.jpg"
     img.write_bytes(b"\xff\xd8\xff\xe0not-a-real-jpeg")
+    monkeypatch.setattr(mod, "image_is_complete", lambda p: True)
     monkeypatch.setattr(mod, "is_blank_page", lambda p: False)
     return img
 
 
 def _run(client, page, **kw):
     return process_image(client, page, "gemini-3.1-flash-lite", "SYSTEM PROMPT", **kw)
+
+
+def test_corrupt_image_is_downloaded_again_before_ocr(page, monkeypatch):
+    import pipeline.run_gemini_ocr as mod
+
+    fetched = []
+    monkeypatch.setattr(mod, "image_is_complete", lambda p: False)
+    monkeypatch.setattr(mod, "redownload_page", lambda p: fetched.append(p) or True)
+    client = _Recorder(["\n".join(directory_lines(30))])
+
+    status, _ = _run(client, page)
+
+    assert fetched == [page]
+    assert status == "ok"
+    assert len(client.calls) == 1
+
+
+def test_corrupt_image_that_cannot_be_downloaded_is_not_sent(page, monkeypatch):
+    # Neither skipped as blank (silent loss) nor sent to the API (paid to read a
+    # partial file): reported as corrupt, which keeps the stage incomplete.
+    import pipeline.run_gemini_ocr as mod
+
+    monkeypatch.setattr(mod, "image_is_complete", lambda p: False)
+    monkeypatch.setattr(mod, "redownload_page", lambda p: False)
+    client = _Recorder(["unused"])
+
+    status, _ = _run(client, page)
+
+    assert status == "corrupt"
+    assert client.calls == []
+    assert not list(page.parent.glob("*.txt"))
 
 
 def test_every_call_carries_the_service_tier_and_token_cap(page):

@@ -20,7 +20,10 @@ Manifest mode (--manifest):
     where <item_id> is derived from the manifest URL, or overridden
     with --output-dir.
 
-In both modes, already-downloaded files are skipped (safe to re-run).
+In both modes, already-downloaded files are skipped (safe to re-run) unless
+they are corrupt (empty or truncated by an interrupted download), in which case
+they are fetched again. Files are written to a .part name and renamed into place
+only once they decode, so an interrupted run cannot leave a partial image.
 
 On HTTP 429 or 503, the script retries automatically with exponential
 backoff, respecting the Retry-After header when provided.
@@ -50,12 +53,20 @@ import urllib.error
 from pathlib import Path
 
 import requests
+from PIL import Image
 
 from utils import iiif_utils
+from utils.image_utils import image_is_complete
 
 DEFAULT_WIDTH = 2048
 DEFAULT_DELAY = 0.5   # ~2 requests/second — conservative for institutional servers
 MAX_RETRIES = 5
+# A body that arrives incomplete is refetched. The cut is usually a dropped
+# connection; on 2026-10-16, 30 corrupt pages in output/ (empty files, bodies cut
+# at a chunk boundary, IA responses stopping at 108,620 bytes) all came back
+# whole on a single re-request.
+DOWNLOAD_ATTEMPTS = 3
+_PAGE_NAME_RE = re.compile(r"^(\d{4})_.+\.jpg$")
 # 5xx gateway errors are included because image servers (e.g. NYPL's Cantaloupe
 # behind nginx) return them transiently when a large derivative times out —
 # the same URL succeeds on retry.
@@ -328,12 +339,40 @@ def download_file(
     dest: Path,
     delay: float,
 ) -> bool:
-    """Download url to dest. Returns True if downloaded, False if skipped."""
+    """Download url to dest. Returns True if downloaded, False if skipped.
+
+    An existing dest is skipped only if it is a complete image. Skipping on the
+    name alone made an interrupted download permanent: the empty or truncated
+    file was never fetched again, and every later stage failed on it. Raises
+    OSError if the server returns an incomplete image DOWNLOAD_ATTEMPTS times;
+    dest is then left as it was.
+    """
     if dest.exists():
-        return False
+        if image_is_complete(dest):
+            return False
+        print(f"  Corrupt image, downloading again: {dest.name}", file=sys.stderr)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
     try:
-        resp = get_with_retry(session, url, timeout=60, label=dest.name, stream=True)
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            _fetch(session, url, part, label=dest.name)
+            time.sleep(delay)
+            if image_is_complete(part):
+                part.replace(dest)
+                return True
+            print(
+                f"  Incomplete image received ({attempt}/{DOWNLOAD_ATTEMPTS}): {dest.name}",
+                file=sys.stderr,
+            )
+    finally:
+        part.unlink(missing_ok=True)
+    raise OSError(f"incomplete image after {DOWNLOAD_ATTEMPTS} attempts")
+
+
+def _fetch(session: requests.Session, url: str, dest: Path, label: str) -> None:
+    """Stream url to dest, falling back to urllib for servers that block requests."""
+    try:
+        resp = get_with_retry(session, url, timeout=60, label=label, stream=True)
         with open(dest, "wb") as f:
             for chunk in resp.iter_content(chunk_size=65536):
                 f.write(chunk)
@@ -353,8 +392,74 @@ def download_file(
                     if not chunk:
                         break
                     f.write(chunk)
-    time.sleep(delay)
-    return True
+
+
+def new_session() -> requests.Session:
+    """A requests session with the headers every download in this module uses."""
+    session = requests.Session()
+    session.headers["Accept"] = "application/json"
+    session.headers["User-Agent"] = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+    return session
+
+
+def _sibling_width(image_path: Path) -> int:
+    """Width the volume's other pages were downloaded at, or 0 if none readable.
+
+    The download width is not recorded anywhere (volumes in output/ were fetched
+    at 800, 1200 and 2048 px), so it is read back from the files. Each page was
+    fetched at min(requested, native), so the widest sibling is the requested
+    width whenever any page is natively at least that wide, and the widest
+    native page when the volume was fetched at full size. Requesting it
+    reproduces the siblings' scale either way.
+    """
+    widest = 0
+    for sib in sorted(image_path.parent.glob("[0-9][0-9][0-9][0-9]_*.jpg"))[:60]:
+        if sib == image_path or sib.stem.endswith(("_viz", "_left", "_right")):
+            continue
+        try:
+            with Image.open(sib) as im:
+                widest = max(widest, im.size[0])
+        except Exception:  # noqa: BLE001 — another corrupt page tells us nothing
+            continue
+    return widest
+
+
+def redownload_page(image_path: Path, delay: float = DEFAULT_DELAY) -> bool:
+    """Fetch one page image again from the manifest cached beside it.
+
+    For stages that find a corrupt image after the download stage has run. The
+    page is matched to its canvas by the NNNN_<image_id>.jpg name this module
+    writes, and requested at its siblings' width so the replacement matches
+    the rest of the volume. Returns True if image_path now holds a complete
+    image. Gives up, returning False, on anything it cannot match: no cached
+    manifest, a split half, a name that does not fit its canvas.
+    """
+    m = _PAGE_NAME_RE.match(image_path.name)
+    manifest_path = image_path.parent / "manifest.json"
+    if not m or not manifest_path.exists():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        canvases = iter_canvas_images(manifest, _sibling_width(image_path) or DEFAULT_WIDTH)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Cannot read {manifest_path}: {exc}", file=sys.stderr)
+        return False
+    index = int(m.group(1))
+    if not 1 <= index <= len(canvases):
+        return False
+    image_id, url, _, _ = canvases[index - 1]
+    if image_path.name != f"{index:04d}_{image_id}.jpg":
+        return False
+    try:
+        download_file(new_session(), url, image_path, delay)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Download failed for {image_path.name}: {exc}", file=sys.stderr)
+        return False
+    return image_is_complete(image_path)
 
 
 def _iiif_403_status(exc: Exception) -> bool:
@@ -394,6 +499,19 @@ def _download_item_images(
             )
             capped_warned = True
         dest = item_dir / f"{i:04d}_{image_id}.jpg"
+
+        # A corrupt page left by an interrupted run is repaired at the width the
+        # rest of the volume was fetched at, not this run's --width, the same way
+        # the OCR stages repair one they find.
+        if dest.exists() and not image_is_complete(dest):
+            if redownload_page(dest, delay):
+                total_downloaded += 1
+                if not quiet:
+                    print(f"    [{i:04d}] Downloaded again (was corrupt) → {dest}", file=sys.stderr)
+            else:
+                print(f"    [{i:04d}] Warning: corrupt, and no complete copy could be "
+                      f"downloaded — {primary_url}", file=sys.stderr)
+            continue
 
         try:
             downloaded = download_file(session, primary_url, dest, delay)
@@ -542,13 +660,7 @@ def main() -> None:
         parser.print_help(sys.stderr)
         sys.exit(1)
 
-    session = requests.Session()
-    session.headers["Accept"] = "application/json"
-    session.headers["User-Agent"] = (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    )
+    session = new_session()
 
     # ── Manifest mode ──────────────────────────────────────────────────────
     if args.manifest:
