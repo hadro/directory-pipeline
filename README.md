@@ -2,7 +2,7 @@
 
 Turn a public digital archive URL into a structured, browsable CSV — no manual transcription, no custom code per collection type.
 
-Give it a URL from the [Library of Congress](https://www.loc.gov/collections/), [Internet Archive](https://archive.org/), or any institution that publishes a public IIIF manifest (CONTENTdm repositories included). It downloads the scans, OCRs them, and extracts entries into a structured CSV. With the enrichment steps, every row links back to the exact location in the original scan.
+Give it a URL from the [Library of Congress](https://www.loc.gov/collections/), [Internet Archive](https://archive.org/), or any institution that publishes a public IIIF manifest (CONTENTdm repositories included). It downloads the scans, OCRs them, and extracts entries into a structured CSV. Every row links back to its page in the original scan and, with the enrichment steps, to the exact line.
 
 Built for digitized historical directories — city directories, gazetteers, trade directories — but works on just about any historical document with regular entry-like structure.
 
@@ -67,7 +67,7 @@ Alongside the extracted data CSV, `pipeline run` also generates a self-contained
 Two published collections built with this pipeline:
 
 - **[Tulsa city directories — 1921](https://hadro.github.io/tulsa-city-directories/1921#about)** — a Polk-style city directory.
-- **[The Negro Motorist Green Book and other Black travel guides explorer](https://hadro.github.io/green-books/all-volumes)** — the full run of Green Book volumes plus 22 other travel guides for Black travelers, from 1930-1966.
+- **[The Negro Motorist Green Book and other Black travel guides explorer](https://hadro.github.io/green-books/all-volumes)** — the full run of the Green Book plus seven other travel guides for Black travelers: about 113,800 listings across 50 volumes, 1930–1966.
 
 <p>
   <a href="https://hadro.github.io/tulsa-city-directories/1921#about"><img src="docs/screenshots/tulsa-city-directory-entry.png" width="49%" alt="Tulsa 1921 city directory explorer: entry detail with a crop of the source scan highlighting the matched line"></a>
@@ -82,8 +82,6 @@ Two published collections built with this pipeline:
 
 ## Installation
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
-
 ```bash
 uv sync                  # core: Gemini OCR + entry extraction
 uv sync --extra gpu      # add Surya OCR (GPU or Apple Silicon recommended)
@@ -91,30 +89,7 @@ uv sync --extra geo      # add geocoding + map generation
 uv sync --all-extras     # everything
 ```
 
-`uv sync` creates and manages the project's virtual environment in `.venv/` — you don't create one yourself, and you don't need conda. It also installs the `pipeline` command *into that environment*, so reach it one of two ways:
-
-```bash
-uv run pipeline <subcommand> …     # no activation needed; works from a fresh terminal
-source .venv/bin/activate          # or activate once, then run `pipeline` bare
-```
-
-Everything below is written in the bare form; prefix with `uv run` if you haven't activated. The same applies to the underlying `python main.py …` interface.
-
-Run `pipeline --help` for all subcommands:
-
-```bash
-pipeline run    <URL>          # automated: download → OCR → extract → explore
-pipeline guided <URL>          # human-in-loop: page selection + alignment review
-pipeline ingest <URL>          # download only
-pipeline calibrate <URL|DIR>   # select sample pages + generate prompts (once per collection type)
-pipeline ocr    <DIR>          # Surya OCR + Gemini OCR + align bboxes
-pipeline review  <DIR>         # interactive alignment review (browser UI)
-pipeline extract <DIR>         # NER extraction + explorer
-pipeline geo     <DIR>         # geocode entries + build map (needs address fields)
-pipeline postprocess <DIR>     # fix + combine volumes + rebuild explorer
-```
-
-Each subcommand wraps the underlying `python main.py <URL> [flags]` stage interface — see [docs/pipeline-stages.md](docs/pipeline-stages.md) for the flag-level reference and every artifact each stage produces.
+`uv sync` creates and manages the project's virtual environment in `.venv/` and installs the `pipeline` command into it — there is no environment to create yourself, and no conda. Either activate it once (`source .venv/bin/activate`) or prefix each command with `uv run`. Everything below is written in the bare form, and the same applies to the underlying `python main.py …` interface.
 
 Set your API keys (or copy `.env.template` to `.env`):
 
@@ -123,7 +98,8 @@ export GEMINI_API_KEY=your_key_here
 export GOOGLE_MAPS_API_KEY=your_key_here   # optional; enables address-level geocoding
 ```
 
-### Already have Anaconda?
+<details>
+<summary><strong>Already have Anaconda?</strong></summary>
 
 This project is uv-native — there is no conda environment to install. Let uv manage its own interpreter and leave conda out of the way:
 
@@ -146,39 +122,43 @@ python -c "import platform; print(platform.machine())"   # want: arm64
 uv run python -m ipykernel install --user --name directory-pipeline
 ```
 
+</details>
+
 ---
 
-## Going further
+## Commands
+
+Run `pipeline --help` for all subcommands, and `pipeline <subcommand> --help` for each one's options:
+
+```bash
+pipeline run    <URL>          # automated: download → OCR → extract → explore
+pipeline guided <URL>          # human-in-loop: page selection + alignment review
+pipeline ingest <URL>          # download only
+pipeline calibrate <URL|DIR>   # select sample pages + generate prompts (once per collection type)
+pipeline ocr    <DIR>          # Surya OCR + Gemini OCR + align bboxes
+pipeline review  <DIR>         # interactive alignment review (browser UI)
+pipeline extract <DIR>         # NER extraction + explorer
+pipeline geo     <DIR>         # geocode entries + build map (needs address fields)
+pipeline postprocess <DIR>     # fix + combine volumes + rebuild explorer
+```
+
+Each subcommand wraps the underlying `python main.py <URL> [flags]` stage interface — see [docs/pipeline-stages.md](docs/pipeline-stages.md) for the flag-level reference and every artifact each stage produces.
+
+Beyond the subcommands:
 
 | Goal | Command |
 |---|---|
-| Add spatial bounding boxes to every row | `pipeline ocr output/<vol>/` [→ details](#precision-upgrade) |
-| Interactively fix unmatched lines | `pipeline review output/<vol>/` |
 | Improve accuracy on complex layout-dependent materials | `pipeline extract output/<vol>/ --mode multimodal` [→ details](#multimodal-extraction) |
-| Geocode entries and build a map | `pipeline geo output/<vol>/` |
-| Full pipeline with page scoping + alignment review | `pipeline guided <URL>` |
-| Clean + merge volumes after extraction | `pipeline postprocess output/<collection>/` |
+| Review entries that could not be placed on a line | `python tools/collate_review_queue.py output/<vol>/` |
+| See what a run actually cost | `python tools/report_cost.py output/<vol>/` |
+| Export ALTO XML (Solr, IIIF Content Search) | `python main.py output/<vol>/ --export-alto` |
+| Export W3C/IIIF annotations | `python -m pipeline.iiif.export_annotations output/<vol>/` |
 | Extract one section of a huge volume without downloading it all | `python tools/slice_manifest.py <MANIFEST> --from-id … --to-id … --slug <slug>` [→ details](docs/usage-examples.md#extracting-only-part-of-a-large-volume) |
 | Use pipeline pieces from a notebook or script | `from pipeline.api import iter_canvases, …` [→ details](docs/usage-examples.md#9-using-pieces-as-a-library) |
-| Export W3C/IIIF annotations | `python -m pipeline.iiif.export_annotations` |
-
-### Multimodal extraction
-
-By default extraction sends the OCR text to Gemini. Adding `--mode multimodal` also sends the page image, which lets the model see section headers, column boundaries, and layout cues that are often lost after OCR normalization:
-
-```bash
-pipeline extract output/<vol>/ --mode multimodal
-```
-
-This is most valuable for materials where geographic or thematic section headings fall mid-page (the model can see the heading visually rather than relying on text order), multi-column layouts where reading order is ambiguous, or any collection where state/category context shifts frequently within a page. In testing on Green Book volumes it eliminated mid-page geographic attribution errors entirely, compared to text-only mode.
-
-The cost increase is negligible — each page image is resized to ≤768 px and counts as one tile (~258 input tokens), adding roughly $0.00006 per page at standard rates. See [docs/costs.md](docs/costs.md) for a full breakdown.
-
----
 
 ### Precision upgrade
 
-The core `pipeline run` path gives you a canvas URI per row. Adding Surya OCR and alignment upgrades every `canvas_fragment` to a `#xywh=` bounding box — the exact line on the page, usable by any IIIF viewer:
+The core `pipeline run` path gives you a canvas URI per row. Adding Surya OCR and alignment upgrades each entry's `canvas_fragment` to a `#xywh=` bounding box on its exact line, usable by any IIIF viewer. An entry the pipeline cannot place confidently keeps its page link and goes on the review list rather than getting a guessed box.
 
 ```bash
 pipeline ocr    output/<vol>/    # Surya bboxes + alignment (requires GPU or Apple Silicon)
@@ -187,11 +167,19 @@ pipeline review output/<vol>/    # optional: fix unmatched lines interactively
 
 ![NW alignment result drawn on a source page — orange bounding boxes on matched lines, unmatched Gemini lines listed in the margin in red](docs/screenshots/alignment-viz.jpg)
 
+### Multimodal extraction
+
+By default extraction sends the OCR text to Gemini. `--mode multimodal` also sends the page image, so the model can see section headings, column boundaries and layout cues that OCR text loses. It helps most where headings fall mid-page or reading order is ambiguous — on Green Book volumes it eliminated mid-page geographic attribution errors — and adds about $0.00006 per page ([costs](docs/costs.md)).
+
+```bash
+pipeline extract output/<vol>/ --mode multimodal
+```
+
 ---
 
 ## Costs
 
-A single \~80-page volume costs roughly **~$0.30 in Gemini API charges with `--flex`** or **$0.60** at standard rates, and can run within the free tier's daily quota (~15–20 minutes at 15 RPM). See [docs/costs.md](docs/costs.md) for a full breakdown including platform costs (Surya OCR on Mac, Colab, and GPU).
+A single ~80-page volume costs roughly **$0.30–$0.40 in Gemini API charges with `--flex`**, about twice that at standard rates, and fits within the free tier's daily quota (the 15 RPM limit stretches the API stages to 15–20 minutes). `python tools/report_cost.py output/<vol>/` reports what a run actually spent, from the token usage each stage records. See [docs/costs.md](docs/costs.md) for the full breakdown, including platform costs for Surya OCR (Mac, Colab, and GPU).
 
 ---
 
@@ -202,17 +190,16 @@ A single \~80-page volume costs roughly **~$0.30 in Gemini API charges with `--f
 - [Costs](docs/costs.md) — API and platform cost breakdown
 - [Key design decisions](docs/key-design-decisions.md) — architecture and technical notes
 - [Prior work](docs/prior-work.md) — related research and citations
-- [Documentation index](docs/README.md) — full map of all docs (reference + plans)
-- [Plans](docs/plans/) — point-in-time roadmaps: section detection, local open models, AWS migration
-
+- [Documentation index](docs/README.md) — every doc, including the plans and the evidence sets behind the pipeline's thresholds and decisions
 
 ## Key design decisions
 
 - **Gemini for accuracy, Surya for coordinates.** Gemini transcribes historical print far more accurately than conventional OCR; Surya provides line-level bounding boxes that anchor coordinates.
-- **Anchored Needleman-Wunsch alignment.** City/state headings that appear verbatim in both sources are committed as fixed anchors before the NW pass, preventing misalignment drift on long pages.
+- **Anchored, column-aware alignment.** City/state headings that appear verbatim in both sources are committed as fixed anchors before the Needleman-Wunsch pass, and multi-column pages are aligned one column at a time where that is safe, so a single mistake cannot drift through the rest of the page.
+- **No guessed boxes.** An entry gets a bounding box only when its name or address matches an aligned line confidently. Otherwise it keeps its page link and is listed for review: a confidently wrong box is worse than none.
 - **Schema-agnostic NER.** `extract_entries.py` hard-codes nothing. The NER prompt defines all field names; CSV columns are inferred dynamically — no code changes for a new collection type.
-- **IIIF-native output.** Every aligned line and entry carries a `canvas_fragment` (`#xywh=`) URI in natural image pixel coordinates, directly consumable by IIIF viewers and annotation tools.
-- **Any IIIF source.** `--iiif-csv` and `--download` accept any public IIIF Presentation v2 or v3 manifest URL, not just LoC and IA. IIIF Collection manifests are enumerated automatically, writing one CSV row per child manifest. CONTENTdm repositories work too — run `sources/build_contentdm_manifest.py` to generate a manifest, then pass it like any other IIIF URL.
+- **IIIF-native output.** Every row carries a `canvas_fragment` URI, and placed entries a `#xywh=` box in natural image pixel coordinates, directly consumable by IIIF viewers and annotation tools.
+- **Any IIIF source.** `--iiif-csv` and `--download` accept any public IIIF Presentation v2 or v3 manifest URL, not just LoC and IA, and IIIF Collection manifests are enumerated one child manifest per CSV row. CONTENTdm repositories work via `sources/build_contentdm_manifest.py`.
 
 See [docs/key-design-decisions.md](docs/key-design-decisions.md) for full technical notes.
 
@@ -222,10 +209,6 @@ See [docs/key-design-decisions.md](docs/key-design-decisions.md) for full techni
 
 - **Greif et al. (2025)** — foundational benchmark showing multimodal LLMs beat Tesseract + Transkribus on historical city directories (0.84% CER with Gemini 2.0 Flash). Directly motivates the two-stage OCR + NER architecture. ([arXiv:2504.00414](https://arxiv.org/abs/2504.00414))
 - **Bell et al. — *directoreadr* (2020)** — closest prior work; end-to-end pipeline for Polk city directories using classical CV + Tesseract. Documents the brittle year-specific heuristics this pipeline replaces. ([PLOS ONE](https://doi.org/10.1371/journal.pone.0220219))
-- **Fleischhacker et al. (2025)** — layout detection as preprocessing improves OCR accuracy by 15+ pp on multi-column historical docs. Motivates column reading-order correction in `align_ocr.py`. ([Int. J. Digital Libraries](https://doi.org/10.1007/s00799-025-00413-z))
-- **Cook et al. (2020)** — canonical prior Green Books digitization (entirely manual; OCR rejected). Source of the six-category establishment taxonomy used here. ([NBER WP 26819](https://www.nber.org/papers/w26819))
-- **Smith & Cordell (2018)** — practitioner research agenda naming layout analysis as the top barrier to historical OCR and validating NW-style sequence alignment for ground truth creation. ([NEH report](https://repository.library.northeastern.edu/files/neu:f1881m035))
-- **Carlson et al. — *EffOCR* (2023)** — OCR benchmarks on historical newspapers (Tesseract ~10.6% CER, fine-tuned TrOCR 1.3%). Establishes the noisy-input baseline for the alignment stage. ([arXiv:2304.02737](https://arxiv.org/abs/2304.02737))
 - **Wolf et al. (2020)** — machine-readable NYC directory entries 1850–1890 from NYPL digitizations. Direct precedent for applying this pipeline to city directories. ([NYU Faculty Digital Archive](https://archive.nyu.edu/handle/2451/61521))
 
-See [docs/prior-work.md](docs/prior-work.md) for full annotated citations.
+See [docs/prior-work.md](docs/prior-work.md) for these and other annotated citations, including the Green Books digitization the category taxonomy comes from.
