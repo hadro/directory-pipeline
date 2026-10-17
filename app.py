@@ -123,6 +123,9 @@ STAGE_ARG_DEFS: dict[str, list[dict]] = {
         {"name": "batch_size", "flag": "--batch-size", "type": "int",
          "label": "Batch size", "default": "", "placeholder": "e.g. 4",
          "hint": "Images processed per batch. Reduce if running out of GPU/Apple Silicon memory (default: 4)."},
+        {"name": "blank_threshold", "flag": "--blank-threshold", "type": "float",
+         "label": "Blank threshold", "default": "", "placeholder": "e.g. 0.5",
+         "hint": "Surya's detector blank threshold (default 0.35). Raise to ~0.5 for pages Surya reads as tables, such as dot-leader indexes, which otherwise come back as page-sized region blocks."},
     ],
     "gemini_ocr": [
         {"name": "model",         "flag": "--model",          "type": "str",  "label": "Model",
@@ -143,6 +146,9 @@ STAGE_ARG_DEFS: dict[str, list[dict]] = {
         {"name": "max_output_tokens", "flag": "--max-output-tokens", "type": "int", "label": "Max output tokens",
          "default": "", "placeholder": "e.g. 24576",
          "hint": "Cap on output tokens per call (default 24576). Bounds the cost of a page that starts looping. Raise it if dense pages come back truncated; 0 disables the cap."},
+        {"name": "no_blank_skip", "flag": "--no-blank-skip", "type": "bool", "label": "OCR blank pages",
+         "default": False,
+         "hint": "OCR every page, including pages the blank-page check would skip. A skipped page writes no text and drops out of align and extract."},
     ],
     "align_ocr": [
         {"name": "model",                "flag": "--model",                 "type": "str",   "label": "OCR model",
