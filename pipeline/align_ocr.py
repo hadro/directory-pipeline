@@ -979,8 +979,12 @@ def build_aligned_lines(
     sequence, the page reverts to a whole-page alignment over *fallback_order*
     (the pre-existing reading order) so behaviour is unchanged.
 
-    Both alignments are then compared and the one leaving less Gemini text
-    unboxed wins. The static guards cannot catch every bad split: a page can
+    Otherwise both alignments are computed and the one with the lower
+    :func:`_alignment_cost` wins: unboxed lines plus geometric disorder. Not
+    unboxed lines alone, which would prefer the whole-page alignment exactly
+    where it boxes text across the gutter onto the wrong lines (see
+    docs/evidence/2026-09-04-column-selection-criterion/). The static guards
+    cannot catch every bad split: a page can
     look cleanly two-column to :func:`plan_columns`, pass the header and
     line-ratio checks, and still align far worse per column than as a whole —
     one 1947 Green Book page goes from 118 lines / 0 unmatched whole-page to
