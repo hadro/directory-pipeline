@@ -351,6 +351,32 @@ def test_empty_first_response_writes_nothing_and_reports_empty(page):
     assert len(client.calls) == 1, "an empty response must not start the ladder"
 
 
+
+def test_an_old_failure_placeholder_is_retried_not_skipped(page):
+    """Versions before 6b165df wrote "[OCR FAILED: ...]" into the .txt, and a
+    non-empty .txt counted as done, so those pages were never retried."""
+    txt = page.parent / "0001_page_gemini-3.1-flash-lite.txt"
+    txt.write_text("[OCR FAILED: page could not be transcribed after all retries]",
+                   encoding="utf-8")
+    client = _Recorder(["\n".join(directory_lines(30))])
+
+    status, _ = _run(client, page)
+
+    assert status == "ok"
+    assert len(client.calls) == 1
+    assert not txt.read_text(encoding="utf-8").startswith("[OCR FAILED")
+
+
+def test_a_real_transcription_is_still_skipped(page):
+    txt = page.parent / "0001_page_gemini-3.1-flash-lite.txt"
+    txt.write_text("Abbott John, carpenter, 12 Main\n", encoding="utf-8")
+    client = _Recorder([])
+
+    status, _ = _run(client, page)
+
+    assert status == "skipped"
+    assert client.calls == []
+
 def test_a_wholly_blocked_page_still_reaches_the_simple_prompt(page):
     """RECITATION on every attempt must not skip the rungs written for it.
 

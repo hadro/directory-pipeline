@@ -373,6 +373,24 @@ def _call_gemini(
     )
 
 
+# Versions before 6b165df wrote this placeholder into the .txt when every attempt
+# failed. It is not a transcription, but a non-empty file used to count as done,
+# so the page was skipped on every later run while align and extract read the
+# placeholder as page text. 17 were still in output/ on 2026-10-17.
+_FAILURE_PLACEHOLDER = "[OCR FAILED"
+
+
+def _is_failure_placeholder(txt_path: Path) -> bool:
+    """True if *txt_path* holds a failure placeholder rather than page text."""
+    if txt_path.stat().st_size > 512:   # the placeholders are one short line
+        return False
+    try:
+        head = txt_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return head.lstrip().startswith(_FAILURE_PLACEHOLDER)
+
+
 def process_image(
     client: genai.Client,
     image_path: Path,
@@ -390,10 +408,11 @@ def process_image(
     """
     txt_path = image_path.parent / f"{image_path.stem}_{model_slug(model)}.txt"
     if txt_path.exists():
-        if txt_path.stat().st_size > 0:
+        if txt_path.stat().st_size > 0 and not _is_failure_placeholder(txt_path):
             return "skipped", None
-        # File is empty — previous run produced no output; delete and retry.
-        _log(f"  Re-running (empty output file): {txt_path.name}")
+        # Empty, or a placeholder from a run that failed every attempt: either
+        # way the page was never transcribed. Delete and retry.
+        _log(f"  Re-running (no transcription in output file): {txt_path.name}")
         txt_path.unlink()
 
     # An interrupted download leaves an empty or truncated image. The blank
