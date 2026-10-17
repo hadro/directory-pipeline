@@ -1,0 +1,75 @@
+# placement_panel.py (2026-10-17)
+page                           cols fair c2 |    whole ok/wr/ub |   column ok/wr/ub | coverage ok/wr/ub |  shipped ok/wr/ub | box!=surya | column path
+ boyd1890/0002_flushin            1   12   0 |          12/ 0/ 0 |          12/ 0/ 0 |          12/ 0/ 0 |          12/ 0/ 0 |     10.3% | no plan (1 col)
+ boyd1890/0004_flushin            1   40   0 |          40/ 0/ 0 |          40/ 0/ 0 |          40/ 0/ 0 |          40/ 0/ 0 |      6.5% | no plan (1 col)
+ boyd1890/0006_flushin            1   20   0 |          20/ 0/ 0 |          20/ 0/ 0 |          20/ 0/ 0 |          20/ 0/ 0 |      7.7% | no plan (1 col)
+ doggetts1850/0021_5675061        2  154  80 |         154/ 0/ 0 |         154/ 0/ 0 |         154/ 0/ 0 |         154/ 0/ 0 |      1.2% | guard1 header 32/173
+ duncan1794/0021_newyork          1   22   0 |          22/ 0/ 0 |          22/ 0/ 0 |          22/ 0/ 0 |          22/ 0/ 0 |      0.0% | no plan (1 col)
+ duncan1794/0022_newyork          1   36   0 |          36/ 0/ 0 |          36/ 0/ 0 |          36/ 0/ 0 |          36/ 0/ 0 |      0.0% | no plan (1 col)
+ franks1786/0003_newyork          1   11   0 |          11/ 0/ 0 |          11/ 0/ 0 |          11/ 0/ 0 |          11/ 0/ 0 |      0.0% | no plan (1 col)
+ franks1786/0004_newyork          1   12   0 |          12/ 0/ 0 |          12/ 0/ 0 |          12/ 0/ 0 |          12/ 0/ 0 |      0.0% | no plan (1 col)
+ franks1786/0005_newyork          1    7   0 |           7/ 0/ 0 |           7/ 0/ 0 |           7/ 0/ 0 |           7/ 0/ 0 |      0.0% | no plan (1 col)
+ franks1786/0021_newyork          1   26   0 |          26/ 0/ 0 |          26/ 0/ 0 |          26/ 0/ 0 |          26/ 0/ 0 |      0.0% | no plan (1 col)
+ hearne1852/0021_micro_I          1   30   0 |          30/ 0/ 0 |          30/ 0/ 0 |          30/ 0/ 0 |          30/ 0/ 0 |      0.0% | no plan (1 col)
+ hearne1852/0022_micro_I          1   22   0 |          22/ 0/ 0 |          22/ 0/ 0 |          22/ 0/ 0 |          22/ 0/ 0 |      0.0% | no plan (1 col)
+ hopehenderson1856/0021_micro_    2   60   7 |          60/ 0/ 0 |          60/ 0/ 0 |          60/ 0/ 0 |          60/ 0/ 0 |      0.0% | guard1 header 32/138
+ lain1876/0021_1876BPL            2   73  15 |          72/ 0/ 1 |          72/ 0/ 1 |          72/ 0/ 1 |          72/ 0/ 1 |      3.5% | guard1 header 20/179
+ lain1876/0022_1876BPL            2   30  23 |          30/ 0/ 0 |          27/ 0/ 3 |          30/ 0/ 0 |          27/ 0/ 3 |     12.9% | ran
+ longworth1818/0021_5781975       1   54   0 |          54/ 0/ 0 |          54/ 0/ 0 |          54/ 0/ 0 |          54/ 0/ 0 |      0.0% | no plan (1 col)
+ longworth1818/0022_5781990       1   52   0 |          52/ 0/ 0 |          52/ 0/ 0 |          52/ 0/ 0 |          52/ 0/ 0 |      0.0% | no plan (1 col)
+*mb1931/0021_5807323              4   33  25 |          33/ 0/ 0 |          33/ 0/ 0 |          33/ 0/ 0 |          33/ 0/ 0 |      4.8% | locate failed col 4
+*mb1931/0022_5807366              4   64  38 |          64/ 0/ 0 |          64/ 0/ 0 |          64/ 0/ 0 |          64/ 0/ 0 |      1.8% | ran
+ ogden1839/0022_brookly           1   33   0 |          33/ 0/ 0 |          33/ 0/ 0 |          33/ 0/ 0 |          33/ 0/ 0 |      0.0% | no plan (1 col)
+*polk1917/0021_5685525            5   48   0 |           0/48/ 0 |           0/48/ 0 |           0/48/ 0 |           0/48/ 0 |     84.5% | locate failed col 5
+ polk1925/0021_5811503            3   14  14 |          11/ 3/ 0 |          11/ 3/ 0 |          11/ 3/ 0 |          11/ 3/ 0 |     53.0% | locate failed col 1
+ polk1933si/0021_5806483          2   56   0 |          56/ 0/ 0 |          55/ 1/ 0 |          55/ 1/ 0 |          55/ 1/ 0 |      2.9% | ran
+ queens1933/0022_5808293          4   31   2 |          20/11/ 0 |          20/11/ 0 |          20/11/ 0 |          20/11/ 0 |     61.5% | locate failed col 1
+ rode1851/0021_newyork            2   53   0 |          53/ 0/ 0 |          53/ 0/ 0 |          53/ 0/ 0 |          53/ 0/ 0 |      0.6% | guard1 header 26/173
+ smith1855/0021_micro_I           2   90  45 |          89/ 1/ 0 |          89/ 1/ 0 |          89/ 1/ 0 |          89/ 1/ 0 |      3.2% | guard1 header 29/133
+ smith1855/0022_micro_I           2   95  45 |          95/ 0/ 0 |          95/ 0/ 0 |          95/ 0/ 0 |          95/ 0/ 0 |      0.0% | guard1 header 25/136
+ smith1856/0022_micro_I           2  121  63 |         121/ 0/ 0 |         121/ 0/ 0 |         121/ 0/ 0 |         121/ 0/ 0 |      0.8% | guard1 header 27/138
+ trow1884/0021_5682586            2  126  52 |         126/ 0/ 0 |         126/ 0/ 0 |         126/ 0/ 0 |         126/ 0/ 0 |      3.9% | guard1 header 30/223
+ trow1884/0022_5682682            2   15   3 |          15/ 0/ 0 |          15/ 0/ 0 |          15/ 0/ 0 |          15/ 0/ 0 |      4.3% | locate failed col 2
+ trow1907/0021_trowsge            3   67   0 |          67/ 0/ 0 |          67/ 0/ 0 |          67/ 0/ 0 |          67/ 0/ 0 |      0.9% | ran
+ trow1913/0021_5690892            4   92   0 |          92/ 0/ 0 |          92/ 0/ 0 |          92/ 0/ 0 |          92/ 0/ 0 |      0.2% | locate failed col 1
+ trowwilson1865/0022_5676777      2  167  81 |         167/ 0/ 0 |         167/ 0/ 0 |         167/ 0/ 0 |         167/ 0/ 0 |      1.1% | guard1 header 22/187
+
+All scored rows
+  whole     n= 1766  correct  96.4%  wrong  3.6%  unboxed  0.1%
+  column    n= 1766  correct  96.1%  wrong  3.6%  unboxed  0.2%
+  coverage  n= 1766  correct  96.3%  wrong  3.6%  unboxed  0.1%
+  shipped   n= 1766  correct  96.1%  wrong  3.6%  unboxed  0.2%
+
+Excluding suspect pages (mb1931, polk1917)
+  whole     n= 1621  correct  99.0%  wrong  0.9%  unboxed  0.1%
+  column    n= 1621  correct  98.8%  wrong  1.0%  unboxed  0.2%
+  coverage  n= 1621  correct  99.0%  wrong  1.0%  unboxed  0.1%
+  shipped   n= 1621  correct  98.8%  wrong  1.0%  unboxed  0.2%
+
+Gold in column 1
+  whole     n= 1273  correct  95.4%  wrong  4.6%  unboxed  0.1%
+  column    n= 1273  correct  95.1%  wrong  4.6%  unboxed  0.2%
+  coverage  n= 1273  correct  95.3%  wrong  4.6%  unboxed  0.1%
+  shipped   n= 1273  correct  95.1%  wrong  4.6%  unboxed  0.2%
+
+Gold in column 2
+  whole     n=  493  correct  99.0%  wrong  1.0%  unboxed  0.0%
+  column    n=  493  correct  98.8%  wrong  1.0%  unboxed  0.2%
+  coverage  n=  493  correct  99.0%  wrong  1.0%  unboxed  0.0%
+  shipped   n=  493  correct  98.8%  wrong  1.0%  unboxed  0.2%
+
+Column path outcome per page: {'no plan (1 col)': 14, 'guard1 header': 9, 'ran': 4, 'locate failed': 6}
+Not scored: {'no monotonic match': 16, 'Gemini OCR failed on the page': 387, 'text not in Gemini output': 22, 'box dropped by aligner preprocessing': 60, 'dropped page (region Surya)': 49}
+
+# box_vs_surya.py (2026-10-17), defaults: tulsa_1921, 150 pages, seed 7
+output/tulsa_1921/**/*_aligned.json: 150 pages sampled (seed 7)
+
+  on disk            failing   0  borderline  51  clean  99   mean disagreement 0.188   mean bound lines 140
+  fresh whole-page   failing   0  borderline  51  clean  99   mean disagreement 0.188   mean bound lines 140
+  fresh shipped      failing   0  borderline  51  clean  99   mean disagreement 0.188   mean bound lines 140
+
+Paired, per page (5-point margin):
+  shipped vs fresh whole-page    better   0  worse   1  same 149
+  shipped vs on disk             better   0  worse   1  same 149
+
+Column plan on 59 pages; column path ran on 1.
