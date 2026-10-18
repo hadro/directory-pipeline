@@ -73,7 +73,12 @@ order of magnitude and run `report_cost.py` on your own output.
 
 NER has not yet been measured this way. Historically it ran roughly 3x the OCR
 cost per page (approx. 10,000 input / 2,000 output tokens against OCR's 2,000 /
-1,800), so budget accordingly until a real run records it.
+1,800), so budget accordingly until a real run records it. From 0.3 its calls
+are tagged `ner`, `ner:fallback` and `ner:review`, so `--by-reason` shows the two
+stages apart. Earlier runs recorded them as `initial`, mixed in with first OCR
+attempts. The report counts retries from these tags (`temp:`, `simple:`,
+`escalate:` and `ner:fallback`), not from calls per page, which extraction's own
+calls would inflate.
 
 `--generate-prompts` makes 2 Gemini calls with 4–8 sample images each — a one-time per-volume cost of roughly **$0.02–$0.10 total**.
 

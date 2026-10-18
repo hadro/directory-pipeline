@@ -83,6 +83,15 @@ def _split_key(key: str) -> "tuple[str, str, str]":
     return model, tier, reason
 
 
+_RETRY_RUNGS = ("temp", "simple", "escalate")
+
+
+def _is_retry(reason: str) -> bool:
+    """Was this call provoked by a failed one? OCR's ladder rungs and NER's
+    fallback model are; "initial", "ner" and NER's review pass are not."""
+    return reason.split(":")[0] in _RETRY_RUNGS or reason == "ner:fallback"
+
+
 def _merge(into: dict, key: str, counts: dict) -> None:
     running = into.setdefault(key, dict.fromkeys(_FIELDS, 0))
     for field in _FIELDS:
@@ -93,6 +102,11 @@ def _fmt_money(value: "float | None") -> str:
     if value is None:
         return "     unpriced"
     return f"${value:>11.4f}" if value < 1 else f"${value:>11.2f}"
+
+
+def _money(value: float) -> str:
+    """_fmt_money without the column padding, for use inside a sentence."""
+    return f"${value:.4f}" if value < 1 else f"${value:,.2f}"
 
 
 def collapse_reasons(rows: dict) -> dict:
@@ -167,7 +181,8 @@ def main() -> int:
                          "that analysis/collection_registry.txt normally excludes")
     ap.add_argument("--by-reason", action="store_true",
                     help="Break each volume down by what provoked the call "
-                         "(initial, temp:recitation, simple:block_loop, escalate:…)")
+                         "(initial, temp:recitation, simple:block_loop, escalate:…, "
+                         "and ner, ner:fallback, ner:review for extraction)")
     ap.add_argument("--pages", type=int, metavar="N",
                     help="Project the observed cost per call onto N pages")
     args = ap.parse_args()
@@ -237,23 +252,32 @@ def main() -> int:
     calls = sum(c["calls"] for c in combined.values())
     summary = f"{measured} volume(s) with recorded usage, {calls:,} call(s)"
     if pages:
-        summary += f" over {pages:,} page(s) — {calls / pages:.2f} calls/page"
+        summary += f" over {pages:,} OCR'd page(s)"
     print(summary)
     if not priced_any:
         return 0
 
-    print(f"Total: {_fmt_money(grand).strip()}")
+    print(f"Total: {_money(grand)}")
     unpriced = sorted({_split_key(k)[0] for k in combined} - set(MODEL_RATES))
     if unpriced:
         print(f"Excludes unpriced model(s): {', '.join(unpriced)} "
               f"— add them to MODEL_RATES in utils/models.py.")
 
     if pages:
-        print(f"Per page: ${grand / pages:.5f}")
-        if calls > pages:
-            naive = grand / calls
-            print(f"  (a per-call figure would read ${naive:.5f} and understate by "
-                  f"{calls / pages:.2f}x — that gap is the retry ladder)")
+        # Extraction's calls are in the total but not the page count, which only
+        # the OCR stage records, so this is OCR and extraction per OCR'd page.
+        print(f"Per page: ${grand / pages:.5f} (OCR and extraction together)")
+
+    # Counted from the reason tags rather than inferred from calls per page:
+    # extraction adds calls of its own, and calls/page would bill them to the
+    # ladder.
+    retry_keys = [k for k in combined if _is_retry(_split_key(k)[2])]
+    retry_calls = sum(combined[k]["calls"] for k in retry_keys)
+    retry_cost = sum(price_usage(_split_key(k)[0], combined[k], _split_key(k)[1]) or 0.0
+                     for k in retry_keys)
+    print(f"Retries: {retry_calls:,} of {calls:,} call(s), {_money(retry_cost)}"
+          f" ({retry_cost / grand * 100 if grand else 0:.1f}% of the total)"
+          " — a tokens-x-pages estimate misses these")
 
     if args.pages:
         print()

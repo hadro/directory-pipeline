@@ -259,8 +259,14 @@ def _call_gemini(
     user_text: str,
     image_path: Path | None = None,
     service_tier: str | None = None,
+    reason: str = "ner",
 ) -> str:
-    """Call Gemini with optional image. Returns raw response text."""
+    """Call Gemini with optional image. Returns raw response text.
+
+    *reason* tags the call's recorded usage. OCR calls are tagged "initial"
+    or a retry rung, so without a tag of its own extraction's calls read as
+    first OCR attempts and report_cost.py cannot tell the stages apart.
+    """
     parts: list = []
     if image_path is not None:
         parts.append(Part.from_bytes(data=_resize_image_bytes(image_path), mime_type="image/jpeg"))
@@ -278,6 +284,7 @@ def _call_gemini(
         ),
         contents=parts,
         log=_log,
+        reason=reason,
     )
     return response.text or ""
 
@@ -537,7 +544,8 @@ def _run_ner_call(
             f" with fallback model {fallback_model}"
         )
         try:
-            last_raw = _call_gemini(client, fallback_model, system_prompt, user_msg, image_path, service_tier)
+            last_raw = _call_gemini(client, fallback_model, system_prompt, user_msg, image_path,
+                                    service_tier, reason="ner:fallback")
             result = _parse_json_response(last_raw)
         except Exception as exc:
             _log(f"    [{page_name}] fallback model error: {exc}")
@@ -685,7 +693,8 @@ def _run_review_call(
     Returns the 'reviews' list, or None on any failure.
     """
     try:
-        raw = _call_gemini(client, model, system_prompt, review_msg, image_path, service_tier)
+        raw = _call_gemini(client, model, system_prompt, review_msg, image_path, service_tier,
+                           reason="ner:review")
     except Exception as exc:
         _log(f"    [{page_name}] review call failed: {exc}")
         return None

@@ -392,3 +392,69 @@ def test_interrupted_run_keeps_what_it_already_flushed(tmp_path):
     totals = read_state(tmp_path)["token_usage"]["m|standard|initial"]
     assert totals["calls"] == 26
     assert read_state(tmp_path)["token_usage_pages"] == 26
+
+
+# --- telling extraction's calls from OCR's ----------------------------------
+#
+# report_cost.py used to divide every call by the OCR stage's page count and
+# call the excess "the retry ladder". A smoke run with no retries at all, three
+# OCR calls and six extraction calls over three pages, reported 3.00 calls per
+# page and a 3x retry multiplier.
+
+
+class _TextResponse(_Response):
+    text = "{}"
+
+
+def test_extraction_tags_its_calls(monkeypatch):
+    from pipeline import extract_entries
+
+    monkeypatch.setattr(gemini_mod.time, "sleep", lambda *_: None)
+    client = _FakeClient([_TextResponse(_Usage(prompt=10)), _TextResponse(_Usage(prompt=10))])
+    extract_entries._call_gemini(client, "gemini-3.1-flash-lite", "system", "page text")
+    extract_entries._call_gemini(client, "gemini-3.1-flash-lite", "system", "page text",
+                                 reason="ner:review")
+    assert set(usage_snapshot()) == {
+        "gemini-3.1-flash-lite|standard|ner",
+        "gemini-3.1-flash-lite|standard|ner:review",
+    }
+
+
+def _run_report(volume, monkeypatch, capsys) -> str:
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    import report_cost
+
+    monkeypatch.setattr(sys, "argv", ["report_cost.py", str(volume)])
+    assert report_cost.main() == 0
+    return capsys.readouterr().out
+
+
+def _counts(calls):
+    return {"calls": calls, "input": 1000 * calls, "output": 1000 * calls,
+            "thoughts": 0, "cached": 0}
+
+
+def test_report_does_not_bill_extraction_to_the_retry_ladder(tmp_path, monkeypatch, capsys):
+    add_usage(tmp_path, {
+        "gemini-3.1-flash-lite|standard|initial": _counts(3),
+        "gemini-3.1-flash-lite|standard|ner": _counts(6),
+    }, pages=3)
+    out = _run_report(tmp_path, monkeypatch, capsys)
+    assert "Retries: 0 of 9 call(s)" in out
+    assert "calls/page" not in out
+
+
+def test_report_counts_ladder_rungs_and_ner_fallback_as_retries(tmp_path, monkeypatch, capsys):
+    add_usage(tmp_path, {
+        "gemini-3.1-flash-lite|standard|initial": _counts(3),
+        "gemini-3.1-flash-lite|standard|temp:recitation": _counts(2),
+        "gemini-3.8-flash|standard|escalate:block_loop": _counts(1),
+        "gemini-3.1-flash-lite|standard|ner": _counts(3),
+        "gemini-3.1-flash-lite|standard|ner:fallback": _counts(1),
+        "gemini-3.1-flash-lite|standard|ner:review": _counts(1),
+    }, pages=3)
+    out = _run_report(tmp_path, monkeypatch, capsys)
+    assert "Retries: 4 of 11 call(s)" in out
