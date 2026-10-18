@@ -76,16 +76,33 @@ def _svc_max_width(service) -> int | None:
     return None
 
 
+# Image servers known to speak only Image API 2, whatever a manifest says. Before
+# 0.3, download_images built LoC manifests (when loc.gov blocked the real one)
+# that labelled tile.loc.gov's service "ImageService3"; 13 such manifests were
+# in output/ on 2026-10-17, and tile.loc.gov answers 400 to the v3 "max".
+_V2_HOSTS = ("tile.loc.gov",)
+
+
 def _svc_version(service, default: int = 2) -> int:
     """IIIF Image API version (2 or 3) of an image service.
 
-    Read off the service itself where it says: a Presentation 3 manifest can
-    point at a v2 image service. Checks type, @context and profile, then a
-    /iiif/3/ or /iiif/2/ path segment, and only then falls back to *default*,
+    Strongest evidence first. A /iiif/2/ or /iiif/3/ segment in the service URL
+    is the server's own versioned endpoint, so it outranks any label. Then a
+    known v2-only host. Then the service's declared type, @context or profile:
+    labels can be wrong, but a Presentation 3 manifest can legitimately point at
+    a v2 service, so they still outrank the manifest. Last comes *default*,
     which callers set to the manifest's own Presentation version.
     """
     if isinstance(service, list):
         service = service[0] if service else {}
+    url = str((service.get("id") or service.get("@id") or "") if isinstance(service, dict)
+              else (service or ""))
+    if "/iiif/3/" in url:
+        return 3
+    if "/iiif/2/" in url:
+        return 2
+    if any(f"//{host}/" in url for host in _V2_HOSTS):
+        return 2
     if isinstance(service, dict):
         for key in ("type", "@type"):
             kind = str(service.get(key) or "")
@@ -101,12 +118,6 @@ def _svc_version(service, default: int = 2) -> int:
             profile = profile[0] if profile else ""
         if "/image/2/" in str(profile or ""):
             return 2
-        service = str(service.get("id") or service.get("@id") or "")
-    url = str(service or "")
-    if "/iiif/3/" in url:
-        return 3
-    if "/iiif/2/" in url:
-        return 2
     return default
 
 

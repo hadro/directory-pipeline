@@ -140,3 +140,42 @@ def test_redownload_page_needs_the_cached_manifest(volume):
     (corrupt.parent / "manifest.json").unlink()
     assert dl.redownload_page(corrupt, delay=0) is False
     assert session.urls == []
+
+
+# --- IIIF Image API version ---------------------------------------------------
+
+LOC_SVC = "https://tile.loc.gov/image-services/iiif/public:gdcmassbookdig:x:x_0011"
+
+
+def test_native_size_uses_the_services_version_not_the_manifests():
+    """A Presentation 3 manifest can point at an Image API 2 server. Native-size
+    requests used the manifest's version and asked tile.loc.gov for "max",
+    which it answers with a 400."""
+    manifest = {
+        "@context": "http://iiif.io/api/presentation/3/context.json",
+        "items": [{"id": "https://ex.org/c1", "width": 100, "height": 100,
+                   "items": [{"items": [{"body": {"service": [
+                       {"id": LOC_SVC, "type": "ImageService2"}]}}]}]}],
+    }
+    [(_, url, _, _)] = dl.iter_canvas_images(manifest, 0)
+    assert url == f"{LOC_SVC}/full/full/0/default.jpg"
+
+
+def test_the_fallback_loc_manifest_declares_an_image_api_2_service(monkeypatch):
+    """When loc.gov blocks the real manifest one is built from the item JSON. It
+    used to label tile.loc.gov's service ImageService3, which steered every
+    size keyword to "max"."""
+    from utils import iiif_utils
+
+    class _Item:
+        def json(self):
+            return {"item": {"title": "A directory"},
+                    "resources": [{"files": [[{"info": f"{LOC_SVC}/info.json",
+                                               "width": 1600, "height": 2514}]]}]}
+
+    monkeypatch.setattr(dl, "get_with_retry", lambda *a, **k: _Item())
+    manifest = dl._build_loc_manifest(object(), "https://www.loc.gov/item/12345/manifest.json")
+    [canvas] = list(iiif_utils.iter_canvases(manifest))
+    assert canvas["service_version"] == 2
+    body = manifest["items"][0]["items"][0]["items"][0]["body"]
+    assert body["id"].endswith("/full/full/0/default.jpg")

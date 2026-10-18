@@ -180,7 +180,7 @@ def _build_loc_manifest(
                         "thumbnail": [{
                             "id": f"{svc_id}/full/!200,200/0/default.jpg",
                             "type": "Image",
-                            "service": [{"id": svc_id, "type": "ImageService3"}],
+                            "service": [{"id": svc_id, "type": "ImageService2", "profile": "level2"}],
                         }],
                         "items": [{
                             "id": f"{canvas_id}/page",
@@ -190,9 +190,11 @@ def _build_loc_manifest(
                                 "type": "Annotation",
                                 "motivation": "painting",
                                 "body": {
-                                    "id": f"{svc_id}/full/max/0/default.jpg",
+                                    # tile.loc.gov speaks Image API 2: "full", not "max"
+                                    "id": f"{svc_id}/full/full/0/default.jpg",
                                     "type": "Image",
-                                    "service": [{"id": svc_id, "type": "ImageService3", "maxWidth": native_w}],
+                                    "service": [{"id": svc_id, "type": "ImageService2",
+                                                 "profile": "level2", "maxWidth": native_w}],
                                 },
                                 "target": canvas_id,
                             }],
@@ -329,7 +331,11 @@ def iter_canvas_images(manifest: dict, width: int) -> list[tuple[str, str, int |
             # declared width.  Either caps the request at native resolution.
             native = c["max_width"] or (c["canvas_width"] if c["canvas_width"] > 0 else None)
             effective_width = min(width, native) if native else width
-        result.append((c["image_id"], iiif_utils.image_url(c["service_id"], effective_width, iiif_version), c["max_width"], effective_width))
+        # The size keyword depends on the image service's Image API version, which
+        # need not match the manifest's: a Presentation 3 manifest can point at a
+        # v2 server, and v2 servers such as tile.loc.gov reject "max".
+        version = c.get("service_version", iiif_version)
+        result.append((c["image_id"], iiif_utils.image_url(c["service_id"], effective_width, version), c["max_width"], effective_width))
     return result
 
 

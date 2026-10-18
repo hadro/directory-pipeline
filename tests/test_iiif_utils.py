@@ -411,6 +411,11 @@ class TestCanvasLabel:
     ("https://cdm.example.org/iiif/2/greenbook:88", 3, 2),            # plain string, URL hint
     ({"id": "https://ex.org/iiif/img1"}, 3, 3),                       # says nothing: manifest's
     ({"id": "https://ex.org/iiif/img1"}, 2, 2),
+    # The server's own versioned endpoint outranks a label...
+    ({"id": "https://cdm.example.org/iiif/2/coll:1", "type": "ImageService3"}, 3, 2),
+    ({"id": "https://iiif.nypl.org/iiif/3/1", "type": "ImageService2"}, 2, 3),
+    # ...and tile.loc.gov is v2 even where an old synthetic manifest said v3.
+    ({"id": "https://tile.loc.gov/image-services/iiif/public:gdc:x", "type": "ImageService3"}, 3, 2),
 ])
 def test_service_version(service, default, expected):
     assert _svc_version(service, default=default) == expected
