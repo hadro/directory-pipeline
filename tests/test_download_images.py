@@ -120,9 +120,9 @@ def test_resumed_download_repairs_a_corrupt_page_at_its_siblings_width(volume, v
     # --width (the 2048 default here) applies only to pages not yet downloaded.
     corrupt, session = volume
     canvases = dl.iter_canvas_images(v3_manifest, 2048)
-    downloaded, skipped = dl._download_item_images(
+    downloaded, skipped, missing = dl._download_item_images(
         canvases, corrupt.parent, _Session(), 2048, delay=0, quiet=True)
-    assert (downloaded, skipped) == (1, 1)
+    assert (downloaded, skipped, missing) == (1, 1, [])
     assert dl.image_is_complete(corrupt)
     assert "/full/1200,/" in session.urls[0]
 
@@ -179,3 +179,44 @@ def test_the_fallback_loc_manifest_declares_an_image_api_2_service(monkeypatch):
     assert canvas["service_version"] == 2
     body = manifest["items"][0]["items"][0]["items"][0]["body"]
     assert body["id"].endswith("/full/full/0/default.jpg")
+
+
+# --- timeouts and missing pages ----------------------------------------------
+
+class _TimeoutThenServe(_Session):
+    """Times out on the first *n* requests, then serves its bodies."""
+
+    def __init__(self, n, *bodies):
+        super().__init__(*bodies)
+        self.timeouts_left = n
+
+    def get(self, url, **kw):
+        if self.timeouts_left:
+            self.timeouts_left -= 1
+            self.urls.append(url)
+            raise dl.requests.exceptions.ReadTimeout("read timed out")
+        return super().get(url, **kw)
+
+
+def test_a_timed_out_request_is_retried(tmp_path, monkeypatch):
+    """A single slow response from Internet Archive's image server used to lose
+    the page for the whole run (found by the 0.3 smoke test)."""
+    monkeypatch.setattr(dl.time, "sleep", lambda s: None)
+    session = _TimeoutThenServe(1, _jpeg())
+    dest = tmp_path / "0001_a.jpg"
+    assert dl.download_file(session, "https://x/img", dest, delay=0) is True
+    assert dl.image_is_complete(dest)
+    assert len(session.urls) == 2
+
+
+def test_a_page_that_never_arrives_is_reported_missing(tmp_path, v3_manifest, monkeypatch):
+    """Missing pages are counted from what is on disk afterwards, so every
+    failure path is covered; the stage then exits non-zero instead of
+    reporting success with pages absent."""
+    monkeypatch.setattr(dl.time, "sleep", lambda s: None)
+    canvases = dl.iter_canvas_images(v3_manifest, 2048)
+    session = _TimeoutThenServe(99)
+    downloaded, skipped, missing = dl._download_item_images(
+        canvases, tmp_path, session, 2048, delay=0, quiet=True)
+    assert downloaded == 0
+    assert missing == list(range(1, len(canvases) + 1))
