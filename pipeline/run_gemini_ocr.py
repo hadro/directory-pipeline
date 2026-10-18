@@ -32,7 +32,14 @@ from google import genai
 
 
 load_dotenv()
-from google.genai.types import FinishReason, GenerateContentConfig, MediaResolution, Part, ThinkingConfig
+from google.genai.types import (
+    BlockedReason,
+    FinishReason,
+    GenerateContentConfig,
+    MediaResolution,
+    Part,
+    ThinkingConfig,
+)
 
 from utils.gemini import (
     drain_usage,
@@ -379,6 +386,12 @@ def _call_gemini(
 # placeholder as page text. 17 were still in output/ on 2026-10-17.
 _FAILURE_PLACEHOLDER = "[OCR FAILED"
 
+# Finish reasons that mean the model returned nothing because there was nothing
+# to return. Any other reason on an empty response (a safety or content filter,
+# the output budget spent before any text, OTHER) is a blocked page, not a blank
+# one: the blank-page check already let it through.
+_NOT_BLOCKED = (None, FinishReason.STOP, FinishReason.FINISH_REASON_UNSPECIFIED)
+
 
 def _is_failure_placeholder(txt_path: Path) -> bool:
     """True if *txt_path* holds a failure placeholder rather than page text."""
@@ -404,7 +417,9 @@ def process_image(
 ) -> tuple[str, bool | None]:
     """
     OCR one image via Gemini. Returns (status, success) where status is one of
-    'skipped', 'blank', 'corrupt', 'empty', 'ok', 'failed'.
+    'skipped', 'blank', 'corrupt', 'empty', 'ok', 'failed'. 'empty' means the
+    model finished normally with no text; a page a filter blocked, and no retry
+    rescued, is 'failed'.
     """
     txt_path = image_path.parent / f"{image_path.stem}_{model_slug(model)}.txt"
     if txt_path.exists():
@@ -464,8 +479,23 @@ def process_image(
     # Non-empty text: retry on repetition loop or dot-leader runaway.
     if not text:
         candidate = response.candidates[0] if response.candidates else None
-        if candidate and candidate.finish_reason == FinishReason.RECITATION:
+        finish = candidate.finish_reason if candidate else None
+        prompt_block = getattr(getattr(response, "prompt_feedback", None), "block_reason", None)
+        if prompt_block == BlockedReason.BLOCKED_REASON_UNSPECIFIED:
+            prompt_block = None
+        if finish == FinishReason.RECITATION:
             needs_retry, kind, reason = True, "recitation", "RECITATION"
+        elif prompt_block or finish not in _NOT_BLOCKED:
+            # Blocked for a reason other than recitation. These used to fall
+            # through to "empty": no retry, no .txt, and not counted as a
+            # failure, so the stage recorded complete with the page silently
+            # missing, the same loss as a misjudged blank page. They now take
+            # the recitation ladder, and fail if no rung returns text.
+            cause = prompt_block or finish
+            needs_retry, kind = True, "blocked"
+            reason = f"blocked ({getattr(cause, 'name', cause)})"
+            if candidate and candidate.safety_ratings:
+                _log(f"  safety_ratings: {candidate.safety_ratings}  [{image_path.name}]")
         else:
             needs_retry, kind, reason = False, "", ""
             if candidate:

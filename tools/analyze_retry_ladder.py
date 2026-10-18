@@ -65,6 +65,7 @@ from utils.collections import classify as classify_collection  # noqa: E402
 # Message prefix -> _output_issue kind. Order matters: the first match wins.
 _KIND_PATTERNS = [
     ("RECITATION", "recitation"),
+    ("blocked (", "blocked"),
     ("repetition loop", "repetition"),
     ("template loop", "template_loop"),
     ("block loop", "block_loop"),

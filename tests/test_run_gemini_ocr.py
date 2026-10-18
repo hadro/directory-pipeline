@@ -377,6 +377,45 @@ def test_a_real_transcription_is_still_skipped(page):
     assert status == "skipped"
     assert client.calls == []
 
+
+def test_a_safety_blocked_page_takes_the_ladder_instead_of_reading_as_blank(page):
+    """An empty response the safety filter blocked was reported 'empty' and
+    written nowhere, as if the page were blank, and never retried."""
+    from google.genai.types import FinishReason
+
+    client = _Recorder([("", FinishReason.SAFETY), "", "", "", "A clean transcription of the page."])
+
+    status, _ = _run(client, page, fallback_model="gemini-3.8-flash")
+
+    assert status == "ok"
+    assert len(client.calls) == 5
+    assert (page.parent / "0001_page_gemini-3.1-flash-lite.txt").exists()
+
+
+def test_a_page_blocked_on_every_rung_fails_rather_than_reading_as_empty(page):
+    """'failed' keeps the stage from being recorded complete; 'empty' did not."""
+    from google.genai.types import FinishReason
+
+    client = _Recorder([("", FinishReason.PROHIBITED_CONTENT)] + [""] * 8)
+
+    status, _ = _run(client, page, fallback_model="gemini-3.8-flash")
+
+    assert status == "failed"
+    assert not (page.parent / "0001_page_gemini-3.1-flash-lite.txt").exists()
+
+
+def test_a_normal_stop_with_no_text_is_still_empty(page):
+    """A page the model finished with nothing on it is blank, not blocked: one
+    call, no ladder."""
+    from google.genai.types import FinishReason
+
+    client = _Recorder([("", FinishReason.STOP)])
+
+    status, _ = _run(client, page)
+
+    assert status == "empty"
+    assert len(client.calls) == 1
+
 def test_a_wholly_blocked_page_still_reaches_the_simple_prompt(page):
     """RECITATION on every attempt must not skip the rungs written for it.
 

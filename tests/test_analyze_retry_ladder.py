@@ -36,6 +36,7 @@ def _done(page: str, n: int = 1) -> str:
         ("line too long (170305 chars): [\" Josephine…]", "long_line"),
         ("spaced leader runaway in line [Triado ( ( (…]", "spaced_leader"),
         ("RECITATION", "recitation"),
+        ("blocked (SAFETY)", "blocked"),
         ("template loop (120 consecutive lines…)", "template_loop"),
         ("block loop (6142 lines, 13 distinct)", "block_loop"),
         ("something nobody has seen before", "unknown"),
