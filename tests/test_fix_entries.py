@@ -19,6 +19,7 @@ from analysis.fix_entries import (
     _INFER_RULES,
     _MARKER_RULES,
     _NER_PLACEHOLDER_VALUES,
+    find_duplicates,
     find_hallucinated_pages,
     infer_category_from_name,
 )
@@ -158,3 +159,38 @@ class TestNoteFieldScoping:
 
     def test_marker_rules_target_canonical_categories(self):
         assert not {cat for _, cat in _MARKER_RULES if cat not in CANONICAL_CATEGORIES}
+
+
+def _listing(name: str, phone: str = "", address: str = "", description: str = ""):
+    return {"city": "LOUISBURG", "state": "", "name": name, "phone": phone,
+            "address": address, "description": description}
+
+
+class TestDuplicatesInAPhoneBook:
+    """Without an address the match key is the name alone. Rows from a 1924
+    telephone directory, where that flagged 42 of 179 listings."""
+
+    def test_office_and_residence_lines_are_not_duplicates(self):
+        rows = [_listing("Perry, Dr. H. G.", "287-R1", description="Office"),
+                _listing("Perry, Dr. H. G.", "287-R2", description="Residence")]
+        assert find_duplicates(rows) == set()
+
+    def test_people_sharing_a_surname_are_not_duplicates(self):
+        rows = [_listing("Person, M. M.", "1511"), _listing("Person, W. M.", "227")]
+        assert find_duplicates(rows) == set()
+
+    def test_the_same_number_twice_is_still_a_duplicate(self):
+        # A store's line and its ad, both on 322: one listing read twice.
+        rows = [_listing("Spivey, F. N.", "322", description="Store"),
+                _listing("Spivey, F. N.", "322", description="Heavy and Fancy Groceries")]
+        assert len(find_duplicates(rows)) == 1
+
+    def test_phone_punctuation_does_not_make_numbers_differ(self):
+        rows = [_listing("Perry, J. W.", "286-J"), _listing("Perry, J. W.", "286 J")]
+        assert len(find_duplicates(rows)) == 1
+
+    def test_rows_with_an_address_keep_the_plain_rule(self):
+        # With an address a differing number is as often one listing OCR'd twice.
+        rows = [_listing("LITTLE PALACE CAFE", "NA 3-0680", "425 N. Main St."),
+                _listing("LITTLE PALACE CAFE", "NA 3-0660", "425 N. Main St.")]
+        assert len(find_duplicates(rows)) == 1
