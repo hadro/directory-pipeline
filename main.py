@@ -1305,6 +1305,12 @@ def main() -> None:
         print(f"    ✗ Failed:   {', '.join(outcomes['failed'])}", file=sys.stderr)
     print(f"{'═' * 62}", file=sys.stderr)
 
+    # Exit non-zero when any target had a failed stage, so a script or wrapper
+    # can tell; the summary alone exited 0. Later stages have already run on
+    # whatever the failed one produced.
+    if outcomes["failed"]:
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     try:
