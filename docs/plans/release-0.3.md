@@ -1,8 +1,16 @@
 # Release 0.3: landing plan and pre-release review
 
-**Created 2026-10-17.** **Status:** In progress. Decisions made and Phases 0 and 2 done
-locally on 2026-10-17, on branch `release-0.3`. Nothing pushed yet; Phases 1, 3, 4 and 5
-remain.
+**Created 2026-10-17.** **Status:** Ready for the PRs. Decisions are made, and Phases 0
+and 2 are done locally, on branch `release-0.3`:
+- every blocker and fix-before-tagging item;
+- the docs pass and the version bump;
+- an end-to-end smoke run, and fixes for what it found.
+
+`release-0.3` is 49 commits ahead of local `main`, which is 13 ahead of `origin/main`. A clean
+checkout passes CI's steps: ruff, 670 tests passing with 16 skipped (the ones that need the
+local registry), and the full dry-run matrix.
+
+Nothing is pushed yet. Remaining: Phase 0's pushes, then Phases 1, 3, 4 and 5.
 
 This replaces PR #10's framing as "base for the 0.3 release". Most of #10 is already on `main` as
 cherry-picks, and the rest has been rebased into `alignment-column-criterion`.
@@ -295,16 +303,21 @@ skipped as existing; then re-run align and extract.
 
 ### Nits
 
-- `report_cost.find_volumes()` keeps a volume when *any* path component names a kept
+Two are fixed. The two still open are carried to 0.4:
+
+- Still open: `report_cost.find_volumes()` keeps a volume when *any* path component names a kept
   collection; what it means is `relative_to(root).parts[0]`. This is latent: nothing leaks on
   the current `output/`, because the backups hold no `pipeline_state.json`.
-- When `redownload_page()` cannot find a manifest beside a corrupt page,
+- Still open: when `redownload_page()` cannot find a manifest beside a corrupt page,
   `_download_item_images()` skips the page instead of falling back to a plain fetch at
-  `--width`. Only reachable with a local manifest plus `--output-dir`.
-- The explorer groups sections on stripped labels but filters with an unstripped `===`.
-- `run_surya_ocr.py` logs a hardcoded `(default 0.35)`.
+  `--width`. Only reachable with a local manifest plus `--output-dir`. Since `45b1896` the
+  page counts as missing and fails the stage, so it is no longer silent.
+- Fixed: the explorer grouped sections on stripped labels but filtered with an unstripped `===`.
+- Fixed: `run_surya_ocr.py` logged a hardcoded `(default 0.35)`.
 
 ### Docs and housekeeping
+
+All done on `release-0.3`. The list is kept as the record:
 
 - Bump `pyproject.toml` to `0.3.0`.
 - In `docs/README.md`, index these, plus one line per `docs/evidence/` set:
@@ -330,6 +343,38 @@ skipped as existing; then re-run align and extract.
   - the Colab notebook change (`--batch-size 72 → 10` plus about 220 KB of widget state)
   - `docs/blog-post.md`
   - the slides screenshot
+
+### Found after Phase 2
+
+A second review, and then the smoke run, turned up the following. Each is fixed on
+`release-0.3` with tests.
+
+| commit | what |
+|---|---|
+| `e0bb208` | B2's fix labelled LoC's synthetic manifests ImageService3, so explorer crops asked tile.loc.gov for `max` and got 400. The version is now read from the service URL first, and LoC services are v2. Checked live. |
+| `11e3218` | The Colab review notebooks globbed the wrong OCR file pattern and defaulted to a retired model. |
+| `1eea5de` | Pages that came back empty were left out of the billed-page count. |
+| `c85c644` | A response stopped by a safety or other filter returned no text and was reported as an empty page, with no retry. It now takes the RECITATION ladder and fails if nothing rescues it. |
+| `45b1896` | Image downloads did not retry on a timeout, and a page that never arrived still ended in "Done." Timeouts now retry twice, and missing pages are counted from disk and fail the stage. |
+| `3314eb5` | `main.py` printed "✗ Failed" and exited 0, so scripts and the dashboard saw success. |
+| `2a5d425` | On a 1924 phone book, `fix_entries` flagged 42 of 179 rows as duplicates: office and residence lines, and people sharing a surname. Where neither row has an address, a differing phone number now rules a pair out. No other CSV on disk changes. |
+| `cc48163` | `report_cost.py` billed extraction's calls to the OCR retry ladder: it reported 3.00 calls per page on a run with no retries. Extraction's calls are now tagged `ner`, `ner:fallback` and `ner:review`, and retries are counted from the tags. |
+| `aeb27b5` | `docs/pipeline-stages.md` and `tools/README.md` brought up to 0.3. |
+
+### End-to-end smoke run (2026-10-17)
+
+The volume was `ia_smoke_0_3_louisburg1924`: four canvases of the 1924 Louisburg–Franklin
+County telephone directory on Internet Archive, sliced with `slice_manifest.py`. It ran with
+`--no-flex`, on Surya with MPS.
+
+| step | result |
+|---|---|
+| `pipeline run` | Download, then OCR, extract (178 entries) and explorer. One page timed out at 60 s on every attempt; IA's image server answers that request with a 504 after 60 s. That page exposed the download and exit-code gaps above. |
+| `pipeline ocr` | Surya took about 61 s per page. Align auto-detected the OCR model. |
+| `pipeline extract` | Re-aligned pages were re-extracted without `--force`: 179 entries, 9 unplaced, 3 reading-order violations. |
+| `--export-alto` | 3 ALTO files. |
+| `pipeline postprocess` | Fix, then explorer. This step exposed the duplicate false positives. |
+| `report_cost.py` | **$0.0299** for 9 calls (3 OCR, 6 NER across two extractions) over 3 pages. No retries. |
 
 ## Landing sequence
 
@@ -454,8 +499,11 @@ Same shape as v0.2.0's.
 - The blank-page check no longer skips pages with ink.
 - Interrupted downloads are detected and fetched again; writes go through a `.part` file.
 - Degenerate OCR output is detected, with a retry ladder and a `--max-output-tokens` cap.
-- Stage recording is gated on success.
+- Pages a safety filter blocked are retried, and reported as failed rather than as empty.
+- Timed-out downloads are retried, and pages still missing fail the stage.
+- Stage recording is gated on success, and `main.py` exits non-zero when a target fails.
 - Manual alignments survive `--force`.
+- Old `[OCR FAILED]` placeholder files are deleted and retried.
 
 **Placement**
 
@@ -484,7 +532,7 @@ Same shape as v0.2.0's.
 
 - New defaults.
 - Per-generation `thinking_config_for()`.
-- Token usage persisted as a run proceeds.
+- Token usage persisted as a run proceeds, tagged by stage and retry rung.
 
 **Sources**
 
@@ -497,7 +545,7 @@ Same shape as v0.2.0's.
 - `AGENTS.md` and Codex skills.
 - A warning when an Intel Python runs on Apple Silicon.
 - uv docs.
-- Tests: 89 → 645.
+- Tests: 89 → 686.
 
 **Known issues**
 
@@ -545,6 +593,16 @@ Same shape as v0.2.0's.
   averaging 16 characters. Mean line length alone does not separate them. Both failures are
   upstream of the matcher, like the `--blank-threshold` region-blob case.
 - re-OCR of the degenerate pages (plan ready; needs per-page model selection)
+- the `long_line` rule treats any line over 500 characters as a runaway, so it also catches
+  reflowed prose. 31 existing pages (0.3%) would trigger needless retries.
+- the retry ladder's best-candidate choice puts any clean candidate ahead of any flawed one,
+  so a short clean retry beats a long flawed first answer. Measure how often that loses text.
+- `collate_review_queue.py` lists refusals only. An entry whose line went to a stronger claim
+  is not in the queue.
+- `fix_entries`' `flag_unanchored` still describes a row with no box and no address as
+  "likely hallucinated". Since the binder, no box usually means a deliberate refusal, so the
+  flag's wording and use need revisiting.
+- the two open nits above (`find_volumes`, the `redownload_page` fallback)
 - the city-directory placement audit
 - the local OCR backend (rebase it, and decide the extras conflict)
 - section detection (plan)
