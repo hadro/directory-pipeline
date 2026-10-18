@@ -228,7 +228,7 @@ def _retry_cap(candidates: "list[tuple[str, str]]", ceiling: "int | None") -> "i
     cap = longest * _RETRY_CAP_TOKENS_PER_LINE * _RETRY_CAP_MULTIPLE
     return min(ceiling, max(cap, _RETRY_CAP_FLOOR))
 
-# Regex: 200+ consecutive identical non-word, non-space characters (dots, dashes, etc.)
+# Regex: _LEADER_RUNAWAY_MIN_RUN (50)+ consecutive identical non-word, non-space characters
 _LEADER_RE = re.compile(r"([^\w\s])\1{%d,}" % (_LEADER_RUNAWAY_MIN_RUN - 1))
 # Regex: spaced dot-leader like ". . . . ." — non-word char + space repeated 50+ times
 _LEADER_SPACED_RE = re.compile(r"([^\w\s] ){%d,}" % _LEADER_SPACED_MIN_RUN)
@@ -861,8 +861,11 @@ def main() -> None:
 
                 counts[status] += 1
 
-                # Only pages that actually called the API are billed pages.
-                if status in ("ok", "failed"):
+                # Only pages that actually called the API are billed pages. An
+                # empty response is one: it paid for its prompt and its usage is
+                # already in the totals, so leaving its page out overstated the
+                # cost per page.
+                if status in ("ok", "failed", "empty"):
                     pending_pages += 1
                     if pending_pages >= USAGE_FLUSH_EVERY:
                         _flush_usage()

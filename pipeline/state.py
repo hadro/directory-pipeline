@@ -122,8 +122,10 @@ def record_stage(output_dir: Path, stage: str, args=_UNSET, *, updates: dict | N
 def add_usage(output_dir: Path, snapshot: dict, pages: int = 0) -> None:
     """Accumulate a run's token usage into ``token_usage``.
 
-    *snapshot* comes from ``utils.gemini.usage_snapshot()`` — keys are
-    ``"{model}|{tier}"``, values are ``{calls,input,output,thoughts,cached}``.
+    *snapshot* comes from ``utils.gemini.drain_usage()`` — what accrued since the
+    last flush, keyed ``"{model}|{tier}|{reason}"``, values
+    ``{calls,input,output,thoughts,cached}``. Never pass ``usage_snapshot()``: it
+    is cumulative, so a stage that flushes more than once would double-count.
 
     *pages* is how many pages the run actually sent to the API, accumulated into
     ``token_usage_pages``. Without it, cost per page cannot be derived: calls and
