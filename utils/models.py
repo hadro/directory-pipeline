@@ -55,7 +55,9 @@ DEFAULT_NER_TEMPERATURE = 0.0
 
 # More capable model for one-off generation/review tasks
 # (--generate-prompts, analysis/review_entries.py).
-DEFAULT_PROMPT_MODEL = "gemini-3.7-flash"
+# 3.8-flash since 2026-11-16: Google serves 3.8 under the 3.7 name and no longer
+# lists 3.7, so the alias can stop without notice. Same price.
+DEFAULT_PROMPT_MODEL = "gemini-3.8-flash"
 
 # Escalation target for a page the primary model cannot transcribe cleanly
 # (used by run_gemini_ocr.py and extract_entries.py).
@@ -65,12 +67,11 @@ DEFAULT_PROMPT_MODEL = "gemini-3.7-flash"
 # reuses the same --max-output-tokens cap as the attempt that failed. What it
 # buys is capability on layouts the lite tier mishandles.
 #
-# 3.8-flash over 3.5-flash on price: they share that output limit, but 3.5-flash
-# is $1.50/$9.00 against 3.8-flash's $0.75/$3.75. The version numbers are not a
-# price ordering. Escalation is already the costliest rung in the retry ladder —
-# it also has no thinking-off mode, so it bills thought tokens at the output rate
-# (see thinking_config_for in utils/gemini.py) — and 3.5-flash would roughly
-# double it.
+# 3.8-flash was chosen over 3.5-flash on price ($0.75/$3.75 against $1.50/$9.00
+# when measured; 3.5-flash has since become an alias for 3.6-flash). Escalation
+# is already the costliest rung in the retry ladder: it has no thinking-off mode,
+# so it bills thought tokens at the output rate (see thinking_config_for in
+# utils/gemini.py).
 FALLBACK_MODEL = "gemini-3.8-flash"
 
 
@@ -91,13 +92,15 @@ FALLBACK_MODEL = "gemini-3.8-flash"
 # Thinking tokens bill at the OUTPUT rate, so a model with no "thinking off"
 # mode (every non-lite 3.x flash — see thinking_config_for in utils/gemini.py)
 # costs more per call than its input/output counts alone suggest.
-RATES_CHECKED = "2026-09-18"
+RATES_CHECKED = "2026-11-16"
 
 MODEL_RATES: "dict[str, tuple[float, float]]" = {
     "gemini-3.1-flash-lite": (0.25, 1.50),
     "gemini-3.5-flash-lite": (0.30, 2.50),
-    "gemini-3.5-flash": (1.50, 9.00),
-    # 3.7/3.8 are promotional through 2026-12-31 and double on 2027-01-01
+    # 3.5-flash is now an alias for 3.6-flash, which bills at 3.6's rate.
+    "gemini-3.5-flash": (0.75, 3.75),
+    "gemini-3.6-flash": (0.75, 3.75),
+    # 3.6/3.7/3.8 are promotional through 2026-12-31 and double on 2027-01-01
     # (to 1.50 / 7.50). Re-check this table in January.
     "gemini-3.7-flash": (0.75, 3.75),
     "gemini-3.8-flash": (0.75, 3.75),

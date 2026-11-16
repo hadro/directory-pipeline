@@ -162,7 +162,7 @@ Ask the user to paste the error message or traceback. Then:
 - `FileNotFoundError` for `.json` or `.txt`: check if a prior stage was skipped.
 - Gemini API error: check `.env` for `GEMINI_API_KEY`.
 - A 404 for `gemini-2.0-flash`: that model is retired. Use the defaults in
-  `utils/models.py`, or `--ocr-model gemini-3.7-flash` for higher accuracy.
+  `utils/models.py`, or `--ocr-model gemini-3.8-flash` for higher accuracy.
 - A 400 about thinking settings after changing a model: see `thinking_config_for()` in
   `utils/gemini.py`. Lite and non-lite 3.x models need different settings.
 - "N page(s) failed … stage not recorded as complete": Gemini OCR exits non-zero when

@@ -104,9 +104,9 @@ Full filename contract (who writes/reads every artifact, model auto-detection ru
 - **`--flex`** — Flex inference (`service_tier="flex"`): ~50% cheaper than standard pricing, with 1–15 min latency per request. Best for large volumes where real-time throughput isn't needed. Flex is **on by default** everywhere (`pipeline run`/`guided`/`ocr`/`extract` and `python main.py`) — pass `--no-flex` for time-sensitive runs. Only direct invocation of the leaf scripts (`pipeline/run_gemini_ocr.py`, `pipeline/extract_entries.py`) keeps `--flex` opt-in.
 - **Batch API** (not yet implemented) — Submit all pages as a single async job; 50% cheaper, up to 24-hour turnaround. Planned for future implementation.
 
-Default model is `gemini-3.1-flash-lite` for both OCR and NER, with `gemini-3.7-flash` for
-prompt generation and `gemini-3.8-flash` as the dense-page fallback (constants in
-`utils/models.py`). For higher accuracy pass `--ocr-model gemini-3.7-flash`; do not reach
+Default model is `gemini-3.1-flash-lite` for both OCR and NER, with `gemini-3.8-flash` for
+prompt generation and as the dense-page fallback (constants in
+`utils/models.py`). For higher accuracy pass `--ocr-model gemini-3.8-flash`; do not reach
 for `gemini-2.0-flash`, which is retired (see above).
 
 OCR and its escalation call sample at `DEFAULT_OCR_TEMPERATURE` (0.1 from 0.3 on; it was

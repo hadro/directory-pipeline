@@ -27,11 +27,10 @@ models' rates for three months.
 |---|---|---|
 | `gemini-3.1-flash-lite` (OCR + NER default) | $0.25 | $1.50 |
 | `gemini-3.5-flash-lite` | $0.30 | $2.50 |
-| `gemini-3.7-flash` (prompt generation) | $0.75 | $3.75 |
-| `gemini-3.8-flash` (escalation) | $0.75 | $3.75 |
-| `gemini-3.5-flash` | $1.50 | $9.00 |
+| `gemini-3.8-flash` (prompt generation, escalation) | $0.75 | $3.75 |
+| `gemini-3.6-flash` (also served as `gemini-3.5-flash`) | $0.75 | $3.75 |
 
-Checked 2026-09-18. The 3.7/3.8 rates are promotional through 2026-12-31 and
+Checked 2026-11-16. The 3.6/3.8 rates are promotional through 2026-12-31 and
 double on 2027-01-01. **Thinking tokens bill at the output rate**, and every
 non-lite 3.x flash model has no thinking-off mode (see `thinking_config_for()` in
 `utils/gemini.py`), so escalated pages cost more than their input/output counts

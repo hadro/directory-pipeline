@@ -43,7 +43,7 @@ command line:
 
 Key model flags:
   --ocr-model MODEL     Gemini model for OCR and downstream stages (each stage uses its own default if omitted)
-  --prompt-model MODEL  Gemini model for --generate-prompts (default: gemini-3.7-flash)
+  --prompt-model MODEL  Gemini model for --generate-prompts (default: gemini-3.8-flash)
 
 Usage
 -----
@@ -67,7 +67,7 @@ Usage
 
     # Multiple models / parallel workers:
     python main.py collections.txt --download \\
-        --compare-ocr --models gemini-2.0-flash gemini-1.5-flash \\
+        --compare-ocr --models gemini-3.1-flash-lite gemini-3.8-flash \\
         --workers 8
 """
 
@@ -775,7 +775,7 @@ def main() -> None:
         default=None,
         metavar="MODEL",
         help=(
-            "Gemini model for --generate-prompts (default: gemini-3.7-flash). "
+            "Gemini model for --generate-prompts (default: gemini-3.8-flash). "
             "A more capable model is used by default for prompt generation; override here."
         ),
     )
