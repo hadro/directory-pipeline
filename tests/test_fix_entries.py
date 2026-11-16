@@ -194,3 +194,36 @@ class TestDuplicatesInAPhoneBook:
         rows = [_listing("LITTLE PALACE CAFE", "NA 3-0680", "425 N. Main St."),
                 _listing("LITTLE PALACE CAFE", "NA 3-0660", "425 N. Main St.")]
         assert len(find_duplicates(rows)) == 1
+
+
+class TestSectionNamedCategoryColumn:
+    """The 1958 Green Book's NER schema names its category column `section`.
+
+    detect_schema() did not list it, so --infer-categories inferred categories,
+    wrote them to a "category" key the CSV never had, and the DictWriter's
+    extrasaction="ignore" dropped all 1,816 of them without a word.
+    """
+
+    def test_inferred_categories_are_written_to_the_section_column(self, tmp_path):
+        import csv
+
+        from analysis.fix_entries import process_csv
+
+        src, dst = tmp_path / "entries.csv", tmp_path / "fixed.csv"
+        rows = [
+            {"business_name": "Mrs. Smith's Tourist Home", "city": "IDLEWILD",
+             "state": "MICHIGAN", "section": "General", "image": "p1.jpg"},
+            {"business_name": "Hotel Theresa", "city": "NEW YORK",
+             "state": "NEW YORK", "section": "", "image": "p2.jpg"},
+        ]
+        with src.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0]))
+            w.writeheader()
+            w.writerows(rows)
+
+        stats = process_csv(src, dst, infer_categories=True)
+
+        out = list(csv.DictReader(dst.open(encoding="utf-8")))
+        assert stats["inferred_categories"] == 2
+        assert [r["section"] for r in out] == ["TOURIST HOMES", "HOTELS"]
+        assert "category" not in out[0], "no phantom column alongside `section`"

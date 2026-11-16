@@ -505,13 +505,14 @@ def detect_schema(fieldnames: list[str]) -> dict[str, str]:
     """Map logical field roles to actual CSV column names.
 
     Handles both the old schema (state, city, category) and newer volumes
-    that use location_state_country, location_city, section_category.
+    that use location_state_country, location_city, section_category, or a
+    bare section (the 1958 Green Book's NER prompt).
     Returns keys: state, city, category, name, address (only those found).
     """
     candidates = {
         "state":    ("state", "location_primary", "location_state", "location_state_country"),
         "city":     ("city", "location_city"),
-        "category": ("category", "section_category"),
+        "category": ("category", "section_category", "section"),
         "name":     ("name", "business_name", "establishment_name"),
         "address":  ("address",),
     }
