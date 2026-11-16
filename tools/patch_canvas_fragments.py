@@ -6,8 +6,13 @@ aligned lines to find the correct #xywh= canvas fragment — without making any
 Gemini API calls.
 
 Usage:
-    python pipeline/patch_canvas_fragments.py output/my_volume/ --aligned-model gemini-2.0-flash
-    python pipeline/patch_canvas_fragments.py output/collection/ --aligned-model gemini-2.0-flash
+    python tools/patch_canvas_fragments.py output/my_volume/ --dry-run
+    python tools/patch_canvas_fragments.py output/collection/ --aligned-model gemini-3.1-flash-lite
+
+--aligned-model defaults to the model slug most common among the aligned files
+under the directory. That reproduces the old gemini-2.0-flash default on the
+Green Books collection root, and finds current runs' files too. Pass it
+explicitly where a tree mixes models.
 """
 
 import argparse
@@ -19,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from utils.entry_binding import bind_entries  # noqa: E402
+from utils.models import DEFAULT_OCR_MODEL, discover_ocr_slug, model_slug  # noqa: E402
 
 
 def patch_item_dir(item_dir: Path, aligned_model_slug: str, dry_run: bool = False) -> dict:
@@ -148,8 +154,9 @@ def rebuild_csv(item_dir: Path) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output_dir", help="Item dir or collection dir containing item subdirs")
-    parser.add_argument("--aligned-model", default="gemini-2.0-flash",
-                        help="Model slug used in *_aligned.json filenames (default: gemini-2.0-flash)")
+    parser.add_argument("--aligned-model", default=None,
+                        help="Model slug used in *_aligned.json filenames (default: the slug "
+                             "most common among aligned files under output_dir)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Report what would change without writing files")
     args = parser.parse_args()
@@ -159,7 +166,11 @@ def main() -> None:
         print(f"Error: {root} does not exist", file=sys.stderr)
         sys.exit(1)
 
-    aligned_slug = args.aligned_model.replace("/", "_")
+    aligned_slug = model_slug(
+        args.aligned_model or discover_ocr_slug(root, recursive=True) or DEFAULT_OCR_MODEL
+    )
+    if not args.aligned_model:
+        print(f"Aligned model: {aligned_slug} (most common on disk; --aligned-model to override)")
 
     # Collect item dirs: either root itself, or any subdir containing aligned files
     item_dirs: list[Path] = []

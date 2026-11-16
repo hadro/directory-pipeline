@@ -17,11 +17,16 @@ All other content is left completely untouched: gemini_text, confidence
 values, manual review edits, surya_confidence, bbox, unmatched_gemini.
 
 Usage:
-    python pipeline/rescale_canvas_fragments.py output/my_volume/ \\
-        --aligned-model gemini-2.0-flash
+    python tools/rescale_canvas_fragments.py output/my_volume/ --dry-run
+    python tools/rescale_canvas_fragments.py output/my_volume/
 
-    python pipeline/rescale_canvas_fragments.py output/collection/ \\
-        --aligned-model gemini-2.0-flash --dry-run
+    python tools/rescale_canvas_fragments.py output/collection/ \\
+        --aligned-model gemini-3.1-flash-lite
+
+--aligned-model defaults to the model slug most common among the aligned files
+under the directory. That reproduces the old gemini-2.0-flash default on the
+Green Books collection root, and finds current runs' files too. Pass it
+explicitly where a tree mixes models.
 """
 
 import argparse
@@ -31,6 +36,9 @@ import sys
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utils.models import DEFAULT_OCR_MODEL, discover_ocr_slug, model_slug  # noqa: E402
 
 
 _XYWH_RE = re.compile(r"#xywh=(\d+),(\d+),(\d+),(\d+)$")
@@ -130,8 +138,9 @@ def main() -> None:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("output_dir",
                    help="Item directory or collection directory containing aligned JSON files")
-    p.add_argument("--aligned-model", default="gemini-2.0-flash",
-                   help="Model slug used in *_aligned.json filenames (default: gemini-2.0-flash)")
+    p.add_argument("--aligned-model", default=None,
+                   help="Model slug used in *_aligned.json filenames (default: the slug "
+                        "most common among aligned files under output_dir)")
     p.add_argument("--dry-run", action="store_true",
                    help="Report what would change without writing files")
     p.add_argument("--check", action="store_true",
@@ -146,7 +155,10 @@ def main() -> None:
         print(f"Error: {root} does not exist", file=sys.stderr)
         sys.exit(1)
 
-    suffix = f"_{args.aligned_model}_aligned.json"
+    model = args.aligned_model or discover_ocr_slug(root, recursive=True) or DEFAULT_OCR_MODEL
+    if not args.aligned_model:
+        print(f"Aligned model: {model} (most common on disk; --aligned-model to override)")
+    suffix = f"_{model_slug(model)}_aligned.json"
     aligned_files = sorted(root.rglob(f"*{suffix}"))
     if not aligned_files:
         print(f"No *{suffix} files found under {root}", file=sys.stderr)

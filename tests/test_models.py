@@ -147,3 +147,25 @@ def test_require_txt_searches_subdirectories(tmp_path):
         _mk(sub, f"000{i}_id_gemini-2.0-flash.txt")
 
     assert discover_ocr_slug(tmp_path, require_txt=True) == "gemini-2.0-flash"
+
+
+def test_discover_stops_one_level_down_by_default(tmp_path):
+    deep = tmp_path / "collection" / "volume" / "item"
+    deep.mkdir(parents=True)
+    _mk(deep, "0001_id_gemini-2.0-flash_aligned.json")
+
+    assert discover_ocr_slug(tmp_path) is None
+
+
+def test_recursive_discovery_reaches_a_collection_root(tmp_path):
+    """The repair tools are pointed at roots like green_books_and_related/, where
+    aligned files sit three levels down and the old era is still the majority."""
+    old = tmp_path / "the_green_book" / "item_a"
+    new = tmp_path / "travelguide" / "item_b"
+    old.mkdir(parents=True)
+    new.mkdir(parents=True)
+    for i in range(3):
+        _mk(old, f"000{i}_id_gemini-2.0-flash_aligned.json")
+    _mk(new, "0001_id_gemini-3.1-flash-lite_aligned.json")
+
+    assert discover_ocr_slug(tmp_path, recursive=True) == "gemini-2.0-flash"

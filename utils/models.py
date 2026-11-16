@@ -142,13 +142,19 @@ _ALIGNED_RX = re.compile(r"_([^_]+)_aligned\.json$")
 _TXT_RX = re.compile(r"_(gemini-[^_]+)\.txt$")
 
 
-def discover_ocr_slug(output_root: Path, require_txt: bool = False) -> str | None:
+def discover_ocr_slug(
+    output_root: Path, require_txt: bool = False, recursive: bool = False,
+) -> str | None:
     """Scan *output_root* (and its immediate subdirectories) for OCR output
     files and return the most common model slug, or None if nothing is found.
 
     Aligned JSON files are preferred over bare OCR .txt files. This is the
     fallback used when neither a --model flag nor pipeline_state.json
     identifies the OCR model.
+
+    Pass *recursive* to scan the whole tree instead. The repair tools need it:
+    they are pointed at collection roots such as green_books_and_related/, whose
+    aligned files sit three levels down.
 
     Pass *require_txt* when the caller's required input is the OCR text rather
     than the aligned JSON — the aligner, above all. Without it a directory
@@ -163,23 +169,28 @@ def discover_ocr_slug(output_root: Path, require_txt: bool = False) -> str | Non
         return None
     dirs = [output_root] + [d for d in sorted(output_root.iterdir()) if d.is_dir()]
 
+    def _files(pattern: str):
+        if recursive:
+            yield from output_root.rglob(pattern)
+        else:
+            for d in dirs:
+                yield from d.glob(pattern)
+
     def _txt_slugs() -> set[str]:
         found: set[str] = set()
-        for d in dirs:
-            for f in d.glob("*.txt"):
-                m = _TXT_RX.search(f.name)
-                if m:
-                    found.add(m.group(1))
+        for f in _files("*.txt"):
+            m = _TXT_RX.search(f.name)
+            if m:
+                found.add(m.group(1))
         return found
 
     usable = _txt_slugs() if require_txt else None
     for pattern, rx in (("*_aligned.json", _ALIGNED_RX), ("*.txt", _TXT_RX)):
         counts: Counter[str] = Counter()
-        for d in dirs:
-            for f in d.glob(pattern):
-                m = rx.search(f.name)
-                if m and (usable is None or m.group(1) in usable):
-                    counts[m.group(1)] += 1
+        for f in _files(pattern):
+            m = rx.search(f.name)
+            if m and (usable is None or m.group(1) in usable):
+                counts[m.group(1)] += 1
         if counts:
             return counts.most_common(1)[0][0]
     return None
