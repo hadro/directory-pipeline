@@ -63,7 +63,7 @@ from utils.gemini import (
     thinking_config_for,
 )
 from pipeline.state import add_usage, find_state_dir, record_stage
-from utils.models import DEFAULT_NER_MODEL, FALLBACK_MODEL, model_slug
+from utils.models import DEFAULT_NER_MODEL, DEFAULT_NER_TEMPERATURE, FALLBACK_MODEL, model_slug
 from utils.entry_binding import bind_entries, order_violations, review_queue
 
 # Sparse-page thresholds: pages below BOTH limits are skipped before the NER call.
@@ -277,7 +277,7 @@ def _call_gemini(
         model=model,
         config=GenerateContentConfig(
             system_instruction=system_prompt,
-            temperature=0.0,
+            temperature=DEFAULT_NER_TEMPERATURE,
             max_output_tokens=65536,
             thinking_config=thinking_config_for(model),
             http_options=flex_http_options(service_tier),

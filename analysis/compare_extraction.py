@@ -33,7 +33,7 @@ from google import genai
 from google.genai.types import GenerateContentConfig, Part
 
 from utils.gemini import generate_with_retry, get_client
-from utils.models import DEFAULT_NER_MODEL, model_slug
+from utils.models import DEFAULT_NER_MODEL, DEFAULT_NER_TEMPERATURE, model_slug
 
 DEFAULT_PAGES = 10
 NER_PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ner_prompt.md"
@@ -67,7 +67,7 @@ def _call_gemini(
         model=model,
         config=GenerateContentConfig(
             system_instruction=system_prompt,
-            temperature=0.0,
+            temperature=DEFAULT_NER_TEMPERATURE,
         ),
         contents=parts,
         log=_log,

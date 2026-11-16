@@ -381,7 +381,9 @@ reason other than a clean finish:
 The rungs, in order:
 
 1. Retries at temperatures `[0.1, 0.3, 0.7]`, with a no-leader instruction for leader
-   failures. Loops skip this rung: in the measured logs it never rescued one.
+   failures. Loops skip this rung: in the measured logs it never rescued one. The first call
+   already runs at 0.1 (`DEFAULT_OCR_TEMPERATURE`), so the first retry is a fresh draw at the
+   same temperature.
 2. A simple fallback prompt.
 3. Escalation to the fallback model (`--fallback-model`, default `gemini-3.8-flash`).
 

@@ -25,6 +25,7 @@ from pipeline.run_gemini_ocr import (
     _output_issue,
     process_image,
 )
+from utils.models import DEFAULT_OCR_TEMPERATURE
 
 
 def kind(text: str) -> str:
@@ -283,7 +284,7 @@ def test_repetition_loop_skips_the_temperature_rungs(page):
     assert status == "ok"
     assert len(client.calls) == 2, "a loop should not walk the temperature rungs"
     temps = [c["config"].temperature for c in client.calls]
-    assert temps == [0.0, 0.3], f"expected simple-prompt rung next, got {temps}"
+    assert temps == [DEFAULT_OCR_TEMPERATURE, 0.3], f"expected simple-prompt rung next, got {temps}"
 
 
 def test_recitation_style_failure_keeps_the_temperature_rungs(page):
@@ -294,7 +295,7 @@ def test_recitation_style_failure_keeps_the_temperature_rungs(page):
 
     _run(client, page, service_tier=None, max_output_tokens=None)
 
-    assert [c["config"].temperature for c in client.calls] == [0.0, 0.1]
+    assert [c["config"].temperature for c in client.calls] == [DEFAULT_OCR_TEMPERATURE, 0.1]
 
 
 def test_best_candidate_wins_over_the_last_one(page):

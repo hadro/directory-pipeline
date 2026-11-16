@@ -51,7 +51,7 @@ from utils.gemini import (
 from utils.image_utils import image_is_complete, is_blank_page
 from pipeline.download_images import redownload_page
 from pipeline.state import add_usage, find_state_dir, record_stage
-from utils.models import DEFAULT_OCR_MODEL, FALLBACK_MODEL, model_slug
+from utils.models import DEFAULT_OCR_MODEL, DEFAULT_OCR_TEMPERATURE, FALLBACK_MODEL, model_slug
 
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "ocr_prompt.md"
 
@@ -189,7 +189,8 @@ _LEADER_RUNAWAY_MIN_RUN = 50   # consecutive identical non-word chars → dot-le
 _LEADER_SPACED_MIN_RUN = 50   # spaced pattern like ". . . . ." repeated this many times
 _LEADER_MAX_LINE_LEN = 500    # any line longer than this is a runaway (catches spaced variants)
 
-# Temperatures to try in order when output quality checks fail
+# Temperatures to try in order when output quality checks fail. The first equals
+# DEFAULT_OCR_TEMPERATURE, so it is a fresh draw rather than a step up — see its comment.
 _RETRY_TEMPERATURES = [0.1, 0.3, 0.7]
 
 # Output ceiling for a retry, derived from what the page has already produced.
@@ -470,7 +471,7 @@ def process_image(
             reason=reason,
         )
 
-    response = call(system_prompt, 0.0)
+    response = call(system_prompt, DEFAULT_OCR_TEMPERATURE)
 
     text = response.text or ""
 
@@ -595,7 +596,7 @@ def process_image(
             esc_model = fallback_model
             if esc_model and esc_model != model:
                 _log(f"  Escalating to {esc_model}: {image_path.name}")
-                esc_text = call(_SIMPLE_FALLBACK_PROMPT, 0.0, esc_model,
+                esc_text = call(_SIMPLE_FALLBACK_PROMPT, DEFAULT_OCR_TEMPERATURE, esc_model,
                                 reason=f"escalate:{kind}",
                                 cap=_retry_cap(candidates, max_output_tokens)).text or ""
                 if esc_text:

@@ -109,6 +109,12 @@ prompt generation and `gemini-3.8-flash` as the dense-page fallback (constants i
 `utils/models.py`). For higher accuracy pass `--ocr-model gemini-3.7-flash`; do not reach
 for `gemini-2.0-flash`, which is retired (see above).
 
+OCR and its escalation call sample at `DEFAULT_OCR_TEMPERATURE` (0.1 from 0.3 on; it was
+0.0). That value comes from run experience and has not been measured. The planned
+0.0 / 0.1 / 1.0 comparison is under "After 0.3" in `docs/plans/release-0.3.md`. NER stays at
+`DEFAULT_NER_TEMPERATURE` = 0.0 on purpose, so don't unify the two. Its comment in
+`utils/models.py` says why, and what evidence would justify raising it.
+
 **Changing a model default means checking `thinking_config_for()` in `utils/gemini.py`.**
 These stages want thinking minimized, and how you ask for that changed mid-family. The
 `thinking_budget=0` sentinel is rejected outright by `gemini-3.5-flash-lite` (a 400 on

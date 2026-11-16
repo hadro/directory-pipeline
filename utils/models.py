@@ -22,8 +22,36 @@ from pathlib import Path
 # that had been demonstrated. Raise it only with a measurement that justifies it.
 DEFAULT_OCR_MODEL = "gemini-3.1-flash-lite"
 
+# Sampling temperature for the first OCR call and the model-escalation call.
+#
+# 0.1 from 0.3 on (2026-10-20); it was 0.0. The change follows run experience,
+# not a paired measurement: no page set has been transcribed at both. Google's
+# Gemini 3 guide recommends the 1.0 default and warns that lower values can loop,
+# the failure most of run_gemini_ocr.py's retry ladder exists to catch.
+#
+# The ladder keeps its own temperatures (_RETRY_TEMPERATURES), so its 0.1 rung is
+# now a fresh draw at this temperature rather than a step above it. A fresh draw
+# is what rescues a RECITATION block, so the rung still earns its place.
+DEFAULT_OCR_TEMPERATURE = 0.1
+
 # Default model for NER entry extraction (--extract-entries).
 DEFAULT_NER_MODEL = "gemini-3.1-flash-lite"
+
+# Sampling temperature for NER, primary and fallback model alike. Deliberately not
+# DEFAULT_OCR_TEMPERATURE.
+#
+# What sampling flips is a close call. In OCR those are rare glyph readings. In
+# NER they are judgments: a category, whether a token is an occupation or part of
+# a name, whether a ditto mark carries the surname. At 0.1 the same kind of entry
+# can come out differently from page to page. NER is also re-run far more often
+# than OCR, whenever alignment, prompt or binder changes, and every before/after
+# comparison of its output (audit_entry_bindings.py, compare_extraction.py) would
+# carry that noise.
+#
+# The case for raising it is the same looping risk as OCR. Raise it only if NER
+# shows loops: truncated responses salvaged as partial, or entries repeated
+# within one page.
+DEFAULT_NER_TEMPERATURE = 0.0
 
 # More capable model for one-off generation/review tasks
 # (--generate-prompts, analysis/review_entries.py).
