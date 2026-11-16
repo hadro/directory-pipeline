@@ -939,6 +939,39 @@ _OUTLIER_MIN_PAGES  = 10     # below this a percentile means nothing
 _OUTLIER_MAX_LIST   = 15
 
 
+def _is_placeholder_canvas(aligned: dict) -> bool:
+    """True when a page's boxes were scaled to a square fallback canvas.
+
+    When info.json cannot be fetched, align_image falls back to the manifest's
+    canvas size. On NYPL that can be a 2560x2560 placeholder, which puts every
+    canvas_fragment in the wrong space. A per-page warning was the only signal,
+    and it is one line among a run's pages: five 1958 Green Book pages
+    (2026-10-20) went unnoticed until rescale_canvas_fragments.py found them.
+    """
+    w, h = aligned.get("canvas_width"), aligned.get("canvas_height")
+    return bool(aligned.get("coords_from_fallback")) and bool(w) and w == h
+
+
+def _report_placeholder_canvases(names: "list[str]", root: Path, log, slug: str = "") -> None:
+    """Name the pages whose boxes sit in a placeholder canvas, and the repair."""
+    if not names:
+        return
+    # Name the model: the tools default to the commonest slug under root, which
+    # in a mixed-model collection is not the one these pages were aligned with.
+    model_arg = f" --aligned-model {slug}" if slug else ""
+    log(
+        f"\n⚠  {len(names)} page(s) have boxes scaled to a square placeholder canvas "
+        "(info.json could not be fetched). Their canvas_fragment coordinates are in "
+        "the wrong space. Fix them in place, then rebind the entries:\n"
+        f"  python tools/rescale_canvas_fragments.py {root}{model_arg}\n"
+        f"  python tools/patch_canvas_fragments.py {root}{model_arg}"
+    )
+    for name in names[:_OUTLIER_MAX_LIST]:
+        log(f"  {name}")
+    if len(names) > _OUTLIER_MAX_LIST:
+        log(f"  … and {len(names) - _OUTLIER_MAX_LIST} more")
+
+
 def _report_unmatched_outliers(rates: "list[tuple[str, float]]", log) -> None:
     """Report the pages that left most Gemini text unboxed in this volume."""
     if len(rates) < _OUTLIER_MIN_PAGES:
@@ -1690,22 +1723,28 @@ def main() -> None:
         for p in sorted(flagged_merge):
             print(f"  {p}", file=sys.stderr)
 
+    # Read back from disk rather than from this run's results, so pages
+    # skipped as already-aligned are included: an outlier is an outlier
+    # whichever run produced it. Placeholder canvases are reported even under
+    # --quiet, since they leave every box on the page in the wrong place.
+    _slug = model_slug(args.model)
+    _rates: list[tuple[str, float]] = []
+    _placeholder: list[str] = []
+    for _f in sorted(output_root.rglob(f"*_{_slug}_aligned.json")):
+        try:
+            _d = json.loads(_f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if _is_placeholder_canvas(_d):
+            _placeholder.append(_f.name)
+        _m = len(_d.get("lines", []))
+        _u = len(_d.get("unmatched_gemini", []) or [])
+        if _m + _u:
+            _rates.append((_f.name, _u / (_m + _u) * 100))
+    _stderr = lambda msg: print(msg, file=sys.stderr)  # noqa: E731
     if not args.quiet:
-        # Read back from disk rather than from this run's results, so pages
-        # skipped as already-aligned are included: an outlier is an outlier
-        # whichever run produced it.
-        _slug = model_slug(args.model)
-        _rates: list[tuple[str, float]] = []
-        for _f in sorted(output_root.rglob(f"*_{_slug}_aligned.json")):
-            try:
-                _d = json.loads(_f.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            _m = len(_d.get("lines", []))
-            _u = len(_d.get("unmatched_gemini", []) or [])
-            if _m + _u:
-                _rates.append((_f.name, _u / (_m + _u) * 100))
-        _report_unmatched_outliers(_rates, lambda msg: print(msg, file=sys.stderr))
+        _report_unmatched_outliers(_rates, _stderr)
+    _report_placeholder_canvases(_placeholder, output_root, _stderr, _slug)
 
     # Record the stage so a direct invocation updates pipeline_state.json the
     # same way an orchestrated run does (main.py is otherwise the only writer).
