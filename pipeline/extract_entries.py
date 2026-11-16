@@ -753,6 +753,20 @@ def _apply_review_corrections(
 # Per-page processing
 # ---------------------------------------------------------------------------
 
+def _is_failure(status: str) -> bool:
+    """True for a page status meaning NER never produced a result.
+
+    None of these writes an ``_entries.json``, so the next run retries the page
+    without --force. What they must not do is pass for success. They used to be
+    one log line among the run's pages: the stage was recorded complete and the
+    run exited 0, so main.py reported it ok. Page 0078 of the 1958 Green Book was
+    lost that way on 2026-10-20, and its successor took 0077's context. An
+    ``api_error`` (the call itself raised, e.g. a flex-tier timeout) leaves not
+    even an error file behind.
+    """
+    return status == "parse_error" or status.startswith(("error:", "api_error:"))
+
+
 def process_page(
     client: genai.Client,
     aligned_path: Path,
@@ -1072,10 +1086,11 @@ def process_item(
     sections: list | None = None,
     all_files: list[str] | None = None,
     slug_dir: Path | None = None,
-) -> list[dict]:
+) -> "tuple[list[dict], list[str]]":
     """
     Process all aligned JSON pages in an item directory in page order.
-    Returns all extracted entries across all pages.
+    Returns all extracted entries across all pages, and the names of the pages
+    NER failed on (see _is_failure).
 
     aligned_model: if set, read *_{aligned_slug}_aligned.json files but write
     output tagged with the NER model slug.  Useful when OCR was run with one
@@ -1131,8 +1146,9 @@ def process_item(
             txt_files = [f for f in txt_files
                          if f.stem[: -len(txt_suffix)] in scope]
         if not txt_files:
-            return []
+            return [], []
         all_entries: list[dict] = []
+        failed: list[str] = []
         context: dict = {}
         context_file = item_dir / f"extraction_context_{slug}.json"
         if not force and context_file.exists():
@@ -1172,7 +1188,9 @@ def process_item(
             status = result["status"]
             n = len(result["entries"])
             ctx = result.get("page_context", context)
-            if not quiet:
+            if _is_failure(status):
+                failed.append(txt_path.name)
+            if not quiet or _is_failure(status):
                 ctx_str = " > ".join(str(v) for v in ctx.values()) if ctx else "?"
                 _log(f"  [{i + 1:03d}/{len(txt_files)}] {txt_path.name}  {status}  {n} entries  [{ctx_str}]")
             context = ctx
@@ -1183,9 +1201,10 @@ def process_item(
             all_entries.extend(page_entries)
             if not dry_run:
                 context_file.write_text(json.dumps(context, ensure_ascii=False), encoding="utf-8")
-        return all_entries
+        return all_entries, failed
 
     all_entries: list[dict] = []
+    failed: list[str] = []
     context: dict = {}
 
     # Resume: load persisted context from a previous run
@@ -1234,7 +1253,9 @@ def process_item(
         n = len(result["entries"])
         ctx = result.get("page_context", context)
 
-        if not quiet:
+        if _is_failure(status):
+            failed.append(aligned_path.name)
+        if not quiet or _is_failure(status):
             ctx_str = " > ".join(str(v) for v in ctx.values()) if ctx else "?"
             _log(f"  [{i:03d}/{len(aligned_files)}] {aligned_path.name}  {status}  {n} entries  [{ctx_str}]")
 
@@ -1261,7 +1282,7 @@ def process_item(
         if not dry_run:
             context_file.write_text(json.dumps(context, ensure_ascii=False), encoding="utf-8")
 
-    return all_entries
+    return all_entries, failed
 
 
 # ---------------------------------------------------------------------------
@@ -1546,6 +1567,7 @@ def main() -> None:
     )
 
     extracted = 0
+    failed_pages: list[str] = []
     state_dir = find_state_dir(output_root)
 
     def _flush_usage() -> None:
@@ -1576,7 +1598,7 @@ def main() -> None:
         else:
             item_prompt = system_prompt
         try:
-            entries = process_item(
+            entries, failed = process_item(
                 client, item_dir, args.model, item_prompt,
                 args.mode, args.force, args.dry_run, args.quiet, aligned_model,
                 fallback_model=fallback_model, service_tier=service_tier,
@@ -1594,6 +1616,7 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
+        failed_pages.extend(failed)
         if not args.dry_run:
             csv_path = item_dir / f"entries_{slug}.csv"
             write_csv(entries, csv_path)
@@ -1607,17 +1630,27 @@ def main() -> None:
 
     # Record the stage so a direct invocation updates pipeline_state.json the
     # same way an orchestrated run does (main.py is otherwise the only writer).
-    # Gated on an item actually yielding entries, matching run_gemini_ocr and
-    # align_ocr: a run where every NER call failed must not leave the stage
-    # stamped complete, since record_stage dedupes and never clears it.
+    # Gated on entries and on no failed page, matching run_gemini_ocr and
+    # align_ocr: record_stage dedupes and never clears, so a run that lost a
+    # page must not leave the stage stamped complete.
     # Billed whatever the outcome — see the matching note in run_gemini_ocr.py.
     _flush_usage()
 
-    if extracted:
+    if extracted and not failed_pages:
         record_stage(find_state_dir(output_root), "extract_entries",
                      updates={"ner_model": args.model})
 
     print("Done.", file=sys.stderr)
+
+    if failed_pages:
+        shown = ", ".join(failed_pages[:10]) + (" …" if len(failed_pages) > 10 else "")
+        print(
+            f"Error: NER failed on {len(failed_pages)} page(s): {shown}. Their entries are "
+            "missing from the CSV, and the stage is not recorded as complete. Re-run to "
+            "retry them; a failed page writes no entries file, so it is not skipped.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
