@@ -505,13 +505,14 @@ def detect_schema(fieldnames: list[str]) -> dict[str, str]:
     """Map logical field roles to actual CSV column names.
 
     Handles both the old schema (state, city, category) and newer volumes
-    that use location_state_country, location_city, section_category.
+    that use location_state_country, location_city, section_category, or a
+    bare section (the 1958 Green Book's NER prompt).
     Returns keys: state, city, category, name, address (only those found).
     """
     candidates = {
         "state":    ("state", "location_primary", "location_state", "location_state_country"),
         "city":     ("city", "location_city"),
-        "category": ("category", "section_category"),
+        "category": ("category", "section_category", "section"),
         "name":     ("name", "business_name", "establishment_name"),
         "address":  ("address",),
     }
@@ -663,6 +664,18 @@ def _completeness_score(row: dict) -> tuple[int, int]:
     return (non_empty, char_len)
 
 
+_PHONE_FIELDS = ("phone", "telephone", "phone_number")
+
+
+def _phone_key(row: dict) -> str:
+    """The row's phone number reduced to letters and digits, or "" if it has none."""
+    for field in _PHONE_FIELDS:
+        value = re.sub(r"[^0-9a-z]", "", (row.get(field) or "").lower())
+        if value:
+            return value
+    return ""
+
+
 def find_duplicates(
     rows: list[dict],
     threshold: float = 0.85,
@@ -676,6 +689,14 @@ def find_duplicates(
     Near-duplicate pairs are merged into clusters via union-find; within each
     cluster the most complete row is kept (scored by non-empty field count then
     total character length of name+address). All others are flagged.
+
+    Where neither row has an address, two rows whose phone numbers both exist
+    and differ are never duplicates. Without an address the key is the name
+    alone, and in a phone book that paired a person's office and residence
+    lines, and people sharing a surname ("Person, M. M." / "Person, W. M."): 42
+    of 179 rows on a 1924 directory. Rows with an address keep the plain rule,
+    because there a differing number is as often the same listing OCR'd twice
+    ("DUpont 7-9209" / "DUpont 9209").
     """
     from collections import defaultdict
 
@@ -694,6 +715,11 @@ def find_duplicates(
         + (row.get("address") or "").strip().lower()
         for row in rows
     ]
+    # Only rows with no address can be told apart by phone (see docstring).
+    phones: list[str] = [
+        "" if (row.get("address") or "").strip() else _phone_key(row)
+        for row in rows
+    ]
 
     # Collect all near-duplicate pairs across blocks.
     # Skip blocks larger than MAX_BLOCK to avoid O(n²) blowup on large cities.
@@ -704,6 +730,8 @@ def find_duplicates(
             continue
         for pos_i, i in enumerate(block_indices):
             for j in block_indices[pos_i + 1:]:
+                if phones[i] and phones[j] and phones[i] != phones[j]:
+                    continue
                 if difflib.SequenceMatcher(None, keys[i], keys[j]).ratio() >= threshold:
                     pairs.append((i, j))
 
@@ -973,7 +1001,7 @@ def main() -> None:
         help=(
             "Model slug used in entries CSV filename. "
             "Auto-detected from pipeline_state.json if omitted "
-            "(fallback default: gemini-3.1-flash-lite)."
+            f"(fallback default: {DEFAULT_OCR_MODEL})."
         ),
     )
     args = parser.parse_args()

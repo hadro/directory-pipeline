@@ -56,13 +56,21 @@ import statistics
 import sys
 import threading
 import urllib.request
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
 from utils import iiif_utils
+from utils.column_utils import (
+    MIN_COLUMN_COVERAGE,
+    MIN_COLUMN_FRAC,
+    bbox_centre,
+    column_breaks,
+    inversion_rate,
+)
 from utils.models import DEFAULT_OCR_MODEL, model_slug, discover_ocr_slug
-from pipeline.state import get_ocr_model
+from pipeline.state import find_state_dir, get_ocr_model, record_stage
 
 _print_lock = threading.Lock()
 
@@ -296,8 +304,132 @@ _READING_ORDER_BAND = 50  # pixels — horizontal band height for y-band sort.
 # column-major sort.
 
 
+# A line crossing a gutter is treated as a page-spanning header (emitted ahead
+# of the columns) when it is at least this fraction of page width, or when it
+# sits above the top of every non-first column.  Below this, a gutter-crossing
+# line is just a wide body entry — common in narrow-page city directories where
+# entries wrap mid-word — and hoisting it would corrupt the sequence.
+_HEADER_MIN_WIDTH_FRAC = 0.30
+# Running heads ("OHIO—Continued", "BREWERS' GUIDE.") sit above the columns but
+# run narrower than _HEADER_MIN_WIDTH_FRAC — typically 24–30% of page width — so
+# the rule above misses them and they get sorted into a column ~50 positions
+# deep, wrecking the NW alignment for the whole page.  A line qualifies as one
+# only inside the page's top band and above this width, both measured against
+# the page; the two together keep mid-page fragments out.
+_HEADER_MIN_NARROW_WIDTH_FRAC = 0.15
+_HEADER_TOP_BAND_FRAC         = 0.15
+
+
+def plan_columns(
+    lines: list[dict], page_width: int
+) -> "tuple[list[dict], list[list[dict]]] | None":
+    """
+    Resolve a page into (header_lines, [column_lines, ...]) in reading order.
+
+    Returns None when the page does not resolve into two or more substantial
+    columns — callers should fall back to :func:`_legacy_reading_order`.
+    """
+    if not lines or page_width <= 0:
+        return None
+    breaks = column_breaks(lines, page_width)
+    if not breaks:
+        return None
+
+    def col_index(x1: int) -> int:
+        for i, b in enumerate(breaks):
+            if x1 < b:
+                return i
+        return len(breaks)
+
+    def spans_gutter(ln: dict) -> bool:
+        return any(ln["bbox"][0] < b < ln["bbox"][2] for b in breaks)
+
+    def _body_top(pool: list[dict]) -> int:
+        tops = [
+            min((ln["bbox"][1] for ln in pool if col_index(ln["bbox"][0]) == c),
+                default=None)
+            for c in range(1, len(breaks) + 1)
+        ]
+        tops = [t for t in tops if t is not None]
+        return min(tops) if tops else 0
+
+    body_top = _body_top(lines)
+    # A running head is itself gutter-spanning, so when it is the topmost thing
+    # in its column it sets the very body_top that would exempt it and can never
+    # qualify.  Measuring body_top over non-spanning lines only breaks that
+    # circularity (see _HEADER_TOP_BAND_FRAC below for the paired constraint).
+    body_top_nospan = _body_top([ln for ln in lines if not spans_gutter(ln)])
+    page_height = max((ln["bbox"][3] for ln in lines), default=0)
+
+    def is_header(ln: dict) -> bool:
+        x1, x2 = ln["bbox"][0], ln["bbox"][2]
+        if not spans_gutter(ln):
+            return False
+        return (x2 - x1) >= page_width * _HEADER_MIN_WIDTH_FRAC or ln["bbox"][3] <= body_top
+
+    def is_narrow_running_head(ln: dict) -> bool:
+        """A running head too narrow for _HEADER_MIN_WIDTH_FRAC to catch.
+
+        body_top_nospan alone is too permissive — on pages whose column content
+        starts low it admits mid-page lines — so require the line to sit in the
+        page's top band and still be wide enough to be a head rather than a
+        stray short heading.
+        """
+        if is_header(ln) or not spans_gutter(ln):
+            return False
+        if (ln["bbox"][2] - ln["bbox"][0]) < page_width * _HEADER_MIN_NARROW_WIDTH_FRAC:
+            return False
+        return (ln["bbox"][3] <= body_top_nospan
+                and ln["bbox"][1] <= page_height * _HEADER_TOP_BAND_FRAC)
+
+    strict = [ln for ln in lines if is_header(ln)]
+    narrow = [ln for ln in lines if is_narrow_running_head(ln)]
+    # Only take the narrow hoists while the header group stays inside the guard
+    # that already governs the partition downstream.  Pages whose hoist is
+    # already collecting ordinary body lines (Green Book listing pages run 17%+)
+    # are left exactly as they were rather than made worse.
+    if narrow and (len(strict) + len(narrow)) / len(lines) > _PARTITION_MAX_HEADER_FRAC:
+        narrow = []
+    header = sorted(strict + narrow, key=lambda ln: ln["bbox"][1])
+    header_ids = {id(ln) for ln in header}
+    body = [ln for ln in lines if id(ln) not in header_ids]
+    if not body:
+        return None
+
+    counts = Counter(col_index(ln["bbox"][0]) for ln in body)
+    substantial = sorted(c for c, n in counts.items() if n / len(body) >= MIN_COLUMN_FRAC)
+    if len(substantial) < 2:
+        return None
+    if sum(counts[c] for c in substantial) / len(body) < MIN_COLUMN_COVERAGE:
+        return None
+    columns = [
+        sorted([ln for ln in body if col_index(ln["bbox"][0]) == c],
+               key=lambda ln: ln["bbox"][1])
+        for c in substantial
+    ]
+    return header, columns
+
+
 def sort_by_reading_order(lines: list[dict], page_width: int) -> list[dict]:
     """
+    Re-sort Surya lines into Gemini's reading order.
+
+    Multi-column pages are resolved by :func:`plan_columns` (coverage-valley
+    gutter detection plus header hoisting); everything else falls back to
+    :func:`_legacy_reading_order`.
+    """
+    plan = plan_columns(lines, page_width)
+    if plan is None:
+        return _legacy_reading_order(lines, page_width)
+    header, columns = plan
+    return header + [ln for col in columns for ln in col]
+
+
+def _legacy_reading_order(lines: list[dict], page_width: int) -> list[dict]:
+    """
+    Fallback reading order, used when :func:`plan_columns` cannot resolve the
+    page into columns (single-column pages, ad spreads, sparse frontmatter).
+
     Re-sort Surya lines into correct reading order for multi-column pages.
 
     Default (row-major y-band sort): lines are grouped into 50 px horizontal
@@ -699,6 +831,268 @@ def _find_anchors(
     return anchors
 
 
+# ── Column-partitioned alignment ──────────────────────────────────────────
+# Needleman-Wunsch is monotonic and cannot back up, so on a multi-column page a
+# single mis-committed anchor is unrecoverable for the whole rest of the page.
+# Aligning each column against its own slice of the Gemini text bounds that
+# blast radius to one column.  The Gemini side carries no coordinates, so its
+# cut points are located by matching each column's leading lines against the
+# Gemini sequence; guessing them proportionally regresses badly on pages where
+# the two engines disagree about per-column line counts.
+_COLUMN_LOCATE_PROBES = 4      # leading lines of a column tried as locators
+_PARTITION_SPAN_LO    = 0.5    # gemini-span : surya-group size sanity band
+_PARTITION_SPAN_HI    = 2.0
+
+# Guard 1 — when the hoisted header group is more than this fraction of the
+# page, the hoist is collecting ordinary body lines rather than running heads.
+_PARTITION_MAX_HEADER_FRAC = 0.10
+# Guard 2 — when Surya reports this many more lines than Gemini, Gemini is
+# reading ACROSS the columns and merging each visual row into one line (the
+# same signature as possible_column_merge, at a lower threshold).  A
+# column-major partition is then the wrong shape for the Gemini side.
+_PARTITION_MAX_MERGE_RATIO = 1.5
+
+
+def _locate_column_start(
+    column: list[dict], gem_norms: list[str], lo: int, hi: int
+) -> "int | None":
+    """Index in the Gemini sequence where *column* begins, or None."""
+    for offset, ln in enumerate(column[:_COLUMN_LOCATE_PROBES]):
+        norm = _normalize(ln["text"])
+        if len(norm) < _ANCHOR_MIN_LEN:
+            continue
+        best_gi, best_score = None, -1.0
+        for gi in range(lo, hi):
+            if len(gem_norms[gi]) < _ANCHOR_MIN_LEN:
+                continue
+            score = _text_sim_ratio(norm, gem_norms[gi])
+            if score > best_score:
+                best_score, best_gi = score, gi
+        if best_gi is not None and best_score >= _ANCHOR_SIM_HIGH:
+            cut = best_gi - offset
+            if lo <= cut < hi:
+                return cut
+    return None
+
+
+def _text_sim_ratio(a: str, b: str) -> float:
+    """Prefix-tolerant similarity, matching the rules used by _find_anchors."""
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    if long_.startswith(short) and (len(long_) - len(short)) <= _ANCHOR_MAX_SUFFIX:
+        return 1.0 - (len(long_) - len(short)) / max(len(long_), 1) + 0.01
+    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+
+
+def _alignment_cost(lines: list[dict], unmatched: list[str]) -> float:
+    """Cost of a candidate alignment: unboxed lines plus lines out of reading order.
+
+    Selecting on unboxed count alone is not safe, and picks the wrong candidate
+    on a real slice of this corpus. Whole-page Needleman-Wunsch on a two-column
+    page happily binds text *across* the gutter — it boxes almost everything and
+    puts much of it on the wrong line, which is the exact failure per-column
+    alignment exists to prevent. Measured over 250 multi-column Green Book
+    pages, a pure coverage rule chose whole-page on 42, and on 34 of those the
+    whole-page result had more than four times the geometric disorder of the
+    column result (mean inversion rate 0.182 against 0.042).
+
+    So penalise disorder alongside coverage. :func:`inversion_rate` is the right
+    second term because it is independent of the text-similarity objective NW
+    maximises — a text score rewards NW's mistakes as readily as its successes,
+    geometry does not. Scaling the rate by the line count converts it into the
+    same unit as the unboxed count, so the two terms are commensurable.
+    """
+    inv = inversion_rate([bbox_centre(ln["bbox"]) for ln in lines if ln.get("bbox")])
+    return len(unmatched) + inv * len(lines)
+
+
+# Outlier reporting for unmatched rate.
+#
+# A page can lose 93% of its Gemini lines and still report needs_review=False:
+# that flag keys on Surya's median *confidence*, and a detector returning two
+# page-sized region blobs is perfectly confident about them. Three index pages of
+# the 1869 Rowell volume aligned at 93/92/71% unmatched without a single warning.
+#
+# An absolute threshold cannot do this job. Measured across 50 collections on
+# disk, median unmatched runs from 0.0% to 29.6% — manuscript material sits high
+# by nature — so a global ">10% is bad" rule flags 71% of the copyright ledgers
+# while a rule loose enough to spare them says nothing about Rowell.
+#
+# Nor does a multiple of the median: the Green Books have a low median (2.0%) and
+# a heavy tail (p95 56%), so median x3 reports 1,846 of 5,788 pages. A third of a
+# collection is not a set of outliers.
+#
+# So the cutoff is the volume's own 95th percentile, floored at _OUTLIER_FLOOR.
+# That is proportional by construction — never more than 5% of pages — and the
+# floor keeps a clean volume silent instead of reporting its best pages as its
+# worst. Reported at the end of the run rather than written into the JSON:
+# needs_review already drives the --review-alignment queue and should not be
+# flooded.
+#
+#   collection            pages   median   p95     reported
+#   Rowell 1869             330     0.5%   9.3%    14 (4%)
+#   green_books_and_related 5788    2.0%  56.1%   289 (5%)
+#   copyright_ledgers        211   20.0%  40.0%    10 (5%)
+#   tulsa_1921               833     0.0%   8.7%    30 (4%)
+_OUTLIER_PERCENTILE = 0.95
+_OUTLIER_FLOOR      = 10.0   # a volume whose worst pages are under this is fine
+_OUTLIER_MIN_PAGES  = 10     # below this a percentile means nothing
+_OUTLIER_MAX_LIST   = 15
+
+
+def _is_placeholder_canvas(aligned: dict) -> bool:
+    """True when a page's boxes were scaled to a square fallback canvas.
+
+    When info.json cannot be fetched, align_image falls back to the manifest's
+    canvas size. On NYPL that can be a 2560x2560 placeholder, which puts every
+    canvas_fragment in the wrong space. A per-page warning was the only signal,
+    and it is one line among a run's pages: five 1958 Green Book pages
+    (2026-10-20) went unnoticed until rescale_canvas_fragments.py found them.
+    """
+    w, h = aligned.get("canvas_width"), aligned.get("canvas_height")
+    return bool(aligned.get("coords_from_fallback")) and bool(w) and w == h
+
+
+def _report_placeholder_canvases(names: "list[str]", root: Path, log, slug: str = "") -> None:
+    """Name the pages whose boxes sit in a placeholder canvas, and the repair."""
+    if not names:
+        return
+    # Name the model: the tools default to the commonest slug under root, which
+    # in a mixed-model collection is not the one these pages were aligned with.
+    model_arg = f" --aligned-model {slug}" if slug else ""
+    log(
+        f"\n⚠  {len(names)} page(s) have boxes scaled to a square placeholder canvas "
+        "(info.json could not be fetched). Their canvas_fragment coordinates are in "
+        "the wrong space. Fix them in place, then rebind the entries:\n"
+        f"  python tools/rescale_canvas_fragments.py {root}{model_arg}\n"
+        f"  python tools/patch_canvas_fragments.py {root}{model_arg}"
+    )
+    for name in names[:_OUTLIER_MAX_LIST]:
+        log(f"  {name}")
+    if len(names) > _OUTLIER_MAX_LIST:
+        log(f"  … and {len(names) - _OUTLIER_MAX_LIST} more")
+
+
+def _report_unmatched_outliers(rates: "list[tuple[str, float]]", log) -> None:
+    """Report the pages that left most Gemini text unboxed in this volume."""
+    if len(rates) < _OUTLIER_MIN_PAGES:
+        return
+    ordered = sorted(r for _, r in rates)
+    p95 = ordered[min(int(len(ordered) * _OUTLIER_PERCENTILE), len(ordered) - 1)]
+    cutoff = max(p95, _OUTLIER_FLOOR)
+    bad = sorted(((r, n) for n, r in rates if r > cutoff), reverse=True)
+    if not bad:
+        return
+    median = ordered[len(ordered) // 2]
+    log(
+        f"\n⚠  {len(bad)} page(s) ({len(bad) / len(rates) * 100:.0f}% of aligned) "
+        f"left the most Gemini text unboxed in this volume "
+        f"(median {median:.1f}%, reporting above {cutoff:.1f}%).\n"
+        "   A very high rate usually means Surya returned region blocks rather "
+        "than text lines. To re-detect those pages: delete their *_surya.json "
+        "and *_aligned.json, then run `pipeline ocr <dir> --blank-threshold 0.5`. "
+        "Surya redoes only the deleted pages, Gemini skips pages already "
+        "transcribed, and align fills in the gaps."
+    )
+    for rate, name in bad[:_OUTLIER_MAX_LIST]:
+        log(f"  {rate:5.1f}%  {name}")
+    if len(bad) > _OUTLIER_MAX_LIST:
+        log(f"  … and {len(bad) - _OUTLIER_MAX_LIST} more")
+
+
+def build_aligned_lines(
+    sorted_surya_lines: list[dict],
+    gemini_lines: list[str],
+    fragment_fn,
+    non_anchor_gem_indices: "set[int] | None" = None,
+    column_groups: "list[list[dict]] | None" = None,
+    fallback_order: "list[dict] | None" = None,
+) -> tuple[list[dict], list[str]]:
+    """
+    Align Gemini text to Surya bboxes, per column when that is safe.
+
+    *column_groups* is ``[header, col0, col1, ...]`` from :func:`plan_columns`.
+    When either guard trips, or any column cannot be located in the Gemini
+    sequence, the page reverts to a whole-page alignment over *fallback_order*
+    (the pre-existing reading order) so behaviour is unchanged.
+
+    Otherwise both alignments are computed and the one with the lower
+    :func:`_alignment_cost` wins: unboxed lines plus geometric disorder. Not
+    unboxed lines alone, which would prefer the whole-page alignment exactly
+    where it boxes text across the gutter onto the wrong lines (see
+    docs/evidence/2026-09-04-column-selection-criterion/). The static guards
+    cannot catch every bad split: a page can
+    look cleanly two-column to :func:`plan_columns`, pass the header and
+    line-ratio checks, and still align far worse per column than as a whole —
+    one 1947 Green Book page goes from 118 lines / 0 unmatched whole-page to
+    88 / 24 per column, at a Surya:Gemini ratio of 119:118 that no ratio guard
+    would flag. Measuring the outcome is cheap (alignment is CPU-bound and
+    fast) and strictly better than predicting it.
+    """
+    if not column_groups or len(column_groups) < 2 or not gemini_lines:
+        return _build_line_aligned_lines(
+            sorted_surya_lines, gemini_lines, fragment_fn, non_anchor_gem_indices)
+
+    def _revert() -> tuple[list[dict], list[str]]:
+        base = fallback_order if fallback_order else sorted_surya_lines
+        return _build_line_aligned_lines(
+            base, gemini_lines, fragment_fn, non_anchor_gem_indices)
+
+    n_surya  = sum(len(g) for g in column_groups)
+    n_gemini = len(gemini_lines)
+    if n_surya and len(column_groups[0]) / n_surya > _PARTITION_MAX_HEADER_FRAC:
+        return _revert()
+    if n_gemini and n_surya / n_gemini >= _PARTITION_MAX_MERGE_RATIO:
+        return _revert()
+
+    gem_norms = [_normalize(g) for g in gemini_lines]
+    columns   = column_groups[1:]
+    cuts: list[int] = []
+    prev = 0
+    for j, column in enumerate(columns):
+        if j == 0:
+            cut = _locate_column_start(column, gem_norms, 0, n_gemini) \
+                  if column_groups[0] else 0
+        else:
+            cut = _locate_column_start(column, gem_norms, prev + 1, n_gemini)
+        if cut is None or cut < prev:
+            return _revert()
+        cuts.append(cut)
+        prev = cut
+
+    bounds = [0] + cuts + [n_gemini]
+    spans  = list(zip(bounds, bounds[1:]))
+    # Sanity-check the *column* spans only.  The header group is deliberately
+    # exempt: hoisted running heads and page numbers routinely do not
+    # correspond one-to-one with Gemini's pre-column lines (Gemini merges
+    # "ALABAMA-Continued 5" into one line, or drops a bare page number), so
+    # holding it to a size ratio would revert pages whose columns are fine.
+    for group, (a, b) in zip(column_groups[1:], spans[1:]):
+        if not group:
+            continue
+        if b - a == 0 or not (_PARTITION_SPAN_LO <= (b - a) / len(group) <= _PARTITION_SPAN_HI):
+            return _revert()
+
+    result_lines: list[dict] = []
+    unmatched: list[str] = []
+    non_anchor = non_anchor_gem_indices or set()
+    for group, (a, b) in zip(column_groups, spans):
+        slice_ = gemini_lines[a:b]
+        if not slice_:
+            continue
+        if not group:
+            unmatched += [g for g in slice_ if len(g.strip()) > 8]
+            continue
+        local_non_anchor = {i - a for i in non_anchor if a <= i < b}
+        lines_, um = _build_line_aligned_lines(
+            group, slice_, fragment_fn, local_non_anchor)
+        result_lines += lines_
+        unmatched    += um
+    whole_lines, whole_unmatched = _revert()
+    if _alignment_cost(whole_lines, whole_unmatched) < _alignment_cost(result_lines, unmatched):
+        return whole_lines, whole_unmatched
+    return result_lines, unmatched
+
+
 def _build_line_aligned_lines(
     sorted_surya_lines: list[dict],
     gemini_lines: list[str],
@@ -1063,7 +1457,20 @@ def align_image(
 
         lines = filter_short_lines(lines)
         lines = filter_margin_lines(lines, img_w)
-        lines = sort_by_reading_order(lines, page_w)
+
+        # Resolve the page into columns once, here, where both the geometry and
+        # (below) the Gemini text are in scope.  build_aligned_lines needs both
+        # to decide whether a column-partitioned alignment is safe.
+        column_plan   = plan_columns(lines, page_w)
+        fallback_order = None
+        if column_plan is not None:
+            header, columns = column_plan
+            column_groups  = [header] + columns
+            fallback_order = _legacy_reading_order(lines, page_w)
+            lines = header + [ln for col in columns for ln in col]
+        else:
+            column_groups = None
+            lines = _legacy_reading_order(lines, page_w)
 
         # Gemini text ---------------------------------------------------------
         # Parse line-by-line, filtering delimiter markers but tracking which
@@ -1090,8 +1497,9 @@ def align_image(
         fragment, canvas_meta = resolve_fragment_fn(image_path, img_w, img_h)
 
         # NW alignment --------------------------------------------------------
-        result_lines, unmatched_gemini = _build_line_aligned_lines(
-            lines, gemini_lines, fragment, gemini_ad_indices
+        result_lines, unmatched_gemini = build_aligned_lines(
+            lines, gemini_lines, fragment, gemini_ad_indices,
+            column_groups=column_groups, fallback_order=fallback_order,
         )
 
         needs_review = (
@@ -1202,11 +1610,27 @@ def main() -> None:
     if args.model is None:
         args.model = (
             get_ocr_model(output_root)
-            or discover_ocr_slug(output_root)
+            # require_txt: the aligner's input is the OCR text, not the aligned
+            # JSON. Without it, a directory holding an older model's alignments
+            # resolves to that model and every page is skipped as "missing".
+            or discover_ocr_slug(output_root, require_txt=True)
             or DEFAULT_OCR_MODEL
         )
         if not getattr(args, "quiet", False):
             print(f"  Auto-detected OCR model: {args.model}", file=sys.stderr)
+
+    # Whatever route set the model — flag, pipeline_state.json, or discovery —
+    # warn loudly when its .txt files are absent. Every page would report
+    # "missing" and be skipped, which --quiet otherwise renders invisible: the
+    # run exits 0 having written nothing.
+    _slug = model_slug(args.model)
+    if not any(output_root.glob(f"**/*_{_slug}.txt")):
+        print(
+            f"  *** WARNING: no *_{_slug}.txt files under {output_root} —"
+            f" alignment needs the OCR text and will skip every page."
+            f" Pass --model with a slug that has OCR text.",
+            file=sys.stderr,
+        )
 
     # Same split-aware image selection used across the pipeline
     all_jpgs = sorted(output_root.rglob("*.jpg"))
@@ -1298,6 +1722,36 @@ def main() -> None:
         )
         for p in sorted(flagged_merge):
             print(f"  {p}", file=sys.stderr)
+
+    # Read back from disk rather than from this run's results, so pages
+    # skipped as already-aligned are included: an outlier is an outlier
+    # whichever run produced it. Placeholder canvases are reported even under
+    # --quiet, since they leave every box on the page in the wrong place.
+    _slug = model_slug(args.model)
+    _rates: list[tuple[str, float]] = []
+    _placeholder: list[str] = []
+    for _f in sorted(output_root.rglob(f"*_{_slug}_aligned.json")):
+        try:
+            _d = json.loads(_f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if _is_placeholder_canvas(_d):
+            _placeholder.append(_f.name)
+        _m = len(_d.get("lines", []))
+        _u = len(_d.get("unmatched_gemini", []) or [])
+        if _m + _u:
+            _rates.append((_f.name, _u / (_m + _u) * 100))
+    _stderr = lambda msg: print(msg, file=sys.stderr)  # noqa: E731
+    if not args.quiet:
+        _report_unmatched_outliers(_rates, _stderr)
+    _report_placeholder_canvases(_placeholder, output_root, _stderr, _slug)
+
+    # Record the stage so a direct invocation updates pipeline_state.json the
+    # same way an orchestrated run does (main.py is otherwise the only writer).
+    # Gated on no failures, as the OCR stage is: main.py trusts this file, and
+    # a run that aligned 1 page of 80 must not look like a finished one.
+    if counts["ok"] and not counts["failed"]:
+        record_stage(find_state_dir(output_root), "align_ocr")
 
 
 if __name__ == "__main__":

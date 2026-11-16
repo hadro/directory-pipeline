@@ -443,7 +443,7 @@ def main() -> None:
     parser.add_argument(
         "--model", "-m",
         default=DEFAULT_OCR_MODEL,
-        help="Gemini model name used in aligned JSON filenames (default: gemini-2.0-flash)",
+        help=f"Gemini model name used in aligned JSON filenames (default: {DEFAULT_OCR_MODEL})",
     )
     parser.add_argument(
         "--port", "-p",

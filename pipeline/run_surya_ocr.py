@@ -64,6 +64,19 @@ def main() -> None:
         help="Images per Surya inference batch (default: 4; reduce if OOM)",
     )
     parser.add_argument(
+        "--blank-threshold",
+        type=float,
+        default=None,
+        metavar="F",
+        help=(
+            "Surya detector blank threshold (default: leave Surya's own, 0.35). "
+            "Raise to ~0.5 on pages the detector reads as tables — dot-leader "
+            "indexes and rate tables come back as page-sized region blobs "
+            "otherwise, which alignment cannot use. Above ~0.6 lines shatter "
+            "into fragments."
+        ),
+    )
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="Suppress per-file progress output",
@@ -80,6 +93,7 @@ def main() -> None:
         print("Loading Surya models…", file=sys.stderr)
     try:
         from surya.detection import DetectionPredictor
+        from surya.settings import settings as _surya_settings
         from surya.foundation import FoundationPredictor
         from surya.recognition import RecognitionPredictor
     except ImportError as exc:
@@ -91,6 +105,30 @@ def main() -> None:
         sys.exit(1)
 
     t_load = time.monotonic()
+    if args.blank_threshold is not None:
+        # Surya's detector decides whether a region is a uniform block or a stack
+        # of text lines. At its 0.35 default it reads a dense dot-leader index as
+        # a *table* and returns page-half-sized region blobs — one box carrying
+        # dozens of lines, sometimes as markdown pipe-table syntax. Nothing
+        # downstream can use that: alignment matched 12 of 183 lines on the 1869
+        # Rowell index, and reported no warning while doing it.
+        #
+        # Measured on that volume (boxes found vs Gemini lines on the page):
+        #
+        #   blank_threshold   0372      0373     0374    0009 (control)
+        #   0.35 (default)    6 blob   10 blob  5 blob   131   (127 lines)
+        #   0.50            173         62 blob 44       137
+        #   0.60            674        420     140       150
+        #
+        # 0.5 recovers the index pages and barely moves healthy ones; 0.6 shatters
+        # every page into fragments. Left off by default: this is a tuned upstream
+        # value and eight pages is not enough evidence to move it for every
+        # collection. Reach for it on volumes with indexes or rate tables.
+        _surya_settings.DETECTOR_BLANK_THRESHOLD = args.blank_threshold
+        if not args.quiet:
+            print(f"Detector blank threshold: {args.blank_threshold} "
+                  f"(default {0.35})", file=sys.stderr)
+
     det_predictor = DetectionPredictor()
     rec_predictor = RecognitionPredictor(FoundationPredictor())
     if not args.quiet:
@@ -133,6 +171,27 @@ def main() -> None:
         sys.exit(0)
 
     from PIL import Image
+
+    from pipeline.download_images import redownload_page
+    from utils.image_utils import image_is_complete
+
+    # An interrupted download leaves an empty or truncated image, and one such
+    # file fails its whole batch at Image.open below. Fetch corrupt pages again
+    # first, and drop any that still will not decode.
+    unreadable = 0
+    usable: list[Path] = []
+    for p in images_to_run:
+        if image_is_complete(p):
+            usable.append(p)
+            continue
+        print(f"Corrupt image — downloading again: {p.name}", file=sys.stderr)
+        if redownload_page(p):
+            usable.append(p)
+        else:
+            print(f"FAILED: corrupt and could not be downloaded again: {p.name}",
+                  file=sys.stderr)
+            unreadable += 1
+    images_to_run = usable
 
     ok_count = 0
     fail_count = 0
@@ -234,8 +293,8 @@ def main() -> None:
         rate = ok_count / total_elapsed if total_elapsed > 0 and ok_count > 0 else 0
         print(
             f"\nDone in {total_elapsed:.1f}s ({rate:.2f} img/s). "
-            f"{total} image(s): {ok_count} processed, "
-            f"{skipped} already done, {fail_count} failed.",
+            f"{total + unreadable} image(s): {ok_count} processed, "
+            f"{skipped} already done, {fail_count + unreadable} failed.",
             file=sys.stderr,
         )
 

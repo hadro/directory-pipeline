@@ -6,7 +6,9 @@ backoff, so rate-limit handling lives in exactly one place.
 """
 
 import os
+import re
 import sys
+import threading
 import time
 
 from dotenv import load_dotenv
@@ -42,17 +44,69 @@ def get_client(required: bool = True) -> "genai.Client | None":
 PRO_THINKING_BUDGET = 4096
 
 
+_GEMINI_VERSION_RX = re.compile(r"gemini-(\d+)(?:\.(\d+))?")
+
+
+def _gemini_version(model: str) -> "tuple[int, int] | None":
+    """Major/minor version out of a Gemini model name, or None for an alias.
+
+    'gemini-2.5-flash-lite' → (2, 5);  'gemini-3-flash-preview' → (3, 0);
+    'gemini-flash-lite-latest' → None (a moving alias — treated as newest).
+    """
+    m = _GEMINI_VERSION_RX.search(model)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2) or 0)
+
+
 def thinking_config_for(model: str) -> ThinkingConfig:
     """Return the ThinkingConfig to use for *model*.
 
-    Flash/flash-lite models support thinking_budget=0 (thinking disabled), which
-    is what these stages want — the work is transcription and extraction, not
-    reasoning. Pro-tier models only operate in thinking mode and reject budget=0,
-    so they get a positive cap instead (see PRO_THINKING_BUDGET).
+    These stages transcribe and extract; they do not reason, so they want as
+    little thinking as each model will allow. How you ask for that changed
+    between model generations, and asking the wrong way fails in two different
+    directions — one loud, one silent. Measured against the live API
+    (2026-09-18), one call per cell, reading ``usage_metadata.thoughts_token_count``:
+
+        model                    budget=0      level="minimal"
+        gemini-2.5-flash-lite    0 thoughts    400
+        gemini-3.1-flash-lite    0 thoughts    0 thoughts
+        gemini-3.5-flash-lite    400           0 thoughts
+        gemini-3.7-flash         72 thoughts   400
+        gemini-3.8-flash         46 thoughts   400
+
+    Two things to take from that. ``thinking_level="minimal"`` is the 3.x
+    replacement for the ``thinking_budget=0`` sentinel, and 3.1-flash-lite is
+    the only model that accepts both — 3.5-flash-lite dropped the sentinel and
+    400s on it. And the non-lite 3.x flash models never had a true "off": they
+    accept budget=0 without complaint and think anyway (3.8-flash returned 46,
+    143 and 0 thought tokens across three identical calls), while rejecting
+    "minimal" outright. Their real floor is ``thinking_level="low"``.
+
+    So the axis is the model generation, not the tier — the old ``"-pro" in
+    model`` test was right for the 2.x family and is no longer sufficient.
+    Unversioned aliases ('gemini-flash-latest') are treated as newest, since
+    the level vocabulary is where the API is going and a wrong guess there
+    fails loudly rather than silently billing thinking tokens.
+
+    Pro-tier models only operate in thinking mode and reject any request to
+    disable it, so they keep a positive cap instead (see PRO_THINKING_BUDGET).
     """
     if "-pro" in model:
         return ThinkingConfig(thinking_budget=PRO_THINKING_BUDGET)
-    return ThinkingConfig(thinking_budget=0)
+
+    version = _gemini_version(model)
+    if version is not None and version < (3, 0):
+        # 2.x: the budget sentinel is the only spelling, and it is honored.
+        return ThinkingConfig(thinking_budget=0)
+
+    if "-lite" in model:
+        # 3.x lite: the one family that can genuinely run with thinking off.
+        return ThinkingConfig(thinking_level="minimal")
+
+    # 3.x non-lite: "minimal" is rejected; "low" is the cheapest that works.
+    # Thinking is minimized here, not disabled — these calls do bill thoughts.
+    return ThinkingConfig(thinking_level="low")
 
 
 def flex_http_options(service_tier: "str | None") -> "HttpOptions | None":
@@ -60,6 +114,112 @@ def flex_http_options(service_tier: "str | None") -> "HttpOptions | None":
     if not service_tier:
         return None
     return HttpOptions(extra_body={"service_tier": service_tier})
+
+
+# ---------------------------------------------------------------------------
+# Token accounting
+#
+# Every Gemini response carries usage_metadata; until this existed the pipeline
+# threw it away, which is why every figure in docs/costs.md was an estimate
+# rather than a measurement. Recording here — inside the one function every
+# stage's API calls funnel through — counts the calls that estimates miss: the
+# temperature/RECITATION ladder in run_gemini_ocr.py loops *outside* this
+# function, so each rung arrives as its own call, and a page that is blocked
+# four times before it transcribes is billed four times. A blocked response
+# still returns normally with its prompt tokens counted, so those land here too.
+# ---------------------------------------------------------------------------
+
+_USAGE_FIELDS = ("calls", "input", "output", "thoughts", "cached")
+
+# The OCR stage runs a ThreadPoolExecutor, so this is written concurrently and
+# "counts[field] += 1" is a read-modify-write. Without the lock a parallel run
+# quietly loses calls, which is the one thing a cost record must not do.
+_usage_lock = threading.Lock()
+_usage: "dict[str, dict[str, int]]" = {}
+
+
+def _service_tier(config) -> str:
+    """The service tier *config* requests — "flex", "batch", or "standard"."""
+    try:
+        extra = config.http_options.extra_body or {}
+    except AttributeError:
+        return "standard"
+    return str(extra.get("service_tier") or "standard")
+
+
+def record_usage(model: str, response, tier: str = "standard", reason: str = "initial") -> None:
+    """Accumulate one response's token usage under "{model}|{tier}|{reason}".
+
+    *reason* says why this call happened — "initial", or a retry rung tagged with
+    the failure that provoked it ("temp:recitation", "simple:block_loop",
+    "escalate:leader"). Keeping it on the key is what lets tools/report_cost.py
+    answer "what did recitation cost me, versus runaway loops" from measurement
+    instead of argument. Pricing only reads the model and tier, so the extra
+    field costs nothing there.
+
+    Tolerates a response with no usage_metadata, and fields that come back None
+    (a RECITATION-blocked response has prompt tokens but no candidate tokens).
+    """
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return
+    key = f"{model}|{tier}|{reason or 'initial'}"
+    with _usage_lock:
+        counts = _usage.setdefault(key, dict.fromkeys(_USAGE_FIELDS, 0))
+        counts["calls"] += 1
+        counts["input"] += getattr(usage, "prompt_token_count", 0) or 0
+        counts["output"] += getattr(usage, "candidates_token_count", 0) or 0
+        counts["thoughts"] += getattr(usage, "thoughts_token_count", 0) or 0
+        counts["cached"] += getattr(usage, "cached_content_token_count", 0) or 0
+
+
+def usage_snapshot() -> "dict[str, dict[str, int]]":
+    """A copy of what has been recorded so far, keyed "{model}|{tier}|{reason}"."""
+    with _usage_lock:
+        return {key: dict(counts) for key, counts in _usage.items()}
+
+
+def drain_usage() -> "dict[str, dict[str, int]]":
+    """Return everything recorded so far and clear the accumulator, atomically.
+
+    For callers that persist usage more than once in a run. Each drain yields
+    only what accrued since the last one, so a caller that *adds* each drain to
+    a running total never double-counts — which ``usage_snapshot()`` would, since
+    it reports cumulative totals every time.
+    """
+    with _usage_lock:
+        drained = {key: dict(counts) for key, counts in _usage.items()}
+        _usage.clear()
+    return drained
+
+
+def reset_usage() -> None:
+    """Clear the accumulator (tests, and long-lived processes between runs)."""
+    with _usage_lock:
+        _usage.clear()
+
+
+class CreditsExhausted(RuntimeError):
+    """The API refused a call because the project cannot pay for it.
+
+    Raised in place of the client's own error so a stage can stop the run: every
+    later call is refused the same way, so neither a retry nor the next page can
+    succeed until someone adds credit.
+    """
+
+
+def _is_out_of_credit(exc: Exception) -> bool:
+    """402: the project's prepaid credit is spent.
+
+    Its status is RESOURCE_EXHAUSTED, the same as a 429, so this must be tested
+    before _is_rate_limit or it is backed off like a transient rate limit. On
+    2026-11-09 that turned 20 refused pages into ~2.5 minutes each of 10/20/40/80 s
+    sleeps. The response reads "402 RESOURCE_EXHAUSTED. {'error': {'code': 402,
+    'message': 'Your prepayment credits are depleted. ...'}}".
+    """
+    if getattr(exc, "code", None) == 402:
+        return True
+    return str(exc).startswith("402 ")
 
 
 def _is_rate_limit(exc: Exception) -> bool:
@@ -87,6 +247,7 @@ def generate_with_retry(
     config,
     label: str = "",
     log=None,
+    reason: str = "initial",
     max_retries: int = 5,
     base_delay: float = 10.0,
     max_503_retries: int = 4,
@@ -101,6 +262,7 @@ def generate_with_retry(
     *max_retries* attempts with delays doubling from *base_delay*,
     *max_503_retries* attempts doubling from *base_503_delay*, and
     *max_500_retries* attempts doubling from *base_500_delay* respectively.
+    A 402 (prepaid credit spent) raises CreditsExhausted on the first attempt.
     Anything else raises immediately.
 
     500s get a shorter starting delay than 503s: they are per-request faults
@@ -108,7 +270,8 @@ def generate_with_retry(
     to wait out a load spike before retrying.
 
     *label* names the work item (e.g. an image filename) in retry log lines;
-    *log* is a print-style callable (defaults to stderr print).
+    *log* is a print-style callable (defaults to stderr print). *reason* tags the
+    call for cost accounting — see record_usage.
     """
     log = log or (lambda msg: print(msg, file=sys.stderr))
     tag = f" {label}" if label else ""
@@ -118,10 +281,15 @@ def generate_with_retry(
     delay_503 = base_503_delay
     attempt_500 = 0
     delay_500 = base_500_delay
+    tier = _service_tier(config)
     while True:
         try:
-            return client.models.generate_content(model=model, config=config, contents=contents)
+            response = client.models.generate_content(model=model, config=config, contents=contents)
+            record_usage(model, response, tier, reason)
+            return response
         except Exception as exc:
+            if _is_out_of_credit(exc):
+                raise CreditsExhausted(str(exc)) from exc
             if _is_rate_limit(exc) and attempt_429 < max_retries - 1:
                 attempt_429 += 1
                 log(f"  Rate limited — retrying{tag} in {delay_429:.0f}s (attempt {attempt_429}/{max_retries - 1})")

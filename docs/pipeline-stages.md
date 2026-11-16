@@ -55,10 +55,11 @@ output/{slug}/[{item}/]                      one subdir per item (or flat for si
 | `{page:04d}_{image-id}.jpg` | `--download` | all OCR stages, visualize, multimodal extract |
 | `{stem}_surya.json` / `{stem}_surya.txt` | `--surya-ocr` | align / `compare_ocr` (`"surya"` token) |
 | `{stem}_{ocr-model}.txt` | `--gemini-ocr` | align; extract (fallback when no aligned JSON) |
-| `{stem}_{ocr-model}_aligned.json` | `--align-ocr`; updated by `--review-alignment` (`"confidence": "manual"`) | extract, visualize, `export_annotations`, `export_entry_boxes` |
-| `{stem}_{ner-model}_entries.json` (+ `…_entries_error.txt` on failure) | extract (per-page cache) | extract (resume + CSV assembly) |
+| `{stem}_{ocr-model}_aligned.json` | `--align-ocr`; updated by `--review-alignment` (`"confidence": "manual"`) | extract, visualize, `--export-alto`, `export_annotations`, `export_entry_boxes` |
+| `{stem}_{ocr-model}.alto.xml` | `--export-alto` | Solr, IIIF Content Search, Mirador / Universal Viewer |
+| `{stem}_{ner-model}_entries.json` (+ `…_entries_error.txt` on failure) | extract (per-page cache; from aligned JSON it also records `aligned_model` and `unplaced_entries`) | extract (resume + CSV assembly), `tools/collate_review_queue.py` |
 | `extraction_context_{ner-model}.json` | extract (cross-page heading context) | extract (resume) |
-| `entries_{ner-model}.csv` | extract | explore, geocode, map, `fix_entries`, `review_entries` |
+| `entries_{ner-model}.csv` (gains `volume_section` when `sections.txt` exists) | extract | explore, geocode, map, `fix_entries`, `review_entries` |
 | `entries_{m}_fixed.csv` / `combined.csv` | `pipeline postprocess` (`fix_entries` → `combine_volumes`) | explore |
 | `entries_{m}_geocoded.csv` + `geocache.json` | `--geocode` | `--map` |
 | `entries_{m}_geocoded.html` | `--map` | — (final artifact) |
@@ -81,7 +82,7 @@ omits them silently disables the feature that consumes them.
 | Convention | Emitted by | Consumed by |
 |---|---|---|
 | `=== ADVERTISEMENT ===` … `=== END ADVERTISEMENT ===` around each boxed display ad | the OCR prompt | align — lines inside the block are excluded from the anchor set (`_find_anchors(non_anchor_gem_indices=…)`) |
-| `[illegible]` / `[blank]` sentinel tokens | the OCR prompt | extract — copied verbatim into the affected field rather than guessed at |
+| `[illegible]` (span-scoped) / `[blank]` (whole page, emitted once) sentinel tokens | the OCR prompt | extract — copied verbatim into the affected field rather than guessed at |
 
 The advertisement delimiters matter because ad copy routinely repeats a city or
 state name ("ATHENS, ALABAMA" inside a boxed ad). Without the markers such a line
@@ -172,13 +173,21 @@ output/{item_id}/{page:04d}_{image_id}.jpg
 ```
 
 The IIIF manifest is cached alongside the images for downstream use by `align_ocr.py`.
-Handles HTTP 429/503 with exponential backoff and retry. Falls back to an alternative
-IIIF endpoint on repeated HTTP 403 errors. Safe to re-run — existing files are skipped.
+Handles HTTP 429/503 and 5xx gateway errors with exponential backoff, retries a timed-out
+request twice, and falls back to a smaller size on HTTP 403. Safe to re-run: a complete
+existing file is skipped. An empty or truncated one, left by an interrupted run, is fetched
+again at the width the rest of the volume used.
+
+Images are written to a `.part` file and renamed into place only once they decode, so an
+interrupted run cannot leave a partial image. A page that still cannot be fetched is
+counted: the summary reports "N failed" and the stage exits non-zero, so `main.py` marks
+it failed while later stages run on the pages that arrived. Re-run to fetch the rest.
 
 **LoC-specific:** `www.loc.gov/item/{id}/manifest.json` endpoints are blocked by
 Cloudflare for non-browser clients. The downloader automatically falls back to the
-LoC item JSON API (`?fo=json`) to build a synthetic IIIF manifest, then downloads
-images from `tile.loc.gov`. The requested download width is capped at the native
+LoC item JSON API (`?fo=json`) to build a synthetic IIIF manifest (declaring
+`tile.loc.gov` as the Image API 2 service it is), then downloads images from
+`tile.loc.gov`. The requested download width is capped at the native
 image resolution to avoid upscaling artifacts from the tile pyramid.
 
 #### `tools/slice_manifest.py` — Extract one section of a large volume
@@ -332,24 +341,58 @@ Runs Surya's recognition model on each image and saves:
 Surya produces line-level bounding boxes rather than word-level, which aligns
 more cleanly with Gemini's line-oriented output format. Handles multi-column
 pages via the reading-order correction in `align_ocr.py`. Runs in batches
-(default 4 images per batch; reduce with `--batch-size` if OOM).
+(default 4 images per batch; reduce with `--batch-size` if OOM). A corrupt image is
+downloaded again before the batch runs, since one unreadable file fails the whole batch.
+
+**`--blank-threshold F`** sets Surya's detector blank threshold (default: Surya's own,
+0.35). Dense dot-leader indexes and rate tables can come back as a few page-sized region
+blocks that alignment cannot use; ~0.5 recovers them, and above ~0.6 lines start to shatter.
+`align_ocr` lists the pages that left most of their text unboxed, which is where to apply it.
 
 #### `pipeline/run_gemini_ocr.py` — Gemini OCR
 Sends each image to the Gemini API using a system prompt from `prompts/ocr_prompt.md`
 (auto-discovered; see `--generate-prompts`) and saves the plain-text response as
-`{stem}_{model_slug}.txt`. Handles HTTP 429 rate limits with exponential backoff
-(up to 5 retries, starting at 10 s delay). Skips images where the output file
-already exists and is non-empty; deletes and retries empty output files.
+`{stem}_{model_slug}.txt`. Retries rate limits and transient server errors with
+backoff. Skips images whose output file already exists, except an empty file or an
+`[OCR FAILED: …]` placeholder written by versions before 0.3, which are deleted and
+retried. A corrupt image is downloaded again first.
+
+**Blank pages.** `is_blank_page()` skips pages with no measurable ink before any API call,
+because blank pages invite the model to invent text. A skipped page writes no `.txt`, so it
+drops out of align and extract; the run summary counts it as "blank". The check was fixed
+on 2026-10-16 after it skipped pages of small or grey type
+(`docs/evidence/2026-10-16-blank-page/`). `--no-blank-skip` OCRs every page regardless.
+
+**Output cap.** `--max-output-tokens N` (default 24576) bounds the cost of a page that
+starts looping. A page cut off at the cap is written with a WARNING; raise the cap if dense
+pages come back short. `0` disables it.
 
 Split images (`_left.jpg`, `_right.jpg`) are preferred over the original spread
 when both exist — the original is skipped to avoid redundant API calls on pages
 that have already been split.
 
-**Quality-failure retry.** When output fails a quality check (dot-leader runaway or
-repetition loop), the page is retried up to three times with escalating temperatures
-`[0.1, 0.3, 0.7]`. Dot-leader failures also trigger an additional `_NO_LEADER_INSTRUCTION`
-appended to the system prompt. If all retries fail, dot-leader runs are collapsed to
-a canonical five-dot sequence rather than discarding the page.
+**Retry ladder.** A page goes up the ladder when its output is degenerate or empty for a
+reason other than a clean finish:
+
+- dot-leader runaways (`leader`, `spaced_leader`, `long_line`)
+- loops (`repetition`, `template_loop`, `block_loop`)
+- a RECITATION block, or any other block (a safety or content filter, a blocked prompt)
+
+The rungs, in order:
+
+1. Retries at temperatures `[0.1, 0.3, 0.7]`, with a no-leader instruction for leader
+   failures. Loops skip this rung: in the measured logs it never rescued one. The first call
+   already runs at 0.1 (`DEFAULT_OCR_TEMPERATURE`), so the first retry is a fresh draw at the
+   same temperature.
+2. A simple fallback prompt.
+3. Escalation to the fallback model (`--fallback-model`, default `gemini-3.8-flash`).
+
+Every attempt is kept and the best is written: clean output beats flawed, then the most
+distinct lines. Retries are capped at an output length derived from what the page has
+already produced. A page with no text after every rung is `failed`, which writes nothing,
+keeps the stage from being recorded complete, and is retried on the next run. A clean finish
+with no text is `empty`. The degenerate-output thresholds and their false-positive tests:
+`docs/evidence/2026-09-02-ocr-token-burn/`.
 
 **Auto-resolution for handwriting.** If the OCR prompt contains any of the keywords
 `handwrit`, `manuscript`, or `cursive`, high-resolution image mode is enabled
@@ -389,18 +432,68 @@ problem is then split into independent segments at those anchors, preventing
 misalignment drift across long pages where OCR reading order diverges from Gemini's.
 
 **Reading-order correction:** OCR on multi-column pages may read across columns
-rather than down each column. Lines are re-sorted before alignment:
-- *Row-major (default):* lines are grouped into 50 px horizontal bands and sorted
-  left-column-first within each band. Correctly places centered section headings
-  (state names, category lines) before the body columns they head.
-- *Column-major (true two-column pages):* when lines cluster into exactly two columns
-  each holding ≥ 20% of page lines, the left column is emitted top-to-bottom followed
-  by the right column top-to-bottom, matching Gemini's reading order for pages with
-  independent side-by-side city sections.
+rather than down each column. Lines are re-sorted before alignment.
 
-Column breaks are detected in two stages: first as gaps in the x1 distribution
-exceeding 8% of page width; then a bimodal histogram fallback for pages where a
-page-number outlier creates a degenerate single-line split.
+`plan_columns()` resolves the page into `(header, [column, ...])` for any number of
+columns. Gutters are found from a *coverage profile*: the page is split into 32
+vertical bins, each counting how many line bboxes cover it, and gutters appear as
+valleys where coverage drops to 55% of the page peak. This survives the sparse
+indented and wrapped lines that defeat a consecutive-x1-gap rule — the reason
+three-column volumes were previously detected as two.
+
+Lines crossing a gutter are hoisted ahead of the columns as page-spanning headers
+only when they span ≥ 30% of page width or sit above the top of every non-first
+column; below that they are ordinary wide body entries (common on narrow city-directory
+pages where entries wrap mid-word) and hoisting them would corrupt the sequence.
+
+When the page does not resolve into ≥ 2 substantial columns, alignment falls back to
+`_legacy_reading_order()`: 50 px horizontal bands sorted left-column-first, with the
+older two-stage x1-gap and bimodal-histogram column detection.
+
+**Column-partitioned alignment:** NW is monotonic and cannot back up, so one
+mis-committed anchor is unrecoverable for the remainder of the page. Each column is
+therefore aligned against its own slice of the Gemini text, bounding that blast radius
+to a single column. The Gemini side carries no coordinates, so its cut points are
+*located* by matching each column's leading lines against the Gemini sequence
+(`_locate_column_start`); guessing them proportionally regresses badly wherever the
+two engines disagree about per-column line counts.
+
+Partitioning reverts to whole-page alignment over the legacy reading order when:
+- the hoisted header group exceeds 10% of the page's lines (the hoist is
+  over-collecting body text), or
+- Surya reports ≥ 1.5× as many lines as Gemini — the `possible_column_merge`
+  signature, meaning Gemini read *across* the columns and merged each visual row into
+  one line (common in city-directory street cross-reference tables), so a column-major
+  partition is the wrong shape, or
+- any column cannot be located in the Gemini sequence, or a column's Gemini span is
+  outside 0.5–2.0× its Surya line count.
+
+**Choosing between the candidates.** When the column path completes, the whole-page
+alignment is computed too, and the one with the lower `_alignment_cost` wins: unboxed
+Gemini lines plus the reading-order inversion rate scaled by line count. Unboxed count
+alone would prefer the whole-page alignment exactly where it boxes text across the gutter
+onto the wrong lines (`docs/evidence/2026-09-04-column-selection-criterion/`). On city
+directories the column path rarely completes, so most of their pages align whole-page:
+
+- two-column pages trip the header guard through the gutter-hoist over-collection
+  (`docs/plans/gutter-hoist-fix.md`)
+- dense pages fail to locate a column start
+
+Measured in `docs/evidence/2026-10-17-column-alignment-panel/`.
+
+**Running heads.** Headers narrower than 30% of the page (`OHIO—Continued` typically runs
+24–30%) are also hoisted when they sit in the page's top 15% and above the columns, as long
+as the header group stays inside the 10% guard.
+
+**Unmatched-rate report.** After a run, the pages that left the most Gemini text unboxed
+are listed, against the volume's own 95th percentile (floored at 10%). A page near 90%
+usually means Surya returned region blocks; see `--blank-threshold` under
+`run_surya_ocr.py`.
+
+**Manual alignments survive `--force`.** Lines confirmed in `--review-alignment`
+(`"confidence": "manual"`) win over any machine line claiming the same box, and the count
+is recorded as `manual_lines_preserved`. The stage is recorded in `pipeline_state.json` only
+when no page failed.
 
 **Output JSON schema:**
 
@@ -411,20 +504,18 @@ page-number outlier creates a degenerate single-line split.
   "canvas_uri": "https://...",
   "canvas_width": 3316,
   "canvas_height": 4513,
+  "coords_from_fallback": false,
+  "surya_median_confidence": 0.9312,
+  "needs_review": false,
+  "possible_column_merge": false,
+  "manual_lines_preserved": 0,
   "lines": [
     {
       "bbox": [x1, y1, x2, y2],
       "canvas_fragment": "canvas_uri#xywh=x,y,w,h",
-      "confidence": "word",
+      "confidence": "line",
       "gemini_text": "corrected line text",
-      "words": [
-        {
-          "bbox": [x1, y1, x2, y2],
-          "canvas_fragment": "canvas_uri#xywh=...",
-          "confidence": "word",
-          "text": "word"
-        }
-      ]
+      "surya_confidence": 0.97
     }
   ],
   "unmatched_gemini": ["lines with no bbox match"]
@@ -502,8 +593,33 @@ other document types the fields will match that volume's NER prompt.
 
 Outputs a per-page `*_entries.json` sidecar and an aggregate `entries_{model}.csv`.
 
+**Which OCR it reads.** It reads the aligned JSON when that exists. The OCR model is
+auto-detected from the files present: when several models' alignments exist the one with
+the best line coverage wins, and `--aligned-model` forces one. Without aligned JSON it
+extracts from the raw `{stem}_{ocr-model}.txt`, and entries get no boxes. A page carrying
+`=== ADVERTISEMENT ===` delimiters is read from its raw OCR text even when aligned, because
+alignment strips the delimiters the advertisement prompts rely on.
+
+**Boxes (entry binding).** `utils/entry_binding.py` matches each entry to an aligned line.
+Only identity fields can supply a box: `line_text`, `name`, `subject`, `title`,
+`caption`, anything ending `_name`, plus address-like fields. Set-level fields such as
+`category`, `section_name` or `list_name` never can.
+
+An entry with no confident match keeps the page-level `canvas_fragment` rather than a
+guessed box. It is listed under `unplaced_entries` in the page's `*_entries.json`, with
+its nearest miss. Each aligned page's sidecar also records `aligned_model`.
+`tools/collate_review_queue.py` collates the refusals, and `tools/audit_entry_bindings.py`
+measures placement.
+
+**Sections.** When `sections.txt` exists, each entry gets a `volume_section` column naming
+its structural section. It is kept separate from any `section` field the NER schema defines.
+
+**Caching.** A page's `*_entries.json` is reused on re-runs unless its aligned JSON is
+newer, so re-aligning a page re-extracts it automatically. `--force` re-runs every page,
+and costs NER calls for all of them.
+
 By default uses `gemini-3.1-flash-lite` (fast and cheap). Dense pages that exceed the
-model's output token limit automatically fall back to `gemini-2.5-flash` (higher
+model's output token limit automatically fall back to `gemini-3.8-flash` (higher
 output limit), and then to partial JSON recovery if needed. Previously failed pages
 (where a `*_entries_error.txt` sidecar exists) are auto-retried without `--force`.
 
@@ -512,8 +628,8 @@ This is worth enabling for materials where geographic or thematic section headin
 appear mid-page, multi-column layouts are common, or any collection where state
 or category context shifts frequently within a page — cases where a visual read of
 the layout resolves ambiguity that OCR text alone cannot. The cost increase is small:
-each page image is resized to ≤768 px (one tile, ~258 input tokens), adding roughly
-$0.001–$0.002 per page at standard rates. The default text-only mode is adequate for
+each page image is resized to ≤768 px (one tile, ~258 input tokens), adding about
+$0.00006 per page at `gemini-3.1-flash-lite` standard rates (see `docs/costs.md`). The default text-only mode is adequate for
 straightforward single-column materials.
 
 **`--review-suspicious`** adds a targeted second-pass API call on pages where the
@@ -576,6 +692,19 @@ python -m pipeline.geo.map_entries output/green_book_1947_xxx/ \
     --model gemini-3.1-flash-lite \
     --viewer-url https://hadro.github.io/green-book-iiif-test \
     --manifest-url https://hadro.github.io/green-book-iiif-test/manifest.json
+```
+
+#### `pipeline/export_alto.py` — ALTO v3 export (`--export-alto`)
+Writes a sibling `{stem}_{ocr-model}.alto.xml` for each aligned JSON, in ALTO v3, the LoC
+standard for OCR text with coordinates, so the output drops into Solr, IIIF Content Search,
+Mirador and Universal Viewer without custom glue. Coordinates come from each line's
+`canvas_fragment`, already in the natural-image pixel space viewers expect. Lines are split
+into word boxes by proportional character width, which is good enough for search
+highlighting; `--line-strings` emits one `String` per line instead. CPU only.
+
+```bash
+python main.py output/<vol>/ --export-alto
+python -m pipeline.export_alto output/<vol>/ --force --line-strings
 ```
 
 #### `pipeline/iiif/export_annotations.py` — IIIF Annotation Pages export
@@ -672,8 +801,18 @@ The explorer auto-introspects the CSV schema, so it works for any document type:
 - **Field fill-rate overview** — which columns have reliable data across the volume
 - **Detail panel** — click any row to see all fields plus a live IIIF thumbnail of the source page region (when `manifest.json` files are present)
 - **CSV export** — download the current filtered subset
+- **Volume and section switches** — several CSVs or directories become one explorer with a volume selector; a volume with `sections.txt` (a `volume_section` column) also gets a section selector that narrows the table and facets to one section
 
 No geocoding or alignment required; runs directly after `--extract-entries`.
+
+**Thumbnails.** An entry whose `canvas_fragment` has `#xywh=` shows a crop of its line,
+padded by `--context-lines N` lines above and below (default 3). An entry without one, from
+an unaligned run or one the binder declined to place, shows the whole page;
+`--full-page-thumbs` shows whole pages for every entry. A crop smaller than the display width
+is requested at its own size: `max` from IIIF Image API 3 services, `full` from v2 ones,
+since each version rejects the other's keyword. `--output-dir` (where `manifest.json` is
+found) defaults to the CSV's parent directory. `--viewer-url` adds a "View in Mirador" link
+for an explorer published beside a self-hosted IIIF viewer.
 
 ```bash
 python -m pipeline.explore_entries output/green_book_1947_4bea2040/

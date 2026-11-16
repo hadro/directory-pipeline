@@ -33,6 +33,7 @@ def ns(**overrides) -> argparse.Namespace:
         ner_prompt=None,
         mode=None,
         flex=False,
+        max_output_tokens=None,
     )
     base.update(overrides)
     return argparse.Namespace(**base)

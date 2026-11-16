@@ -1,0 +1,37 @@
+page scans: 18,501   unreadable: 30
+legacy rule blank: 1,786
+live rule blank:   644   of them not legacy-blank: 0
+legacy-blank pages the live rule sends to OCR: 1,142   (with >=1,000 chars of Gemini OCR from an earlier run: 474)
+live-blank pages with >=1,000 chars of Gemini OCR from an earlier run: 46
+
+live dark fraction, legacy-blank pages:
+  live blank   0.00000  0.00000  0.00001  0.00028  0.00099   (min p10 p50 p90 max)
+  live not     0.00100  0.00439  0.07231  0.14589  0.63338   (min p10 p50 p90 max)
+
+volumes with legacy-blank pages missing OCR, where >=80% of the other pages have OCR:
+  pages   ocr legacy  live no-ocr  last OCR    volume
+    270   225     45    40     45  2026-07-24  miller_s_new_york_as_it_is_or_stranger_s_16012298/16012298
+    129    93     35     9     35  2026-07-24  the_new_york_directory_for_1786_containi_96203733/96203733
+    283   257     70    17     20  2026-03-21  woods_directory_73644404/73644404
+    373   330     17    17     17  2026-09-19  1869_geo_p_rowell_and_co_s_american_news_sn82007064_gdc_sn82007064_1869/sn82007064
+    218   208     12     6     10  2026-03-06  joh_leonhard_frisch_beschreibung_von_all_johleonhardfrisc01fr/johleonhardfrisc01fris_0
+    104    93     79     8      9  2026-03-01  new_harlem_blue_book_e8de8ea0/e8de8ea0-6104-013e-3579-0242ac110002
+    520   512      8     7      8  2026-08-24  the_national_directory_of_morticians_nationaldirectornati/nationaldirectornati
+    145   136     40     4      6  2026-03-25  directory_of_the_grand_and_subordinate_l_74175569/74175569
+     42    36      5     5      5  2026-06-11  the_artistic_language_of_flowers_cu31924074093760/cu31924074093760
+    143   138     13     3      4  2026-03-21  a_hand_book_for_the_stranger_in_philadel_96169559/96169559
+     40    36      9     6      4  2026-06-02  the_classified_directory_of_negro_busine_classifieddirect00bu/classifieddirect00bure
+    584   581     16     7      3  2026-03-05  hearnes_brooklyn_city_directory_for_hearnesbrooklync1852/hearnesbrooklync1852unse
+     48    46      2     2      2  2026-08-11  afro-american-travel-guide-1957
+      3     1      2     2      2  2026-09-02  harvest_trow1907p1_a
+     34    30     11     7      2  2026-03-13  the_bavarchi_khana_for_ladies_unk81009721/unk81009721
+     26    24     12     1      2  2026-03-21  wealth_and_pedigree_of_the_wealthy_citiz_03008057/03008057
+     20    19      6     3      1  2026-03-26  drives_about_san_jose_and_vicinity_tmp96008618/tmp96008618
+     68    67      8     4      1  2026-03-24  gazetteer_of_surface_waters_of_iowa_unk82032541/unk82032541
+      3     2      1     1      1  2026-09-02  harvest_trow1907p1_b
+      2     1      1     1      1  2026-09-02  harvest_trow1907p1_c
+     44    41      6     2      1  2026-03-13  high_street_cook_book_ca10002203/ca10002203
+     36    34     11     9      1  2026-03-20  passenger_lists_of_ships_coming_to_north_passengerlistsof00la/passengerlistsof00lanc
+     30    29     10     1      1  2026-03-19  polish_declarations_of_admiration_and_fr_pldec.104/pldec.104
+     20    19     14     2      1  2026-02-23  the_brooklyn_city_directory_01015253/01015253
+     84    83      1     0      1  2026-07-19  the_negro_motorist_green_book_2016298176/2016298176

@@ -47,7 +47,7 @@ gracefully when those fields are absent.
 
 **Fallback model for dense pages, with partial JSON recovery.** `extract_entries.py`
 defaults to `gemini-3.1-flash-lite` (fast and cheap) but escalates to
-`gemini-3-flash-preview` for pages that hit the output token limit. If the fallback also
+`gemini-3.8-flash` for pages that hit the output token limit. If the fallback also
 produces malformed JSON, `_recover_partial_json()` salvages every complete entry that
 appears before the truncation point rather than discarding the page entirely. An
 `*_entries_error.txt` sidecar is written only when partial recovery also fails.
@@ -100,8 +100,9 @@ page can be retried in isolation without losing context.
 **OCR quality-failure retry with temperature stepping.** When Gemini OCR output
 fails a quality check (dot-leader runaway detected, or repetitive output loop),
 `run_gemini_ocr.py` retries up to three times with escalating temperatures
-`[0.1, 0.3, 0.7]`. If the failure is dot-leader-specific, the
-`_NO_LEADER_INSTRUCTION` clause is also appended to the system prompt on retry.
+`[0.1, 0.3, 0.7]`. The first call runs at `DEFAULT_OCR_TEMPERATURE` (0.1 from 0.3 on, 0.0
+before), so the first retry is a fresh draw rather than a step up. If the failure
+is dot-leader-specific, the `_NO_LEADER_INSTRUCTION` clause is also appended to the system prompt on retry.
 This separates the two failure modes: temperature diversity breaks repetition
 loops, while the explicit instruction targets the dot-leader pathology specifically.
 As a last resort, any remaining dot-leader run of 10+ characters is collapsed to a

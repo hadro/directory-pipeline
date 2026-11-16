@@ -90,3 +90,82 @@ def test_discover_scans_immediate_subdirs(tmp_path):
     item.mkdir()
     _touch(item, "0001_id_gemini-sub_aligned.json")
     assert discover_ocr_slug(tmp_path) == "gemini-sub"
+
+
+# --- require_txt: the aligner's input is the OCR text, not the aligned JSON ---
+#
+# Without this, a directory holding alignments from a model whose .txt files are
+# absent resolves to that model, and align_ocr skips every page as "missing" —
+# silently under --quiet. It cost a full re-align of 1,448 files, including the
+# volume holding most of this project's hand-corrected alignments.
+
+def _mk(d, name):
+    (d / name).write_text("x", encoding="utf-8")
+
+
+def test_require_txt_skips_a_model_with_no_ocr_text(tmp_path):
+    """The exact production case: old alignments outnumber the usable model."""
+    for i in range(3):
+        _mk(tmp_path, f"000{i}_id_gemini-3-flash-preview_aligned.json")
+        _mk(tmp_path, f"000{i}_id_gemini-2.0-flash_aligned.json")
+        _mk(tmp_path, f"000{i}_id_gemini-2.0-flash.txt")
+
+    assert discover_ocr_slug(tmp_path, require_txt=True) == "gemini-2.0-flash"
+
+
+def test_default_behaviour_is_unchanged(tmp_path):
+    """Callers that read aligned JSON (export_alto) must keep the old result."""
+    for i in range(3):
+        _mk(tmp_path, f"000{i}_id_gemini-3-flash-preview_aligned.json")
+        _mk(tmp_path, f"000{i}_id_gemini-2.0-flash.txt")
+
+    assert discover_ocr_slug(tmp_path) == "gemini-3-flash-preview"
+
+
+def test_require_txt_still_prefers_aligned_among_usable_models(tmp_path):
+    """It narrows the candidates; it does not invert the aligned-first order."""
+    for i in range(3):
+        _mk(tmp_path, f"000{i}_id_gemini-a.txt")
+        _mk(tmp_path, f"000{i}_id_gemini-b.txt")
+        _mk(tmp_path, f"000{i}_id_gemini-b_aligned.json")
+
+    assert discover_ocr_slug(tmp_path, require_txt=True) == "gemini-b"
+
+
+def test_require_txt_returns_none_when_no_model_has_text(tmp_path):
+    for i in range(3):
+        _mk(tmp_path, f"000{i}_id_gemini-3-flash-preview_aligned.json")
+
+    assert discover_ocr_slug(tmp_path, require_txt=True) is None
+
+
+def test_require_txt_searches_subdirectories(tmp_path):
+    sub = tmp_path / "item"
+    sub.mkdir()
+    for i in range(2):
+        _mk(sub, f"000{i}_id_gemini-3-flash-preview_aligned.json")
+        _mk(sub, f"000{i}_id_gemini-2.0-flash.txt")
+
+    assert discover_ocr_slug(tmp_path, require_txt=True) == "gemini-2.0-flash"
+
+
+def test_discover_stops_one_level_down_by_default(tmp_path):
+    deep = tmp_path / "collection" / "volume" / "item"
+    deep.mkdir(parents=True)
+    _mk(deep, "0001_id_gemini-2.0-flash_aligned.json")
+
+    assert discover_ocr_slug(tmp_path) is None
+
+
+def test_recursive_discovery_reaches_a_collection_root(tmp_path):
+    """The repair tools are pointed at roots like green_books_and_related/, where
+    aligned files sit three levels down and the old era is still the majority."""
+    old = tmp_path / "the_green_book" / "item_a"
+    new = tmp_path / "travelguide" / "item_b"
+    old.mkdir(parents=True)
+    new.mkdir(parents=True)
+    for i in range(3):
+        _mk(old, f"000{i}_id_gemini-2.0-flash_aligned.json")
+    _mk(new, "0001_id_gemini-3.1-flash-lite_aligned.json")
+
+    assert discover_ocr_slug(tmp_path, recursive=True) == "gemini-2.0-flash"

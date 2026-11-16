@@ -119,6 +119,39 @@ def record_stage(output_dir: Path, stage: str, args=_UNSET, *, updates: dict | N
     write_state(output_dir, {**(updates or {}), "stages_completed": completed}, args=args)
 
 
+def add_usage(output_dir: Path, snapshot: dict, pages: int = 0) -> None:
+    """Accumulate a run's token usage into ``token_usage``.
+
+    *snapshot* comes from ``utils.gemini.drain_usage()`` — what accrued since the
+    last flush, keyed ``"{model}|{tier}|{reason}"``, values
+    ``{calls,input,output,thoughts,cached}``. Never pass ``usage_snapshot()``: it
+    is cumulative, so a stage that flushes more than once would double-count.
+
+    *pages* is how many pages the run actually sent to the API, accumulated into
+    ``token_usage_pages``. Without it, cost per page cannot be derived: calls and
+    pages are not the same number, because a page blocked and retried bills
+    several times. Reporting per-call cost as if it were per-page understates a
+    projection by exactly the retry multiplier.
+
+    Totals are **cumulative across runs**, which is what "what has this volume
+    cost me" means: re-OCR'ing a page adds to the total because you paid for it
+    twice. ``last_run_args`` is left alone, so a usage write never displaces the
+    invocation recorded by the stage itself.
+    """
+    if not snapshot and not pages:
+        return
+    state = read_state(output_dir)
+    totals = state.get("token_usage", {})
+    for key, counts in snapshot.items():
+        running = totals.setdefault(key, {})
+        for field, value in counts.items():
+            running[field] = running.get(field, 0) + int(value or 0)
+    updates = {"token_usage": totals}
+    if pages:
+        updates["token_usage_pages"] = state.get("token_usage_pages", 0) + int(pages)
+    write_state(output_dir, updates, args=None)
+
+
 def get_last_run_args(output_dir: Path) -> str | None:
     return read_state(output_dir).get("last_run_args")
 

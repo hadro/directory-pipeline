@@ -23,14 +23,18 @@ literals — never translate, paraphrase, or wrap them.
 
 | Token | Meaning | Emitted by |
 |-------|---------|-----------|
-| `[blank]` | The region genuinely contains no text. | OCR for an empty region (chiefly per-line crop OCR, where an empty crop is real signal). |
+| `[blank]` | The page genuinely contains no text. | OCR for a wholly empty page, emitted once as the entire output. (The experimental per-line crop OCR on `htr-alto-experiments` also emits it per crop, where an empty crop is real signal.) |
 | `[illegible]` | Text is present but cannot be read at all, after a best-effort attempt. | OCR for a span no reading can recover; NER when a source value is present but unreadable. |
 
 Rules of the contract:
 
 - **OCR** still transcribes a best reading for merely *degraded* text — reserve
-  `[illegible]` for spans that are genuinely impossible to read, and `[blank]`
-  for empty regions.
+  `[illegible]` for spans that are genuinely impossible to read, scoped to the
+  span itself, and `[blank]` for a wholly empty page, emitted once. Neither is
+  ever repeated line after line: a prompt that invites a short sentinel per
+  region gives a degenerating model a cheap line to loop on, and one observed
+  run emitted 32,758 consecutive `[blank]` lines before hitting the output
+  ceiling (`docs/evidence/2026-09-02-ocr-token-burn/`).
 - **NER** preserves a `[illegible]`/`[blank]` token that appears in the source
   rather than inventing a value; a field that is simply *not present* stays
   empty (it is **not** filled with a sentinel).

@@ -135,9 +135,11 @@ row-by-row), how to handle degraded or blurred text, what margin content \
 to include or exclude, whether to preserve blank lines between sections. \
 Also instruct the model on the two sentinel tokens the pipeline recognises: \
 write the literal `[illegible]` for a span that is genuinely unreadable after a \
-best-effort attempt, and `[blank]` for a region that truly contains no text — \
-these two exactly, with no other placeholders invented, and never as a substitute \
-for attempting a degraded reading.
+best-effort attempt, scoped to that span alone; and `[blank]` as the entire page \
+output only when the page contains no text at all — never for an empty line, \
+column, or gap between sections, which stay simply empty. These two exactly, with \
+no other placeholders invented, never repeated line after line, and never as a \
+substitute for attempting a degraded reading.
 
 7. **Output format** — Plain text only, one printed line per output line, \
 no markdown, no commentary. Restate this clearly in the prompt.

@@ -35,14 +35,18 @@ subdirectories):
 
 - `manifest.json` — download has been run
 - `*_surya.json` — Surya OCR has been run
-- `*_gemini.txt` — Gemini OCR has been run
-- `*_aligned.json` — alignment has been run; note the filename stem to detect the
-  OCR model (e.g. `foo_gemini-2.0-flash_aligned.json` → model is `gemini-2.0-flash`)
+- `*_gemini-*.txt` (`*_{model}.txt`) — Gemini OCR has been run
+- `*_aligned.json` — alignment has been run; the filename stem names the OCR model
+  (e.g. `foo_gemini-3.1-flash-lite_aligned.json` → model is `gemini-3.1-flash-lite`)
+- `pipeline_state.json` — the models used and the stages completed; downstream stages
+  read it, so `--model` flags are rarely needed
 - `selection.txt` — select-pages has been run
 - `ner_prompt.md` — prompts have been generated
 - `entries_*.csv` — extraction has been run
-- `entries_*.json` — per-page extraction cache; check `"mode"` field inside for
-  `"text-only"` vs `"aligned"`
+- `*_entries.json` — per-page extraction cache. An `"aligned_model"` field means the
+  page was extracted from aligned JSON (boxes possible); without it, from raw text. The
+  `"mode"` field is the NER input mode (`"text-only"` default, or `"multimodal"`) and
+  says nothing about alignment
 
 ## Step 4: Build the command
 
@@ -91,6 +95,13 @@ pipeline ocr output/{slug}
 (equivalent to `python main.py output/{slug} --surya-ocr --gemini-ocr --align-ocr`;
 already-completed OCR files are skipped automatically).
 
+Options worth knowing:
+- `--blank-threshold 0.5` — for pages Surya reads as tables (dot-leader indexes), which
+  otherwise come back as page-sized blocks; the align run lists such pages at the end
+- `--no-blank-skip` — OCR every page, including ones the blank-page check would skip
+- `--max-output-tokens N` — per-page output cap (default 24576); raise if dense pages
+  come back truncated
+
 After alignment, `pipeline review output/{slug}` opens a Flask browser UI to
 manually fix unmatched lines.
 
@@ -106,13 +117,14 @@ add `--no-explore` to skip the explorer build). Fine-grained flags below pass
 through unchanged.
 
 Conditional additions:
-- If `*_aligned.json` files exist, detect the OCR model from the filename stem.
-  If the model differs from the NER model (or is unclear), append:
-  `--aligned-model gemini-2.0-flash` (use the detected model slug)
+- The OCR model is auto-detected from the aligned files (best line coverage wins when
+  several models' alignments exist). Append `--aligned-model {ocr_model}` only to force
+  a specific one.
 - If `ner_prompt.md` exists in the output dir, append:
   `--ner-prompt output/{slug}/ner_prompt.md`
-- If `entries_*.json` already exists and the user wants a fresh run, or if mode is
-  `"text-only"` but alignment now exists, append `--force`
+- Re-aligned pages are re-extracted automatically: a page's cache is invalidated when its
+  aligned JSON is newer. Append `--force` only for a genuinely fresh run of every page,
+  which costs NER API calls for all of them.
 - To use a specific NER model: `--model MODEL`
 
 ### Goal 5: Create data explorer
@@ -122,8 +134,10 @@ Base command:
 python -m pipeline.explore_entries output/{slug}/entries_{model}.csv
 ```
 
-If `manifest.json` exists in `output/{slug}/`, append `--output-dir output/{slug}/`
-to enable image thumbnails. If `palette.json` exists, it is applied automatically.
+`--output-dir` (where `manifest.json` is found, for thumbnails) defaults to the CSV's
+parent directory. Append `--output-dir output/{slug}/` only when the CSV lives elsewhere.
+`--context-lines N` sets how many lines of surrounding text a thumbnail crop shows
+(default 3).
 
 ## Step 5: Present the command and explain it
 
@@ -131,4 +145,4 @@ Show the final command in a code block. Provide a brief explanation of each flag
 used, and describe what output file(s) to expect.
 
 All stages run in fixed order regardless of flag order on the command line.
-See the `PIPELINE` list near the top of `main.py` for the full stage order, and "Artifacts and naming conventions" in `docs/pipeline-stages.md` for the filename contract.
+See `STAGES` in `pipeline/stages.py` for the full stage order, and "Artifacts and naming conventions" in `docs/pipeline-stages.md` for the filename contract.

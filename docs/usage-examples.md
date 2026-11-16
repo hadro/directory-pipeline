@@ -223,7 +223,7 @@ pipeline run <URL> --no-flex
 
 # Compare two Gemini models on OCR quality before committing to a full run
 python main.py collections.txt --compare-ocr \
-    --models gemini-3.1-flash-lite gemini-2.0-flash
+    --models gemini-3.1-flash-lite gemini-3.8-flash
 
 # Force re-processing of already-completed OCR + alignment
 pipeline ocr output/ldpd_11290437_000/ --force

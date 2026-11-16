@@ -19,6 +19,7 @@ from analysis.fix_entries import (
     _INFER_RULES,
     _MARKER_RULES,
     _NER_PLACEHOLDER_VALUES,
+    find_duplicates,
     find_hallucinated_pages,
     infer_category_from_name,
 )
@@ -158,3 +159,71 @@ class TestNoteFieldScoping:
 
     def test_marker_rules_target_canonical_categories(self):
         assert not {cat for _, cat in _MARKER_RULES if cat not in CANONICAL_CATEGORIES}
+
+
+def _listing(name: str, phone: str = "", address: str = "", description: str = ""):
+    return {"city": "LOUISBURG", "state": "", "name": name, "phone": phone,
+            "address": address, "description": description}
+
+
+class TestDuplicatesInAPhoneBook:
+    """Without an address the match key is the name alone. Rows from a 1924
+    telephone directory, where that flagged 42 of 179 listings."""
+
+    def test_office_and_residence_lines_are_not_duplicates(self):
+        rows = [_listing("Perry, Dr. H. G.", "287-R1", description="Office"),
+                _listing("Perry, Dr. H. G.", "287-R2", description="Residence")]
+        assert find_duplicates(rows) == set()
+
+    def test_people_sharing_a_surname_are_not_duplicates(self):
+        rows = [_listing("Person, M. M.", "1511"), _listing("Person, W. M.", "227")]
+        assert find_duplicates(rows) == set()
+
+    def test_the_same_number_twice_is_still_a_duplicate(self):
+        # A store's line and its ad, both on 322: one listing read twice.
+        rows = [_listing("Spivey, F. N.", "322", description="Store"),
+                _listing("Spivey, F. N.", "322", description="Heavy and Fancy Groceries")]
+        assert len(find_duplicates(rows)) == 1
+
+    def test_phone_punctuation_does_not_make_numbers_differ(self):
+        rows = [_listing("Perry, J. W.", "286-J"), _listing("Perry, J. W.", "286 J")]
+        assert len(find_duplicates(rows)) == 1
+
+    def test_rows_with_an_address_keep_the_plain_rule(self):
+        # With an address a differing number is as often one listing OCR'd twice.
+        rows = [_listing("LITTLE PALACE CAFE", "NA 3-0680", "425 N. Main St."),
+                _listing("LITTLE PALACE CAFE", "NA 3-0660", "425 N. Main St.")]
+        assert len(find_duplicates(rows)) == 1
+
+
+class TestSectionNamedCategoryColumn:
+    """The 1958 Green Book's NER schema names its category column `section`.
+
+    detect_schema() did not list it, so --infer-categories inferred categories,
+    wrote them to a "category" key the CSV never had, and the DictWriter's
+    extrasaction="ignore" dropped all 1,816 of them without a word.
+    """
+
+    def test_inferred_categories_are_written_to_the_section_column(self, tmp_path):
+        import csv
+
+        from analysis.fix_entries import process_csv
+
+        src, dst = tmp_path / "entries.csv", tmp_path / "fixed.csv"
+        rows = [
+            {"business_name": "Mrs. Smith's Tourist Home", "city": "IDLEWILD",
+             "state": "MICHIGAN", "section": "General", "image": "p1.jpg"},
+            {"business_name": "Hotel Theresa", "city": "NEW YORK",
+             "state": "NEW YORK", "section": "", "image": "p2.jpg"},
+        ]
+        with src.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0]))
+            w.writeheader()
+            w.writerows(rows)
+
+        stats = process_csv(src, dst, infer_categories=True)
+
+        out = list(csv.DictReader(dst.open(encoding="utf-8")))
+        assert stats["inferred_categories"] == 2
+        assert [r["section"] for r in out] == ["TOURIST HOMES", "HOTELS"]
+        assert "category" not in out[0], "no phantom column alongside `section`"

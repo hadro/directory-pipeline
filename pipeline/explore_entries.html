@@ -20,6 +20,7 @@ a {{ color: #1a6ebd; }}
 #sidebar-header .sub {{ font-size: 12px; color: #595959; }}
 #volume-wrap {{ margin-top: 10px; display: none; background: #eef3fb; border: 1px solid #5a86b8; border-radius: 5px; padding: 8px 10px; }}
 #volume-select {{ width: 100%; font-size: 12px; padding: 4px 6px; border: 1px solid #767676; border-radius: 4px; background: #fff; color: #333; cursor: pointer; }}
+#section-select {{ width: 100%; font-size: 12px; padding: 4px 6px; border: 1px solid #767676; border-radius: 4px; background: #fff; color: #333; cursor: pointer; }}
 #sidebar-scroll {{ overflow-y: auto; flex: 1; padding: 10px 14px 20px; }}
 
 .facet-group {{ margin-bottom: 14px; }}
@@ -175,8 +176,12 @@ tbody tr.selected .detail-btn {{ color: #1a6ebd; }}
     <h2 id="doc-title"></h2>
     <div class="sub" id="doc-sub"></div>
     <div id="volume-wrap">
-      <label for="volume-select" style="display:block;font-size:11px;color:#595959;margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">Select volume</label>
+      <label id="volume-label" for="volume-select" style="display:block;font-size:11px;color:#595959;margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">Select volume</label>
       <select id="volume-select"></select>
+      <div id="section-wrap" style="display:none;margin-top:8px;">
+        <label for="section-select" style="display:block;font-size:11px;color:#595959;margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">Section</label>
+        <select id="section-select"></select>
+      </div>
     </div>
   </div>
   <div id="sidebar-scroll">
@@ -247,8 +252,17 @@ const DOC_META    = {doc_meta_json};
 const VIEWER_URL  = {viewer_url_json};
 const MANIFEST_URL = {manifest_url_json};
 const FULL_PAGE_THUMBS = {full_page_thumbs_json};
+// Lines of surrounding text to show above and below an entry's own line in the
+// detail crop. The entry's bbox height is the best available estimate of a line
+// height on this page, so the padding scales with the page's typography.
+const CONTEXT_LINES = {context_lines_json};
 let activeManifestUrl = MANIFEST_URL;
-let ALL_ENTRIES = ALL_INITIAL_ENTRIES;
+// Rows are embedded once. With several volumes (or one volume with sections)
+// they live on VOLUMES and ALL_INITIAL_ENTRIES is empty; otherwise the reverse.
+const FIRST_VOLUME = Object.keys(VOLUMES)[0];
+let ALL_ENTRIES = ALL_INITIAL_ENTRIES.length
+  ? ALL_INITIAL_ENTRIES
+  : (FIRST_VOLUME ? VOLUMES[FIRST_VOLUME].rows : []);
 
 // ── Field display-name and value-label overrides ──────────────────────────
 const FIELD_LABELS = {{
@@ -332,6 +346,63 @@ function loadVolume(label) {{
   activeManifestUrl = currentDocMeta.manifest_url || MANIFEST_URL;
   renderMetaStrip(currentDocMeta);
   renderFillRate();
+  populateSections(label);
+}}
+
+// ── Sections within a volume ────────────────────────────────────────────────
+// A combined CSV is the union of every section's schema, so most columns are
+// empty on most rows: 54 columns for the 1869 Rowell volume, but 8-19 once you
+// look at one section. Each section carries its own field_meta, so switching
+// rebuilds the column set and the facets rather than filtering a wide table.
+let currentVolumeLabel = null;
+
+function populateSections(volLabel) {{
+  currentVolumeLabel = volLabel;
+  const vol = VOLUMES[volLabel] || {{}};
+  const sections = vol.sections || {{}};
+  const names = Object.keys(sections);
+  const wrap = document.getElementById("section-wrap");
+  const sel = document.getElementById("section-select");
+  if (!wrap || !sel) return;
+  sel.innerHTML = "";
+  if (names.length < 2) {{ wrap.style.display = "none"; return; }}
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = "All sections  (" + (vol.rows || []).length.toLocaleString() + ")";
+  sel.appendChild(all);
+  names.forEach(name => {{
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name + "  (" + (sections[name].count || 0).toLocaleString() + ")";
+    sel.appendChild(opt);
+  }});
+  wrap.style.display = "block";
+}}
+
+function loadSection(secLabel) {{
+  const vol = VOLUMES[currentVolumeLabel];
+  if (!vol) return;
+  const sec = secLabel && vol.sections ? vol.sections[secLabel] : null;
+  // Rows are stored once, on the volume; a section is a column set plus a
+  // filter over them.
+  ALL_ENTRIES = sec ? vol.rows.filter(r => (r.volume_section || "").trim() === secLabel) : vol.rows;
+  const meta = sec ? sec.field_meta : vol.field_meta;
+  facetFields = meta.filter(f => f.type === "facet");
+  displayFields = meta.filter(f => f.type !== "id");
+  Object.keys(facetState).forEach(k => delete facetState[k]);
+  facetFields.forEach(f => {{ facetState[f.name] = new Set(); }});
+  searchQuery = "";
+  sortCol = null; sortDir = 1; selectedIdx = null; colFilters = {{}};
+  showAllFacets.clear();
+  document.getElementById("search").value = "";
+  document.getElementById("detail").classList.remove("open");
+  const shown = currentVolumeLabel + (secLabel ? " — " + secLabel : "");
+  document.getElementById("doc-title").textContent = shown;
+  document.getElementById("mobile-title").textContent = shown;
+  const n = ALL_ENTRIES.length.toLocaleString() + " entries";
+  document.getElementById("doc-sub").textContent = n;
+  document.getElementById("mobile-sub").textContent = n;
+  renderFillRate();
 }}
 
 // ── Volume selector ─────────────────────────────────────────────────────────
@@ -341,6 +412,12 @@ function loadVolume(label) {{
   const wrap = document.getElementById("volume-wrap");
   const sel  = document.getElementById("volume-select");
   wrap.style.display = "block";
+  // One volume with sections still wants the panel — for the section select.
+  if (volLabels.length < 2) {{
+    sel.style.display = "none";
+    const vlab = document.getElementById("volume-label");
+    if (vlab) vlab.style.display = "none";
+  }}
   volLabels.forEach(label => {{
     const opt = document.createElement("option");
     opt.value = label;
@@ -372,6 +449,12 @@ function loadVolume(label) {{
     document.getElementById("mobile-volume-select").value = sel.value;
     renderAll();
   }});
+
+  const ssel = document.getElementById("section-select");
+  if (ssel) {{
+    ssel.addEventListener("change", () => {{ loadSection(ssel.value); renderAll(); }});
+  }}
+  populateSections(volLabels[0]);
 }})();
 
 // ── Filtering ──────────────────────────────────────────────────────────────
@@ -686,7 +769,18 @@ function thumbUrl(row) {{
     if (xywh.length !== 4 || xywh[2] <= 0 || xywh[3] <= 0) return "";
     const [cw, ch] = [svc[1], svc[2]];
     if (!cw || !ch) return "";
-    const padV = Math.max(xywh[3], 60), tw = 800;
+    const padV = Math.max(xywh[3] * CONTEXT_LINES, 60), tw = 800;
+    // Asking an image service for a width at or above the region's own pixel
+    // count makes it upscale from a coarse pyramid level and compress far
+    // harder. On tile.loc.gov a 737px-wide crop requested at 800 came back
+    // 3 KB (25 KB/Mpx) against 40 KB (363 KB/Mpx) for the same region at
+    // /full/ — visually unreadable. With pct: even the native width trips it,
+    // because the percentage rounds down and the request is then an upscale.
+    // So: the region's own size for a region already smaller than the display
+    // size, and an explicit width only when it would be a genuine downscale.
+    // "Own size" is "max" on Image API v3 and "full" on v2: iiif.nypl.org (v3)
+    // answers 400 to "full" and tile.loc.gov (v2) answers 400 to "max".
+    // svc[4] is the service's version; older canvas maps lack it, so default 2.
     // Ensure the crop is at least 600px wide so narrow Surya detections
     // (e.g. short names in classified directories) show enough context.
     const minW = 600;
@@ -699,7 +793,8 @@ function thumbUrl(row) {{
     const yp = (ry / ch * 100).toFixed(4);
     const wp = (rw / cw * 100).toFixed(4);
     const hp = (rh / ch * 100).toFixed(4);
-    return `${{svc[0]}}/pct:${{xp}},${{yp}},${{wp}},${{hp}}/${{tw}},/0/default.jpg`;
+    const size = rw <= tw ? ((svc[4] || 2) >= 3 ? "max" : "full") : `${{tw}},`;
+    return `${{svc[0]}}/pct:${{xp}},${{yp}},${{wp}},${{hp}}/${{size}}/0/default.jpg`;
   }}
   return `${{svc[0]}}/full/400,/0/default.jpg`;
 }}

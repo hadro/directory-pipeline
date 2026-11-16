@@ -43,7 +43,7 @@ command line:
 
 Key model flags:
   --ocr-model MODEL     Gemini model for OCR and downstream stages (each stage uses its own default if omitted)
-  --prompt-model MODEL  Gemini model for --generate-prompts (default: gemini-3-flash-preview)
+  --prompt-model MODEL  Gemini model for --generate-prompts (default: gemini-3.8-flash)
 
 Usage
 -----
@@ -67,7 +67,7 @@ Usage
 
     # Multiple models / parallel workers:
     python main.py collections.txt --download \\
-        --compare-ocr --models gemini-2.0-flash gemini-1.5-flash \\
+        --compare-ocr --models gemini-3.1-flash-lite gemini-3.8-flash \\
         --workers 8
 """
 
@@ -775,7 +775,7 @@ def main() -> None:
         default=None,
         metavar="MODEL",
         help=(
-            "Gemini model for --generate-prompts (default: gemini-3-flash-preview). "
+            "Gemini model for --generate-prompts (default: gemini-3.8-flash). "
             "A more capable model is used by default for prompt generation; override here."
         ),
     )
@@ -821,6 +821,41 @@ def main() -> None:
         dest="batch_size",
         metavar="N",
         help="Images per Surya inference batch (default: 4; reduce if OOM)",
+    )
+    opts.add_argument(
+        "--blank-threshold",
+        type=float,
+        default=None,
+        dest="blank_threshold",
+        metavar="F",
+        help=(
+            "For --surya-ocr: Surya detector blank threshold (default: Surya's "
+            "own, 0.35). Raise to ~0.5 for pages Surya reads as tables, such as "
+            "dot-leader indexes, which otherwise come back as page-sized region "
+            "blocks alignment cannot use."
+        ),
+    )
+    opts.add_argument(
+        "--max-output-tokens",
+        type=int,
+        default=None,
+        dest="max_output_tokens",
+        metavar="N",
+        help=(
+            "For --gemini-ocr: cap output tokens per call (default: 24576). Bounds "
+            "the cost of a page that starts looping. Raise it if dense pages come "
+            "back truncated; 0 disables the cap."
+        ),
+    )
+    opts.add_argument(
+        "--no-blank-skip",
+        action="store_true",
+        dest="no_blank_skip",
+        help=(
+            "For --gemini-ocr: OCR every page, including pages the blank-page "
+            "check would skip. A skipped page writes no .txt and drops out of "
+            "align and extract."
+        ),
     )
     opts.add_argument(
         "--width",
@@ -1269,6 +1304,12 @@ def main() -> None:
     if outcomes["failed"]:
         print(f"    ✗ Failed:   {', '.join(outcomes['failed'])}", file=sys.stderr)
     print(f"{'═' * 62}", file=sys.stderr)
+
+    # Exit non-zero when any target had a failed stage, so a script or wrapper
+    # can tell; the summary alone exited 0. Later stages have already run on
+    # whatever the failed one produced.
+    if outcomes["failed"]:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

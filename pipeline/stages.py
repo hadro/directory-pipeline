@@ -88,7 +88,10 @@ STAGES: "list[StageDef]" = [
     StageDef(
         "surya_ocr", "pipeline/run_surya_ocr.py", "--surya-ocr",
         declarative=True,
-        opts=(Opt("batch_size", "--batch-size", when="not_none"),),
+        opts=(
+            Opt("batch_size", "--batch-size", when="not_none"),
+            Opt("blank_threshold", "--blank-threshold", when="not_none"),
+        ),
         requires="surya", install_hint="uv sync --extra gpu",
     ),
     StageDef(
@@ -100,6 +103,8 @@ STAGES: "list[StageDef]" = [
             Opt("high_res", "--high-res", kind="switch"),
             Opt("ocr_prompt", "--prompt-file"),
             Opt("flex", "--flex", kind="switch"),
+            Opt("max_output_tokens", "--max-output-tokens", when="not_none"),
+            Opt("no_blank_skip", "--no-blank-skip", kind="switch"),
             Opt("sections", "--sections", from_ctx=True),
         ),
     ),

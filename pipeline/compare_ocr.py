@@ -29,7 +29,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils.gemini import get_client
-from utils.models import model_slug
+from utils.models import DEFAULT_OCR_TEMPERATURE, model_slug
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -101,7 +101,7 @@ def get_text(
             model=model,
             config=GenerateContentConfig(
                 system_instruction=system_prompt,
-                temperature=0.0,
+                temperature=DEFAULT_OCR_TEMPERATURE,
                 media_resolution=media_resolution,
                 thinking_config=ThinkingConfig(thinking_budget=0),
             ),

@@ -6,26 +6,83 @@ Two cost categories: **API charges** (variable; applies on any platform) and **p
 
 ## Gemini API
 
-`--gemini-ocr` and `--extract-entries` both call the Gemini API. Pricing as of June 2026 (verify current rates at [ai.google.dev/gemini-api/docs/pricing](https://ai.google.dev/gemini-api/docs/pricing)):
+`--gemini-ocr` and `--extract-entries` both call the Gemini API.
 
-| Stage | Model (default) | Input (standard) | Output (standard) |
-|---|---|---|---|
-| `--gemini-ocr` | `gemini-3.1-flash-lite` | $0.25 / 1M tokens | $1.50 / 1M tokens |
-| `--extract-entries` | `gemini-3.1-flash-lite` | $0.25 / 1M tokens | $1.50 / 1M tokens |
-| fallback (dense pages) | `gemini-3-flash-preview` | $0.50 / 1M tokens | $3.00 / 1M tokens |
-
-**Flex inference (`--flex`):** Flex pricing is approximately **50% off** the standard rates above, with 1–15 minute latency per request and best-effort availability. It is **on by default** for `--gemini-ocr` and `--extract-entries` (both via `pipeline …` and `python main.py …`) — pass `--no-flex` when you need real-time throughput:
+**Do not estimate this — measure it.** Every Gemini response carries
+`usage_metadata`; `generate_with_retry()` records it and the OCR and NER stages
+persist the totals to `token_usage` in each volume's `pipeline_state.json`:
 
 ```bash
-python main.py URL --gemini-ocr --ocr-model gemini-3.1-flash-lite             # flex by default
-python main.py URL --gemini-ocr --no-flex                                     # standard tier
+python tools/report_cost.py output/                  # every volume
+python tools/report_cost.py output/my-volume/ --by-reason
+python tools/report_cost.py output/ --pages 1900     # project onto a corpus
 ```
 
-A Green Book page generates roughly 2,000 input tokens and 1,000 output tokens for OCR (`gemini-3.1-flash-lite`, approx. $0.0020/page standard, $0.0010/page with `--flex`), and another approx. 10,000 input / 2,000 output tokens for entry extraction (`gemini-3.1-flash-lite`, approx. $0.0055/page standard, $0.0028/page with `--flex`) — about **$0.0075 per page** combined at standard rates, or **$0.0038/page** with `--flex`. Dense pages that exceed the output token limit automatically retry with `gemini-3-flash-preview`, but this affects fewer than 5% of pages in practice.
+The figures below are for sizing a run before you start. Rates live in
+`utils/models.py` (`MODEL_RATES`, checked `RATES_CHECKED`) so a model bump and its
+price move together — the previous arrangement left this page quoting the old
+models' rates for three months.
+
+| model | input / 1M | output / 1M |
+|---|---|---|
+| `gemini-3.1-flash-lite` (OCR + NER default) | $0.25 | $1.50 |
+| `gemini-3.5-flash-lite` | $0.30 | $2.50 |
+| `gemini-3.8-flash` (prompt generation, escalation) | $0.75 | $3.75 |
+| `gemini-3.6-flash` (also served as `gemini-3.5-flash`) | $0.75 | $3.75 |
+
+Checked 2026-11-16. The 3.6/3.8 rates are promotional through 2026-12-31 and
+double on 2027-01-01. **Thinking tokens bill at the output rate**, and every
+non-lite 3.x flash model has no thinking-off mode (see `thinking_config_for()` in
+`utils/gemini.py`), so escalated pages cost more than their input/output counts
+suggest.
+
+**Flex and Batch are both 50% off.** Flex is on by default for `--gemini-ocr` and
+`--extract-entries`; pass `--no-flex` when you need real-time throughput.
+
+### Measured, not estimated
+
+Three pages of the 1869 Rowell directory, `gemini-3.1-flash-lite`, flex, on
+2026-09-18:
+
+| | |
+|---|---|
+| per page | **$0.00183** |
+| calls per page | 1.33 |
+| projected, 1,900 pages | **$3.48** |
+
+That 1.33 is the part an estimate cannot see. A page blocked for RECITATION and
+retried at a higher temperature is billed twice, each attempt paying full input
+tokens. `--by-reason` breaks the bill down by what provoked each call:
+
+```
+reason                    calls      output          cost   share
+initial                       3       3,592  $     0.0035   63.7%
+temp:recitation               1       2,299  $     0.0020   36.3%
+```
+
+The two failure classes cost very differently. A RECITATION block is refused
+before generation — prompt tokens only, no output, ~$0.0006 a call. A runaway
+*emits*, up to whatever ceiling it is given: at the 24,576 default that is ~$0.06,
+roughly 11x a clean page. That asymmetry is why retries are capped against the
+page's own demonstrated length (`_retry_cap` in `run_gemini_ocr.py`) and why loop
+failures skip the temperature rungs entirely.
+
+Caveat on the numbers above: three pages, one volume, one run. Treat them as an
+order of magnitude and run `report_cost.py` on your own output.
+
+NER has not yet been measured this way. Historically it ran roughly 3x the OCR
+cost per page (approx. 10,000 input / 2,000 output tokens against OCR's 2,000 /
+1,800), so budget accordingly until a real run records it. From 0.3 its calls
+are tagged `ner`, `ner:fallback` and `ner:review`, so `--by-reason` shows the two
+stages apart. Earlier runs recorded them as `initial`, mixed in with first OCR
+attempts. The report counts retries from these tags (`temp:`, `simple:`,
+`escalate:` and `ner:fallback`), not from calls per page, which extraction's own
+calls would inflate.
 
 `--generate-prompts` makes 2 Gemini calls with 4–8 sample images each — a one-time per-volume cost of roughly **$0.02–$0.10 total**.
 
-**Rough collection estimates:**
+**Rough collection estimates** (June 2026, `gemini-3.1-flash-lite`; the OCR column
+now reads low against the $3.48 measured above, which carries a real retry rate):
 
 | Collection | Pages | Prompt gen | OCR | NER | Total (standard) | Total (`--flex`) |
 |---|---|---|---|---|---|---|
@@ -59,9 +116,28 @@ The `--geocode` stage uses Nominatim (free, city-level accuracy) by default. Set
 
 The stages that use significant compute are **Surya OCR** (`--surya-ocr`, `--surya-detect`, `--review-alignment`). Gemini API stages are network-bound and run equally fast everywhere.
 
+> **The table below is unverified for dense directory material and was wrong by
+> roughly 30x on the one volume anyone has timed.** The 1869 Rowell directory
+> (373 pages, **M2 MacBook Air**, `--batch-size 4`) took about **6 hours of
+> active compute at ~1 page/minute**, measured from output file timestamps,
+> against the 5–8 minutes per 200 pages below — a configuration the first row
+> nominally covers.
+>
+> Thermal throttling is the most likely explanation: an Air is fanless and this
+> was six hours of sustained GPU load. Line density is not sufficient on its own
+> — those pages carry a median of 143 Surya lines against 80 for a Green Book
+> page, under 2x. **On a machine with active cooling, an M-series Pro/Max, or a
+> discrete GPU, expect this stage to be unremarkable**; none of those have been
+> timed here.
+>
+> So: on a fanless laptop plan Surya as an overnight job, or move it to Colab
+> (`colab/ocr-align-review.ipynb`). It resumes cleanly — pages with an existing
+> `*_surya.json` are skipped — so an interrupted run costs only the wall-clock
+> already spent.
+
 | Platform | Cost | Surya OCR (200 pages) | Notes |
 |---|---|---|---|
-| **Mac (M-series, 16 GB+)** | $0 (electricity) | 5–8 min (MPS, `--batch-size 4`) | Good for development and single-volume runs |
+| **Mac (M-series, 16 GB+)** | $0 (electricity) | 5–8 min (MPS, `--batch-size 4`) — *but see the note above; an M2 Air measured ~1 page/min on dense pages* | Good for development and single-volume runs |
 | **Mac (8 GB)** | $0 | 10–15 min (MPS, `--batch-size 1–2`) | Works; reduce batch size if OOM errors occur |
 | **Google Colab (free T4)** | $0 | 2–3 min (CUDA, `--batch-size 8`) | Sessions expire; T4 not always available; `--review-alignment` requires a tunnel (e.g. ngrok) |
 | **Google Colab Pro** | $10/month | 1–2 min (T4/L4, `--batch-size 8`) | Reliable GPU access, longer sessions |

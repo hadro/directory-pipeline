@@ -20,7 +20,10 @@ Manifest mode (--manifest):
     where <item_id> is derived from the manifest URL, or overridden
     with --output-dir.
 
-In both modes, already-downloaded files are skipped (safe to re-run).
+In both modes, already-downloaded files are skipped (safe to re-run) unless
+they are corrupt (empty or truncated by an interrupted download), in which case
+they are fetched again. Files are written to a .part name and renamed into place
+only once they decode, so an interrupted run cannot leave a partial image.
 
 On HTTP 429 or 503, the script retries automatically with exponential
 backoff, respecting the Retry-After header when provided.
@@ -50,12 +53,24 @@ import urllib.error
 from pathlib import Path
 
 import requests
+from PIL import Image
 
 from utils import iiif_utils
+from utils.image_utils import image_is_complete
 
 DEFAULT_WIDTH = 2048
 DEFAULT_DELAY = 0.5   # ~2 requests/second — conservative for institutional servers
 MAX_RETRIES = 5
+# A body that arrives incomplete is refetched. The cut is usually a dropped
+# connection; on 2026-10-16, 30 corrupt pages in output/ (empty files, bodies cut
+# at a chunk boundary, IA responses stopping at 108,620 bytes) all came back
+# whole on a single re-request.
+DOWNLOAD_ATTEMPTS = 3
+# A read timeout usually means the server was still rendering the derivative
+# (Internet Archive builds a JPEG from its JP2 on first request), so a second
+# request is normally served at once. Retried briefly, unlike 429/503.
+TIMEOUT_RETRIES = 2
+_PAGE_NAME_RE = re.compile(r"^(\d{4})_.+\.jpg$")
 # 5xx gateway errors are included because image servers (e.g. NYPL's Cantaloupe
 # behind nginx) return them transiently when a large derivative times out —
 # the same URL succeeds on retry.
@@ -72,13 +87,27 @@ def get_with_retry(
     **kwargs,
 ) -> requests.Response:
     """
-    GET url, retrying on 429/503 up to MAX_RETRIES times.
+    GET url, retrying on 429/503 and 5xx gateway errors up to MAX_RETRIES times,
+    and on a timeout up to TIMEOUT_RETRIES times.
     Respects the Retry-After response header (seconds); falls back to
     exponential backoff (2, 4, 8, 16, 32 s) if the header is absent or unparseable.
     Raises requests.HTTPError on any other non-2xx status or after all retries exhausted.
     """
+    timeouts = 0
     for attempt in range(MAX_RETRIES + 1):
-        resp = session.get(url, timeout=timeout, **kwargs)
+        try:
+            resp = session.get(url, timeout=timeout, **kwargs)
+        except requests.exceptions.Timeout:
+            # Without this a single slow response lost the page for the whole run.
+            if timeouts >= TIMEOUT_RETRIES:
+                raise
+            timeouts += 1
+            wait = 2 ** timeouts
+            context = f" ({label})" if label else ""
+            print(f"  Timed out{context} — waiting {wait}s then retrying "
+                  f"({timeouts}/{TIMEOUT_RETRIES})…", file=sys.stderr)
+            time.sleep(wait)
+            continue
         if resp.status_code not in RETRYABLE_STATUSES or attempt == MAX_RETRIES:
             resp.raise_for_status()
             return resp
@@ -169,7 +198,7 @@ def _build_loc_manifest(
                         "thumbnail": [{
                             "id": f"{svc_id}/full/!200,200/0/default.jpg",
                             "type": "Image",
-                            "service": [{"id": svc_id, "type": "ImageService3"}],
+                            "service": [{"id": svc_id, "type": "ImageService2", "profile": "level2"}],
                         }],
                         "items": [{
                             "id": f"{canvas_id}/page",
@@ -179,9 +208,11 @@ def _build_loc_manifest(
                                 "type": "Annotation",
                                 "motivation": "painting",
                                 "body": {
-                                    "id": f"{svc_id}/full/max/0/default.jpg",
+                                    # tile.loc.gov speaks Image API 2: "full", not "max"
+                                    "id": f"{svc_id}/full/full/0/default.jpg",
                                     "type": "Image",
-                                    "service": [{"id": svc_id, "type": "ImageService3", "maxWidth": native_w}],
+                                    "service": [{"id": svc_id, "type": "ImageService2",
+                                                 "profile": "level2", "maxWidth": native_w}],
                                 },
                                 "target": canvas_id,
                             }],
@@ -318,7 +349,11 @@ def iter_canvas_images(manifest: dict, width: int) -> list[tuple[str, str, int |
             # declared width.  Either caps the request at native resolution.
             native = c["max_width"] or (c["canvas_width"] if c["canvas_width"] > 0 else None)
             effective_width = min(width, native) if native else width
-        result.append((c["image_id"], iiif_utils.image_url(c["service_id"], effective_width, iiif_version), c["max_width"], effective_width))
+        # The size keyword depends on the image service's Image API version, which
+        # need not match the manifest's: a Presentation 3 manifest can point at a
+        # v2 server, and v2 servers such as tile.loc.gov reject "max".
+        version = c.get("service_version", iiif_version)
+        result.append((c["image_id"], iiif_utils.image_url(c["service_id"], effective_width, version), c["max_width"], effective_width))
     return result
 
 
@@ -328,12 +363,40 @@ def download_file(
     dest: Path,
     delay: float,
 ) -> bool:
-    """Download url to dest. Returns True if downloaded, False if skipped."""
+    """Download url to dest. Returns True if downloaded, False if skipped.
+
+    An existing dest is skipped only if it is a complete image. Skipping on the
+    name alone made an interrupted download permanent: the empty or truncated
+    file was never fetched again, and every later stage failed on it. Raises
+    OSError if the server returns an incomplete image DOWNLOAD_ATTEMPTS times;
+    dest is then left as it was.
+    """
     if dest.exists():
-        return False
+        if image_is_complete(dest):
+            return False
+        print(f"  Corrupt image, downloading again: {dest.name}", file=sys.stderr)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
     try:
-        resp = get_with_retry(session, url, timeout=60, label=dest.name, stream=True)
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            _fetch(session, url, part, label=dest.name)
+            time.sleep(delay)
+            if image_is_complete(part):
+                part.replace(dest)
+                return True
+            print(
+                f"  Incomplete image received ({attempt}/{DOWNLOAD_ATTEMPTS}): {dest.name}",
+                file=sys.stderr,
+            )
+    finally:
+        part.unlink(missing_ok=True)
+    raise OSError(f"incomplete image after {DOWNLOAD_ATTEMPTS} attempts")
+
+
+def _fetch(session: requests.Session, url: str, dest: Path, label: str) -> None:
+    """Stream url to dest, falling back to urllib for servers that block requests."""
+    try:
+        resp = get_with_retry(session, url, timeout=60, label=label, stream=True)
         with open(dest, "wb") as f:
             for chunk in resp.iter_content(chunk_size=65536):
                 f.write(chunk)
@@ -353,8 +416,74 @@ def download_file(
                     if not chunk:
                         break
                     f.write(chunk)
-    time.sleep(delay)
-    return True
+
+
+def new_session() -> requests.Session:
+    """A requests session with the headers every download in this module uses."""
+    session = requests.Session()
+    session.headers["Accept"] = "application/json"
+    session.headers["User-Agent"] = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+    return session
+
+
+def _sibling_width(image_path: Path) -> int:
+    """Width the volume's other pages were downloaded at, or 0 if none readable.
+
+    The download width is not recorded anywhere (volumes in output/ were fetched
+    at 800, 1200 and 2048 px), so it is read back from the files. Each page was
+    fetched at min(requested, native), so the widest sibling is the requested
+    width whenever any page is natively at least that wide, and the widest
+    native page when the volume was fetched at full size. Requesting it
+    reproduces the siblings' scale either way.
+    """
+    widest = 0
+    for sib in sorted(image_path.parent.glob("[0-9][0-9][0-9][0-9]_*.jpg"))[:60]:
+        if sib == image_path or sib.stem.endswith(("_viz", "_left", "_right")):
+            continue
+        try:
+            with Image.open(sib) as im:
+                widest = max(widest, im.size[0])
+        except Exception:  # noqa: BLE001 — another corrupt page tells us nothing
+            continue
+    return widest
+
+
+def redownload_page(image_path: Path, delay: float = DEFAULT_DELAY) -> bool:
+    """Fetch one page image again from the manifest cached beside it.
+
+    For stages that find a corrupt image after the download stage has run. The
+    page is matched to its canvas by the NNNN_<image_id>.jpg name this module
+    writes, and requested at its siblings' width so the replacement matches
+    the rest of the volume. Returns True if image_path now holds a complete
+    image. Gives up, returning False, on anything it cannot match: no cached
+    manifest, a split half, a name that does not fit its canvas.
+    """
+    m = _PAGE_NAME_RE.match(image_path.name)
+    manifest_path = image_path.parent / "manifest.json"
+    if not m or not manifest_path.exists():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        canvases = iter_canvas_images(manifest, _sibling_width(image_path) or DEFAULT_WIDTH)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Cannot read {manifest_path}: {exc}", file=sys.stderr)
+        return False
+    index = int(m.group(1))
+    if not 1 <= index <= len(canvases):
+        return False
+    image_id, url, _, _ = canvases[index - 1]
+    if image_path.name != f"{index:04d}_{image_id}.jpg":
+        return False
+    try:
+        download_file(new_session(), url, image_path, delay)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Download failed for {image_path.name}: {exc}", file=sys.stderr)
+        return False
+    return image_is_complete(image_path)
 
 
 def _iiif_403_status(exc: Exception) -> bool:
@@ -378,8 +507,14 @@ def _download_item_images(
     width: int,
     delay: float,
     quiet: bool,
-) -> tuple[int, int]:
-    """Download canvas images for one item. Returns (n_downloaded, n_skipped)."""
+) -> "tuple[int, int, list[int]]":
+    """Download canvas images for one item.
+
+    Returns (n_downloaded, n_skipped, missing), where *missing* lists the
+    positions whose image is still not complete on disk afterwards, whatever the
+    reason. A failed page used to print a warning and then vanish from the
+    summary, so a run reported success with pages absent.
+    """
     total_downloaded = 0
     total_skipped = 0
     capped_warned = False
@@ -394,6 +529,19 @@ def _download_item_images(
             )
             capped_warned = True
         dest = item_dir / f"{i:04d}_{image_id}.jpg"
+
+        # A corrupt page left by an interrupted run is repaired at the width the
+        # rest of the volume was fetched at, not this run's --width, the same way
+        # the OCR stages repair one they find.
+        if dest.exists() and not image_is_complete(dest):
+            if redownload_page(dest, delay):
+                total_downloaded += 1
+                if not quiet:
+                    print(f"    [{i:04d}] Downloaded again (was corrupt) → {dest}", file=sys.stderr)
+            else:
+                print(f"    [{i:04d}] Warning: corrupt, and no complete copy could be "
+                      f"downloaded — {primary_url}", file=sys.stderr)
+            continue
 
         try:
             downloaded = download_file(session, primary_url, dest, delay)
@@ -469,7 +617,17 @@ def _download_item_images(
             else:
                 print(f"    [{i:04d}] Warning: {exc} — {primary_url}", file=sys.stderr)
 
-    return total_downloaded, total_skipped
+    missing = [i for i, (image_id, *_rest) in enumerate(canvas_images, start=1)
+               if not image_is_complete(item_dir / f"{i:04d}_{image_id}.jpg")]
+    return total_downloaded, total_skipped, missing
+
+
+def _report_missing(missing: int) -> None:
+    """Say how many pages are missing, and how to fetch them, when any are."""
+    if missing:
+        print(f"{missing} page(s) failed to download. Re-run to fetch them: existing "
+              "pages are skipped, so only the missing ones are requested.",
+              file=sys.stderr)
 
 
 def main() -> None:
@@ -542,13 +700,7 @@ def main() -> None:
         parser.print_help(sys.stderr)
         sys.exit(1)
 
-    session = requests.Session()
-    session.headers["Accept"] = "application/json"
-    session.headers["User-Agent"] = (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    )
+    session = new_session()
 
     # ── Manifest mode ──────────────────────────────────────────────────────
     if args.manifest:
@@ -597,15 +749,19 @@ def main() -> None:
         if not args.quiet:
             print(f"{len(canvas_images)} page(s) to download.", file=sys.stderr)
 
-        total_downloaded, total_skipped = _download_item_images(
+        total_downloaded, total_skipped, missing = _download_item_images(
             canvas_images, out_root, session, args.width, args.delay, args.quiet,
         )
 
         if not args.quiet:
             print(
-                f"\nDone. {total_downloaded} downloaded, {total_skipped} skipped.",
+                f"\nDone. {total_downloaded} downloaded, {total_skipped} skipped, "
+                f"{len(missing)} failed.",
                 file=sys.stderr,
             )
+        _report_missing(len(missing))
+        if missing:
+            sys.exit(1)
         return
 
     # ── CSV mode ───────────────────────────────────────────────────────────
@@ -640,6 +796,7 @@ def main() -> None:
     total_downloaded = 0
     total_skipped = 0
     items_processed = 0
+    total_missing = 0
 
     with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -687,19 +844,23 @@ def main() -> None:
         if not args.quiet:
             print(f"  {len(canvas_images)} page(s) to download.", file=sys.stderr)
 
-        dl, sk = _download_item_images(
+        dl, sk, miss = _download_item_images(
             canvas_images, item_dir, session, args.width, args.delay, args.quiet,
         )
         total_downloaded += dl
         total_skipped += sk
+        total_missing += len(miss)
         items_processed += 1
 
     if not args.quiet:
         print(
             f"\nDone. {items_processed} item(s) processed: "
-            f"{total_downloaded} downloaded, {total_skipped} skipped.",
+            f"{total_downloaded} downloaded, {total_skipped} skipped, {total_missing} failed.",
             file=sys.stderr,
         )
+    _report_missing(total_missing)
+    if total_missing:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,32 @@ A tiered review of what to borrow from [`UNDP-Serbia/lorya_`](https://github.com
 
 A phased implementation plan for a `detect_sections` stage — auto-drafts `sections.txt` for multi-section city directories (alphabetical / street / classified / frontmatter) so per-section NER prompts route correctly — lives at `docs/plans/section-detection-plan.md` (created 2026-06-15). The consumer side (`utils/section_utils.py` + `extract_entries.py`) already exists; only the producer is missing. Read it before starting section-detection work; best implemented locally where the gitignored `output/` data is on disk.
 
+## Deferred work: 21 degenerate Green Book pages
+
+21 pages in `output/green_books_and_related/` have runaway Gemini OCR (`long_line` /
+`block_loop` / `repetition`) and cannot be re-OCR'd with the model that produced the rest
+of the collection — **`gemini-2.0-flash` was retired and returns 404 as of 2026-09-04**.
+Fixing them needs per-page (not per-directory) alignment-model selection. Page list,
+blocker detail and the two implementation options: `docs/plans/degenerate-page-reocr.md`
+(created 2026-09-04). It waited on the re-align and entry-binder work, both in 0.3.
+
+## Deferred work: mid-page body lines hoisted as headers
+
+`plan_columns()` hoists any gutter-crossing line ≥30% of page width, wherever it sits, and
+gutters sit at a coverage-valley midpoint, so long ragged-right entries qualify. That
+mis-binds ~450 lines on 1,676 pages. It also trips Guard 1 on 960 more pages, which then
+lose per-column alignment. Evidence: `docs/evidence/2026-09-22-gutter-hoist/`. The
+suggested branch (a "band of its own" test in `is_header`), how to measure it, and the
+rollout: `docs/plans/gutter-hoist-fix.md` (created 2026-09-23).
+
+## Evaluation: TypeSafe AI's Jev
+
+An assessment of [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) — TypeSafe AI's non-generative "System One" model (launched 2026-09-15) that returns calibrated typed decisions (`Noul` / `Choice` / `Score`) instead of text — lives at `docs/plans/jev-evaluation.md` (created 2026-09-20). **Bottom line: Jev cannot do NER or OCR** (it does not generate text, and rejects unconstrained string fields), so it is not a replacement for `extract_entries.py`, the sibling repo's Qwen fine-tune, or anything in the Hugging Face plan. It *is* a candidate for the routing/gating layer: non-entry rejection before NER, `detect_sections` Phase 5 boundary adjudication, and the `_INFER_RULES` category residue. Read it before evaluating any classification-only model backend; nothing is committed to, and the doc proposes one measured shadow run before any wiring.
+
+## Planned work: publication-ready data explorer
+
+A prioritized plan for turning the auto-generated explorer into a deployable data publication — a site emitter (`.nojekyll`, `404.html`, `data/`, `datapackage.json`, Pages workflow), IIIF rights/attribution and pipeline provenance surfacing, an OCR-tolerant search index, table virtualization (the current 2,000-row cap makes later entries unreachable), all-volumes mode, and a map tab — lives at `docs/plans/explorer-improvements.md` (created 2026-08-23). Every proposal is gated on capability detection so the explorer stays source-agnostic. Read it before doing explorer work.
+
 ## Setup
 
 ```bash
@@ -78,14 +104,115 @@ Full filename contract (who writes/reads every artifact, model auto-detection ru
 - **`--flex`** — Flex inference (`service_tier="flex"`): ~50% cheaper than standard pricing, with 1–15 min latency per request. Best for large volumes where real-time throughput isn't needed. Flex is **on by default** everywhere (`pipeline run`/`guided`/`ocr`/`extract` and `python main.py`) — pass `--no-flex` for time-sensitive runs. Only direct invocation of the leaf scripts (`pipeline/run_gemini_ocr.py`, `pipeline/extract_entries.py`) keeps `--flex` opt-in.
 - **Batch API** (not yet implemented) — Submit all pages as a single async job; 50% cheaper, up to 24-hour turnaround. Planned for future implementation.
 
-Default model is `gemini-3.1-flash-lite` for both OCR and NER (constants in `utils/models.py`). For higher accuracy use `--ocr-model gemini-2.0-flash`.
+Default model is `gemini-3.1-flash-lite` for both OCR and NER, with `gemini-3.8-flash` for
+prompt generation and as the dense-page fallback (constants in
+`utils/models.py`). For higher accuracy pass `--ocr-model gemini-3.8-flash`; do not reach
+for `gemini-2.0-flash`, which is retired (see above).
+
+OCR and its escalation call sample at `DEFAULT_OCR_TEMPERATURE` (0.1 from 0.3 on; it was
+0.0). That value comes from run experience and has not been measured. The planned
+0.0 / 0.1 / 1.0 comparison is under "After 0.3" in `docs/plans/release-0.3.md`. NER stays at
+`DEFAULT_NER_TEMPERATURE` = 0.0 on purpose, so don't unify the two. Its comment in
+`utils/models.py` says why, and what evidence would justify raising it.
+
+**Changing a model default means checking `thinking_config_for()` in `utils/gemini.py`.**
+These stages want thinking minimized, and how you ask for that changed mid-family. The
+`thinking_budget=0` sentinel is rejected outright by `gemini-3.5-flash-lite` (a 400 on
+every call — it took out the OCR and NER defaults entirely), while non-lite 3.x flash
+models accept it and think anyway, billing thought tokens the caller believes it disabled.
+3.x lite models take `thinking_level="minimal"`; non-lite 3.x take `"low"` as their real
+floor. The measured table is in that function's docstring and pinned by
+`tests/test_gemini.py`, which walks every constant in `utils/models.py` — so a bad bump
+fails there rather than in production.
+
+`--max-output-tokens` (default 24576) caps output per OCR call, bounding the cost of a page
+that starts looping. Truncation is reported as a `WARNING` and the partial page is still
+written, so raise it if dense pages come back short; `0` disables the cap.
+
+## Degenerate-output detection
+
+`_output_issue()` in `run_gemini_ocr.py` classifies a page and returns `(kind, message)` —
+branch on `kind`, never on `message` (it embeds page content). Four failure modes:
+
+| kind | what it catches |
+|------|-----------------|
+| `leader` / `spaced_leader` / `long_line` | dot-leader runaways |
+| `repetition` | one identical line is ≥40% of the page |
+| `template_loop` | ≥50 consecutive lines identical once digits collapse to `#`, covering ≥50% of the page — counting runaways where every line is distinct |
+| `block_loop` | a page ≥200 lines with <35% distinct lines — a short block cycled for the whole page |
+
+Thresholds are measured, not guessed: see `docs/evidence/2026-09-02-ocr-token-burn/` and
+`tests/test_run_gemini_ocr.py`. The false-positive tests there are the important half —
+hotel rate tables, street/house-number sections and statistical tables all repeat a digit
+template legitimately, and a page wrongly flagged gets sent through a retry ladder that can
+replace a clean transcription with a worse one.
+
+Loop failures skip the temperature rungs (they never rescue a loop) and go straight to the
+simple-prompt fallback. Every attempt is kept as a candidate and the best is chosen at the
+end, ranked by distinct line count — raw length would systematically select the runaway.
+
+## Blank pages
+
+`is_blank_page()` (`utils/image_utils.py`) gates every Gemini OCR call. A page it skips
+writes no `.txt` and drops out of align and extract without a trace, so it is tuned to keep any
+page with ink. Until 2026-10-16 it measured a 512 px thumbnail at 0.5 × background and
+skipped 1,142 pages that had text. The fixed rule (1,600 px, 0.75 ×, 0.1%) and its measurement:
+`docs/evidence/2026-10-16-blank-page/`. `--no-blank-skip` OCRs every page regardless.
+
+OCR written before the check existed (2026-06-11) can be text Gemini invented for a blank
+page. 44 such pages were quarantined on 2026-10-17 under
+`output/_quarantine/hallucinated-blank-pages-2026-10-17/`. Restoring the 2026-09-04 alignment
+backup puts 50 of their files back unless you pass that folder's `exclude-from-restore.txt` to
+`tar -X`.
 
 ## Surya and alignment
 
 - `--surya-ocr` requires GPU or Apple Silicon; slow on CPU
 - `--align-ocr` uses Needleman-Wunsch with city/state headings as anchors; runs a second pass on unmatched lines to catch missed columns
+- Multi-column pages are resolved by `plan_columns()` (coverage-valley gutter detection, any number of columns) and each column is aligned against its own slice of the Gemini text, so a bad anchor can no longer corrupt the rest of the page. Two guards revert to whole-page alignment: an over-large hoisted header group, and a Surya:Gemini line ratio that indicates Gemini read *across* the columns (common in city-directory cross-reference tables)
+- When the column path completes, `_alignment_cost()` (unboxed lines + inversion rate) picks between it and whole-page. That is right where it runs: travel guides and national/business directories. **On city directories the column path rarely completes** (Guard 1 via the gutter hoist on two-column pages, no locatable column start on dense ones), so the rule rarely runs there. The 2026-09-04 evidence's "fails on city directories" table was a harness artifact; see its erratum and `docs/evidence/2026-10-17-column-alignment-panel/`
+- A no-gold placement check: compare each aligned line's `gemini_text` with Surya's own text at the same bbox (`tools/compare_alignments.py` scores this between two alignments, with geometric metrics beside it). Pages where most bound lines disagree are mis-bound even when nearly everything is boxed, which the unmatched-rate outlier report cannot see
 - `--review-alignment` is a Flask server — access via `localhost:5000` locally or ngrok/Colab proxy in Colab
 - Aligned JSON confidence values: `"line"` (Surya), `"manual"` (user-confirmed via review UI)
+
+## Entry binding (entry → aligned line)
+
+`utils/entry_binding.py` decides which aligned line an extracted entry came from, and is
+shared by `extract_entries.py` and `tools/patch_canvas_fragments.py` — they used to keep
+separate copies and both copies had the same bug.
+
+The rule that matters: **only identity fields may supply a box.** The old matcher fell
+through to every string field over three characters, guarded by a denylist of four field
+names. `category` was not on it, and in a Green Book a category value *is* the printed
+section heading — 489 of ~900 attributable misplacements came from an entry matching its
+own category to the heading line. A denylist cannot govern a vocabulary each collection's
+NER prompt invents, so the guard is now an allowlist keyed on field *shape*: `line_text`,
+`name`, `subject`, `title`, anything ending `_name`, plus address-like fields.
+
+Three scoring decisions were measured rather than reasoned, and the two intuitive ones
+lost — don't re-propose them without re-measuring:
+
+- **Monotonic reading-order constraint** (entries arrive in reading order, so their lines
+  should too): much worse, 251 regressions, refused bindings scoring a perfect 1.0. NER
+  entry order does not reliably track aligned-line order. Reading order is reported by
+  `order_violations()` as a diagnostic and never constrains the match.
+- **Recall-weighted scoring** instead of token-set F1: worse on both axes.
+- **What works**: F1 at floor 0.34, plus containment (a line carrying tariff notation
+  shares every token of the name but scores 0.36), plus a name-only fallback for entries
+  whose address wrapped to the next line.
+
+Refusing is a result. An entry with no confident match gets no box rather than a best
+guess — a confidently wrong box is the failure this exists to prevent. Refusals land in
+`unplaced_entries` in each page's `*_entries.json`; collate them with
+`tools/collate_review_queue.py`.
+
+`tools/audit_entry_bindings.py` measures placement without ground truth and is the
+before/after checkpoint for any change to alignment or binding. **Coverage is not
+placement** — that distinction cost this project several wrong conclusions; unmatched-rate
+cannot see whether a box landed on the right line.
+
+Cross-repo handoff for the 2026-09-04 audit and the outstanding policy decision:
+`../green-books/docs/alignment-audit-2026-09-04.md`.
 
 ## Supported sources
 
@@ -104,6 +231,10 @@ Run `--select-pages` and `--generate-prompts` once per collection type. For addi
 ## Output schema
 
 Every row in the CSV has a `canvas_fragment` column — a IIIF URI pointing back to the exact page (with `#xywh=` bounding box if alignment was run). The slug is auto-derived from collection metadata; override with `--slug`.
+
+A volume with a `sections.txt` also gets a `volume_section` column: the structural section
+each row came from, which drives the explorer's section switch. It is deliberately not
+`section`, a name several NER schemas already use for their own field.
 
 After each run, `pipeline_state.json` is written to `output/{slug}/` recording the model used, the stages completed, and the command line behind the most recent write (`last_run_args`). Both `main.py` and the OCR/align/extract leaf scripts write it, so re-running a single stage directly keeps it current. Downstream scripts (`align_ocr.py`, `fix_entries.py`) read it automatically — no `--model` flag needed.
 
@@ -135,6 +266,37 @@ These scripts operate on already-extracted CSVs — they do not run pipeline sta
 | `visualize_entries.py` | Draw entry bounding boxes colored by category. |
 | `review_entries.py` | Send extracted CSV to Gemini for systematic data-quality review. |
 | `check_manifest_staleness.py` | Compare cached `manifest.json` against live IIIF manifests to detect canvas-count drift after collection updates. |
+
+### Which collections count as evaluation data
+
+`output/` holds production volumes beside source probes, five-page evidence
+slices, backup directories and one-off genre experiments — 186 directories, 54 of
+them production. Cross-collection analysis must not average them together: a
+table in this repo once reported `_ocr_backups` (6,862 aligned files, zero
+images) as a collection, and an alignment threshold was argued for partly on the
+copyright ledgers, which are a pipeline test.
+
+`utils/collections.py` resolves this from two files, split on whether a rule is
+true for anyone or only for one working copy:
+
+- **`analysis/collection_registry.txt`** (tracked) — rules whose directories the
+  pipeline itself creates: `ia_*`/`nypl_*`/`loc_*` from `sources/`, `harvest_*`
+  from the evidence harness, `_*` from backup tooling. These fire in a fresh
+  clone.
+- **`analysis/collection_registry.local.txt`** (gitignored, see the `.example`)
+  — judgements about your own material: which volumes were manuscript tests,
+  which genres you tried once. A local `include` overrides a shared `exclude`.
+
+**Unregistered collections are kept.** Production is the norm and a new volume
+must not vanish from an evaluation because nobody registered it; the tools print
+what they excluded so the opposite mistake stays visible. `report_cost.py` and
+`analyze_retry_ladder.py` take `--all-collections` to opt back in, and a path
+naming one volume directly is always honoured.
+
+The same split is the general rule for anything in this repo: **if a collection
+name appears in the code, it is local; if the collection is an argument, it can
+be shared.** That is also the test for when a script graduates from
+`collections/` to `tools/`.
 
 ### Collection-specific scripts (`collections/` — local-only, not tracked in this repo)
 

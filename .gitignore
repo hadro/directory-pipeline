@@ -56,3 +56,5 @@ pipeline/output/*
 
 # Expose skills
 !.claude/skills/*
+# Corpus-specific collection exclusions (see collection_registry.local.txt.example)
+analysis/collection_registry.local.txt

@@ -20,8 +20,15 @@ def _resource_url_to_item_url(resource_url: str) -> str:
         return resource_url
     # Strip ?sp= page parameter before querying the API
     base = re.sub(r"\?.*", "", resource_url).rstrip("/")
+    # Ask the API about the resource, not about its manifest: www.loc.gov
+    # manifest URLs are Cloudflare-blocked for non-browser clients, so
+    # '…/manifest.json?fo=json' 403s and drops us into the fallback below.
+    for suffix in ("/manifest.json", "/manifest"):
+        if base.lower().endswith(suffix):
+            base = base[: -len(suffix)]
+            break
     try:
-        resp = requests.get(f"{base}?fo=json", timeout=15)
+        resp = requests.get(f"{base}/?fo=json", timeout=15)
         resp.raise_for_status()
         data = resp.json()
         # The JSON 'item' key usually contains a dict with an 'id' or 'link' field
@@ -33,15 +40,25 @@ def _resource_url_to_item_url(resource_url: str) -> str:
             return link.rstrip("/") + "/"
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: could not resolve LoC resource URL {resource_url}: {exc}", file=sys.stderr)
-    # Fallback: swap /resource/ → /item/ in the path
-    return re.sub(r"/resource/", "/item/", resource_url.split("?")[0]).rstrip("/") + "/"
+    # Fallback: a bare /resource/{id} URL maps onto /item/{id}.  A URL that is
+    # already under /item/ — '/item/{id}/resource/{resource_id}/', one digitized
+    # volume of a serial — keeps the path it arrived with; swapping /resource/
+    # there would invent a second /item/ segment and lose the volume.
+    if "/item/" in base:
+        return base + "/"
+    return base.replace("/resource/", "/item/") + "/"
 
 
-def _fetch_loc_title(item_id: str) -> str:
-    """Best-effort fetch of a LoC item title from the public JSON API."""
+def _fetch_loc_title(item_path: str) -> str:
+    """Best-effort fetch of a LoC item title from the public JSON API.
+
+    *item_path* is everything after /item/ — usually a bare item ID, but it may
+    carry a sub-resource ('sn82007064/resource/gdc.sn82007064_1869'), in which
+    case the title returned is the volume's rather than the serial's.
+    """
     try:
         resp = requests.get(
-            f"https://www.loc.gov/item/{item_id}/?fo=json",
+            f"https://www.loc.gov/item/{item_path}/?fo=json",
             timeout=15,
         )
         resp.raise_for_status()
@@ -50,7 +67,7 @@ def _fetch_loc_title(item_id: str) -> str:
             return str(v[0]).strip() if v else ""
         return str(v).strip() if v else ""
     except Exception as exc:  # noqa: BLE001
-        print(f"Warning: could not fetch LoC title for {item_id}: {exc}", file=sys.stderr)
+        print(f"Warning: could not fetch LoC title for {item_path}: {exc}", file=sys.stderr)
         return ""
 
 
@@ -83,6 +100,11 @@ def loc_slug(url: str) -> str:
     For Chronicling America issue URLs (/item/{lccn}/{date}/ed-{edition}/)
     the date and edition are appended so each issue gets a unique slug:
         /item/sn83030313/1847-05-01/ed-1/ → 'the_new_york_herald_..._sn83030313_1847_05_01_ed1'
+
+    Likewise for a single digitized volume of a serial
+    (/item/{id}/resource/{resource_id}/), where the resource id is appended:
+        /item/sn82007064/resource/gdc.sn82007064_1869/
+            → '1869_geo_p_rowell_..._sn82007064_gdc_sn82007064_1869'
     """
     m = re.search(r"/collections/([^/?#]+)", url)
     if m:
@@ -95,6 +117,16 @@ def loc_slug(url: str) -> str:
         base = _make_loc_slug(title, lccn)
         date_slug = date.replace("-", "_")
         return f"{base}_{date_slug}_ed{edition}"
+    # One digitized volume of a serial: /item/{id}/resource/{resource_id}/.
+    # Every volume of the serial shares {id}, so the resource id has to reach
+    # the slug — otherwise the 1869 and 1870 volumes are the same directory.
+    m = re.search(r"/item/([^/?#]+)/resource/([^/?#]+)", url)
+    if m:
+        item_id, resource_id = m.group(1), m.group(2)
+        title = _fetch_loc_title(f"{item_id}/resource/{resource_id}")
+        base = _make_loc_slug(title, item_id)
+        res_slug = re.sub(r"[^a-z0-9]+", "_", resource_id.lower()).strip("_")
+        return f"{base}_{res_slug}"
     m = re.search(r"/(?:item|resource)/([^/?#]+)", url)
     if m:
         item_id = m.group(1).rstrip("/")

@@ -55,10 +55,11 @@ _JITTER = 0.018   # ~2 km — applied only to city-level fallback coords
 
 def _build_canvas_service_map(
     search_root: Path,
-) -> dict[str, tuple[str, int, int, str]]:
+) -> dict[str, tuple[str, int, int, str, int]]:
     """Walk search_root for manifest.json files.
 
-    Returns {canvas_id: (service_id, canvas_w, canvas_h, viewer_url)}.
+    Returns {canvas_id: (service_id, canvas_w, canvas_h, viewer_url,
+    image_api_version)}.
 
     canvas_w / canvas_h reflect the coordinate space that canvas_fragment
     values in aligned.json were generated in — NOT necessarily the manifest
@@ -70,7 +71,7 @@ def _build_canvas_service_map(
     viewer_url is a deep-link into the institution's viewer (e.g. NYPL Digital
     Collections with ?canvasIndex=N); empty string for unknown institutions.
     """
-    mapping: dict[str, tuple[str, int, int, str]] = {}
+    mapping: dict[str, tuple[str, int, int, str, int]] = {}
     for manifest_path in search_root.rglob("manifest.json"):
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -90,6 +91,7 @@ def _build_canvas_service_map(
                 canvas["canvas_width"],
                 canvas["canvas_height"],
                 viewer_url,
+                canvas.get("service_version", 2),
             )
 
     # Override canvas_w / canvas_h with the coordinate space recorded in each
@@ -106,15 +108,15 @@ def _build_canvas_service_map(
         aw = int(aligned.get("canvas_width") or 0)
         ah = int(aligned.get("canvas_height") or 0)
         if canvas_id and aw and ah and canvas_id in mapping:
-            svc_id, _, _, viewer_url = mapping[canvas_id]
-            mapping[canvas_id] = (svc_id, aw, ah, viewer_url)
+            svc_id, _, _, viewer_url, version = mapping[canvas_id]
+            mapping[canvas_id] = (svc_id, aw, ah, viewer_url, version)
 
     return mapping
 
 
 def _iiif_region_url(
     canvas_fragment: str,
-    service_map: dict[str, tuple[str, int, int, str]],
+    service_map: "dict[str, tuple]",
     thumb_width: int = 220,
     pad: int = 40,
 ) -> str:
@@ -155,9 +157,20 @@ def _iiif_region_url(
     y_pct = ry / canvas_h * 100
     w_pct = rw / canvas_w * 100
     h_pct = rh / canvas_h * 100
+    # Never ask for a width at or above the region's own pixel count. An image
+    # service asked to upscale serves from a coarse pyramid level and compresses
+    # far harder: on tile.loc.gov a 737px-wide crop requested at 800 came back
+    # 3 KB against 40 KB for the same region at /full/, visually unreadable. With
+    # pct: even the native width trips it, because the percentage rounds down and
+    # the request becomes an upscale. thumb_width is small enough that this is
+    # usually a downscale anyway, but a narrow region would otherwise hit it.
+    # The keyword for "the region's own pixels" depends on the Image API version
+    # (see iiif_utils.full_size); entries without a version are treated as v2.
+    version = entry[4] if len(entry) > 4 else 2
+    size = iiif_utils.full_size(version) if rw <= thumb_width else f"{thumb_width},"
     return (
         f"{service_id}/pct:{x_pct:.4f},{y_pct:.4f},"
-        f"{w_pct:.4f},{h_pct:.4f}/{thumb_width},/0/default.jpg"
+        f"{w_pct:.4f},{h_pct:.4f}/{size}/0/default.jpg"
     )
 
 
