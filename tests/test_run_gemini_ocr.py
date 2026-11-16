@@ -25,6 +25,7 @@ from pipeline.run_gemini_ocr import (
     _output_issue,
     process_image,
 )
+from utils.gemini import CreditsExhausted
 from utils.models import DEFAULT_OCR_TEMPERATURE
 
 
@@ -440,3 +441,74 @@ def test_a_wholly_blocked_page_still_reaches_the_simple_prompt(page):
     prompts = [c["config"].system_instruction for c in client.calls]
     assert any("Transcribe all text on this page exactly" in (p or "") for p in prompts), \
         "expected the simple fallback prompt to be tried"
+
+
+# ---------------------------------------------------------------------------
+# Out of credit
+# ---------------------------------------------------------------------------
+
+_OUT_OF_CREDIT = ("402 RESOURCE_EXHAUSTED. {'error': {'code': 402, 'message': "
+                  "'Your prepayment credits are depleted.', 'status': 'RESOURCE_EXHAUSTED'}}")
+
+
+class _Refused:
+    """Fake client whose every call is refused for lack of credit."""
+
+    def __init__(self):
+        self.calls = 0
+        self.models = self
+
+    def generate_content(self, *, model, config, contents):
+        self.calls += 1
+        raise RuntimeError(_OUT_OF_CREDIT)
+
+
+def test_out_of_credit_leaves_the_page_without_walking_the_ladder(page, monkeypatch):
+    """No rung can succeed without credit. Each refused call used to be backed off
+    as a rate limit (10+20+40+80 s) before the page failed."""
+    import utils.gemini as gemini_mod
+
+    monkeypatch.setattr(gemini_mod.time, "sleep", lambda s: pytest.fail(f"slept {s}s"))
+    client = _Refused()
+
+    with pytest.raises(CreditsExhausted):
+        _run(client, page, fallback_model="gemini-3.8-flash")
+
+    assert client.calls == 1
+    assert not (page.parent / "0001_page_gemini-3.1-flash-lite.txt").exists()
+
+
+def test_running_out_of_credit_stops_the_run(tmp_path, monkeypatch, capsys):
+    """The rest of the volume would be refused the same way, so the stage stops
+    rather than failing every remaining page. Seen 2026-11-09: 20 pages, each
+    refused after four backoffs, before the run reported anything."""
+    import sys
+
+    import pipeline.run_gemini_ocr as mod
+
+    for i in range(1, 7):
+        (tmp_path / f"{i:04d}_page.jpg").write_bytes(b"\xff\xd8\xff\xe0")
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("PROMPT", encoding="utf-8")
+    attempted = []
+
+    def refused(client, image_path, *args, **kwargs):
+        attempted.append(image_path.name)
+        raise CreditsExhausted(_OUT_OF_CREDIT)
+
+    monkeypatch.setattr(mod, "process_image", refused)
+    monkeypatch.setattr(mod, "get_client", lambda: object())
+    monkeypatch.setattr(sys, "argv", ["run_gemini_ocr", str(tmp_path),
+                                      "--prompt-file", str(prompt), "--workers", "1"])
+
+    with pytest.raises(SystemExit) as info:
+        mod.main()
+
+    assert info.value.code == 1
+    # The single worker may already have picked up the next page before the
+    # main thread cancels the queue; nothing beyond that may start.
+    assert attempted[0] == "0001_page.jpg"
+    assert len(attempted) <= 2
+    err = capsys.readouterr().err
+    assert "lack of credit" in err
+    assert "prepayment credits are depleted" in err

@@ -199,6 +199,29 @@ def reset_usage() -> None:
         _usage.clear()
 
 
+class CreditsExhausted(RuntimeError):
+    """The API refused a call because the project cannot pay for it.
+
+    Raised in place of the client's own error so a stage can stop the run: every
+    later call is refused the same way, so neither a retry nor the next page can
+    succeed until someone adds credit.
+    """
+
+
+def _is_out_of_credit(exc: Exception) -> bool:
+    """402: the project's prepaid credit is spent.
+
+    Its status is RESOURCE_EXHAUSTED, the same as a 429, so this must be tested
+    before _is_rate_limit or it is backed off like a transient rate limit. On
+    2026-11-09 that turned 20 refused pages into ~2.5 minutes each of 10/20/40/80 s
+    sleeps. The response reads "402 RESOURCE_EXHAUSTED. {'error': {'code': 402,
+    'message': 'Your prepayment credits are depleted. ...'}}".
+    """
+    if getattr(exc, "code", None) == 402:
+        return True
+    return str(exc).startswith("402 ")
+
+
 def _is_rate_limit(exc: Exception) -> bool:
     s = str(exc)
     return "429" in s or "RESOURCE_EXHAUSTED" in s
@@ -239,6 +262,7 @@ def generate_with_retry(
     *max_retries* attempts with delays doubling from *base_delay*,
     *max_503_retries* attempts doubling from *base_503_delay*, and
     *max_500_retries* attempts doubling from *base_500_delay* respectively.
+    A 402 (prepaid credit spent) raises CreditsExhausted on the first attempt.
     Anything else raises immediately.
 
     500s get a shorter starting delay than 503s: they are per-request faults
@@ -264,6 +288,8 @@ def generate_with_retry(
             record_usage(model, response, tier, reason)
             return response
         except Exception as exc:
+            if _is_out_of_credit(exc):
+                raise CreditsExhausted(str(exc)) from exc
             if _is_rate_limit(exc) and attempt_429 < max_retries - 1:
                 attempt_429 += 1
                 log(f"  Rate limited — retrying{tag} in {delay_429:.0f}s (attempt {attempt_429}/{max_retries - 1})")

@@ -14,8 +14,10 @@ import pytest
 import utils.gemini as gemini_mod
 from utils.gemini import (
     PRO_THINKING_BUDGET,
+    CreditsExhausted,
     _gemini_version,
     _is_internal,
+    _is_out_of_credit,
     _is_rate_limit,
     _is_unavailable,
     flex_http_options,
@@ -34,6 +36,16 @@ from utils.models import (
 class Boom(Exception):
     """Stand-in for google.genai's exception types, which stringify to
     messages like "500 INTERNAL. {'error': {'code': 500, ...}}"."""
+
+
+# Verbatim from a refused call, 2026-11-09.
+_OUT_OF_CREDIT = (
+    "402 RESOURCE_EXHAUSTED. {'error': {'code': 402, 'message': 'Your prepayment "
+    "credits are depleted. Please go to AI Studio at https://ai.studio/projects to "
+    "manage your project and billing. Learn more at "
+    "https://ai.google.dev/gemini-api/docs/billing#prepay. ', 'status': "
+    "'RESOURCE_EXHAUSTED'}}"
+)
 
 
 class _FakeModels:
@@ -98,6 +110,19 @@ class TestClassifiers:
         # Both predicates are substring matches; "503" must not read as "500".
         assert not _is_internal(Boom("503 UNAVAILABLE"))
 
+    def test_out_of_credit_is_the_402_not_every_resource_exhausted(self):
+        # A spent prepayment shares RESOURCE_EXHAUSTED with a 429 rate limit;
+        # only the code tells them apart.
+        assert _is_out_of_credit(Boom(_OUT_OF_CREDIT))
+        assert not _is_out_of_credit(Boom("429 RESOURCE_EXHAUSTED"))
+        assert not _is_out_of_credit(Boom("RESOURCE_EXHAUSTED"))
+
+    def test_out_of_credit_reads_the_client_error_code(self):
+        from google.genai import errors
+
+        exc = errors.ClientError(402, {"error": {"code": 402, "status": "RESOURCE_EXHAUSTED"}})
+        assert _is_out_of_credit(exc)
+
 
 # ---------------------------------------------------------------------------
 # Retry behaviour
@@ -127,6 +152,16 @@ def test_internal_error_recovers(slept):
     assert _call(client) == "RESPONSE"
     assert client.models.calls == 3
     assert slept == [5.0, 10.0]          # base_500_delay doubling
+
+
+def test_out_of_credit_raises_on_the_first_attempt_without_waiting(slept):
+    """It used to match _is_rate_limit and back off 10/20/40/80 s per call."""
+    client = _FakeClient([_OUT_OF_CREDIT] * 5)
+    with pytest.raises(CreditsExhausted, match="prepayment credits are depleted") as info:
+        _call(client)
+    assert client.models.calls == 1
+    assert slept == []
+    assert isinstance(info.value.__cause__, Boom)
 
 
 def test_rate_limit_recovers(slept):

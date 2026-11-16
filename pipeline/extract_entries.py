@@ -56,6 +56,7 @@ load_dotenv()
 from google.genai.types import GenerateContentConfig, Part
 
 from utils.gemini import (
+    CreditsExhausted,
     flex_http_options,
     generate_with_retry,
     get_client,
@@ -533,6 +534,8 @@ def _run_ner_call(
     # Primary API call
     try:
         last_raw = _call_gemini(client, model, system_prompt, user_msg, image_path, service_tier)
+    except CreditsExhausted:
+        raise  # every later page is refused the same way; main() stops the run
     except Exception as exc:
         return None, False, str(exc)
     result = _parse_json_response(last_raw)
@@ -547,6 +550,8 @@ def _run_ner_call(
             last_raw = _call_gemini(client, fallback_model, system_prompt, user_msg, image_path,
                                     service_tier, reason="ner:fallback")
             result = _parse_json_response(last_raw)
+        except CreditsExhausted:
+            raise
         except Exception as exc:
             _log(f"    [{page_name}] fallback model error: {exc}")
 
@@ -1570,13 +1575,25 @@ def main() -> None:
                 print(f"  NER prompt (per-item): {item_prompt_path}", file=sys.stderr)
         else:
             item_prompt = system_prompt
-        entries = process_item(
-            client, item_dir, args.model, item_prompt,
-            args.mode, args.force, args.dry_run, args.quiet, aligned_model,
-            fallback_model=fallback_model, service_tier=service_tier,
-            review_suspicious=review_suspicious,
-            sections=sections, all_files=all_files or None, slug_dir=sections_slug_dir,
-        )
+        try:
+            entries = process_item(
+                client, item_dir, args.model, item_prompt,
+                args.mode, args.force, args.dry_run, args.quiet, aligned_model,
+                fallback_model=fallback_model, service_tier=service_tier,
+                review_suspicious=review_suspicious,
+                sections=sections, all_files=all_files or None, slug_dir=sections_slug_dir,
+            )
+        except CreditsExhausted as exc:
+            # The CSV is left as it was: pages already extracted keep their
+            # entries files, so the re-run skips them and rebuilds it.
+            _flush_usage()
+            print(
+                f"Error: the Gemini API refused a call for lack of credit, so extraction "
+                f"stopped in {item_dir.name} and did not attempt the rest.\n  {exc}\n"
+                "Add credit, then re-run: pages already extracted are skipped.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         if not args.dry_run:
             csv_path = item_dir / f"entries_{slug}.csv"
             write_csv(entries, csv_path)

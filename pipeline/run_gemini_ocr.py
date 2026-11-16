@@ -42,6 +42,7 @@ from google.genai.types import (
 )
 
 from utils.gemini import (
+    CreditsExhausted,
     drain_usage,
     flex_http_options,
     generate_with_retry,
@@ -866,6 +867,7 @@ def main() -> None:
 
     state_dir = find_state_dir(output_root)
     pending_pages = 0
+    out_of_credit: "CreditsExhausted | None" = None
 
     def _flush_usage() -> None:
         """Persist usage accrued since the last flush. Safe to call repeatedly."""
@@ -886,6 +888,16 @@ def main() -> None:
                 completed += 1
                 try:
                     status, _ = future.result()
+                except CreditsExhausted as exc:
+                    # Every remaining call would be refused the same way, so stop
+                    # here rather than fail the rest of the volume page by page.
+                    # Pages already in flight finish (each fails on its first
+                    # call); queued ones never start.
+                    out_of_credit = exc
+                    counts["failed"] += 1
+                    for pending in futures:
+                        pending.cancel()
+                    break
                 except Exception as exc:  # noqa: BLE001
                     status = "failed"
                     _log(f"Warning: exception processing {image_path}: {exc}")
@@ -928,6 +940,16 @@ def main() -> None:
             f"{counts['empty']} empty, {counts['failed']} failed.",
             file=sys.stderr,
         )
+
+    if out_of_credit is not None:
+        print(
+            f"Error: the Gemini API refused a call for lack of credit, so the run stopped "
+            f"after {completed} of {total} page(s) and did not attempt the rest.\n"
+            f"  {out_of_credit}\n"
+            "Add credit, then re-run: pages without a .txt are retried.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Record the stage so a direct invocation updates pipeline_state.json the
     # same way an orchestrated run does (main.py is otherwise the only writer).
