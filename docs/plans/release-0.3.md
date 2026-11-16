@@ -6,8 +6,8 @@ and 2 are done locally, on branch `release-0.3`:
 - the docs pass and the version bump;
 - an end-to-end smoke run, and fixes for what it found.
 
-`release-0.3` is 49 commits ahead of local `main`, which is 13 ahead of `origin/main`. A clean
-checkout passes CI's steps: ruff, 670 tests passing with 16 skipped (the ones that need the
+`release-0.3` is more than 50 commits ahead of local `main`, which is 13 ahead of `origin/main`. A clean
+checkout passes CI's steps: ruff, 695 tests passing with 16 skipped (the ones that need the
 local registry), and the full dry-run matrix.
 
 Nothing is pushed yet. Remaining: Phase 0's pushes, then Phases 1, 3, 4 and 5.
@@ -296,10 +296,22 @@ skipped as existing; then re-run align and extract.
 **Models.** The defaults are:
 
 - `gemini-3.1-flash-lite` for OCR and NER
-- `gemini-3.7-flash` for prompt generation
-- `gemini-3.8-flash` as the fallback
+- `gemini-3.8-flash` for prompt generation and as the fallback
+
+Checked against the live API and Google's deprecation page on 2026-11-16:
+
+- `gemini-3.7-flash` was the prompt default until then. Google now serves 3.8 under that name
+  and no longer lists 3.7.
+- `gemini-3.1-flash-lite` has an announced shutdown of 2027-05-07, with `gemini-3.5-flash-lite`
+  as the replacement. It costs more per page (see `utils/models.py`), so the move is a 0.4
+  decision.
+- `gemini-3.8-flash` doubles in price on 2027-01-01, to $1.50 / $7.50.
 
 `gemini-2.0-flash` is retired and returns 404.
+
+OCR now samples at temperature 0.1 rather than 0.0 (decision 7). Two OCR runs of the same page
+will no longer return identical text. Existing `.txt` files are skipped as before, so only newly
+OCR'd pages are affected. NER stays at 0.0.
 
 ### Nits
 
@@ -360,6 +372,17 @@ A second review, and then the smoke run, turned up the following. Each is fixed 
 | `2a5d425` | On a 1924 phone book, `fix_entries` flagged 42 of 179 rows as duplicates: office and residence lines, and people sharing a surname. Where neither row has an address, a differing phone number now rules a pair out. No other CSV on disk changes. |
 | `cc48163` | `report_cost.py` billed extraction's calls to the OCR retry ladder: it reported 3.00 calls per page on a run with no retries. Extraction's calls are now tagged `ner`, `ner:fallback` and `ner:review`, and retries are counted from the tags. |
 | `aeb27b5` | `docs/pipeline-stages.md` and `tools/README.md` brought up to 0.3. |
+
+Found integrating the 1958 Green Book (2026-10-21, uncommitted; reported from the green-books
+session):
+
+| what |
+|---|
+| NER failures (`api_error`, `error:`, `parse_error`) were one log line each. The stage was still recorded complete and the run exited 0, so page 0078 was lost without a report. Extraction now names failed pages, prints them even under `--quiet`, doesn't record the stage, and exits 1. |
+| align_ocr's only signal for boxes scaled to a square placeholder canvas (info.json unreachable) was a per-page warning. The run summary now lists them with the repair commands, read back from disk. On the 1958 backup it flags exactly the five pages that rescale later found. |
+| `fix_entries --infer-categories` silently dropped every inferred category when the schema's category column is named `section`: 1,816 rows on 1958. The fix is the green-books session's one-line `detect_schema` edit; there is now a regression test. |
+| A 402 (prepaid credit spent, 2026-11-09) has the same status as a 429, so 20 refused pages each slept through the rate-limit backoff. It now raises `CreditsExhausted` on the first call, and both OCR and NER stop the run and exit 1 instead of failing the rest page by page. |
+| `rescale_canvas_fragments.py` and `patch_canvas_fragments.py` defaulted to `gemini-2.0-flash` (an era pin, `docs/refactor-plan.md` T1). They now default to the slug most common among aligned files under the directory, scanning the whole tree. That is still 2.0-flash on the Green Books root, and the current model on a new volume. |
 
 ### End-to-end smoke run (2026-10-17)
 
@@ -489,6 +512,22 @@ reaching for `--force`. Delete `ocr-retry-hardening` only after `v0.3.0` exists.
 
    The Tulsa box-vs-Surya regression fixture moves to 0.4, alongside the gutter-hoist work that
    needs it.
+7. **OCR's default temperature is 0.1, not 0.0; NER's stays 0.0** (2026-10-20). Both are
+   constants in `utils/models.py`, and each compare tool follows its own stage's constant.
+   - `DEFAULT_OCR_TEMPERATURE` covers the first OCR call and the escalation call. The retry
+     ladder keeps `[0.1, 0.3, 0.7]`, so its first rung is now a fresh draw at the default
+     rather than a step up. The change is based on run experience, not a paired measurement;
+     the measurement is listed under "After 0.3".
+   - `DEFAULT_NER_TEMPERATURE` stays 0.0 for three reasons:
+     - Sampling flips close calls. In NER those are judgments (category, field assignment,
+       ditto handling), so 0.1 would make the same kind of entry come out differently from
+       page to page.
+     - NER is re-run far more often than OCR, so that variation would churn rows across
+       re-extractions.
+     - It would add noise to every before/after comparison of NER output.
+
+     An unparseable NER response already gets one retry with the fallback model. None of the
+     10,944 extracted pages on disk has a leftover parse-error file.
 
 ## Release notes outline
 
@@ -502,6 +541,8 @@ Same shape as v0.2.0's.
 - Pages a safety filter blocked are retried, and reported as failed rather than as empty.
 - Timed-out downloads are retried, and pages still missing fail the stage.
 - Stage recording is gated on success, and `main.py` exits non-zero when a target fails.
+- Extraction names the pages NER failed on and exits non-zero.
+- A run stops at once when the API reports spent credit.
 - Manual alignments survive `--force`.
 - Old `[OCR FAILED]` placeholder files are deleted and retried.
 
@@ -530,7 +571,8 @@ Same shape as v0.2.0's.
 
 **Models and cost**
 
-- New defaults.
+- New defaults; `gemini-3.1-flash-lite` retires 2027-05-07.
+- OCR temperature 0.1 (was 0.0); NER stays at 0.0.
 - Per-generation `thinking_config_for()`.
 - Token usage persisted as a run proceeds, tagged by stage and retry rung.
 
@@ -592,11 +634,48 @@ Same shape as v0.2.0's.
   `city-directory-extraction` found the opposite failure on Lain 1897 p.0032: 317 micro-boxes
   averaging 16 characters. Mean line length alone does not separate them. Both failures are
   upstream of the matcher, like the `--blank-threshold` region-blob case.
+- re-examine Indra OCR for the review tool's drawn boxes (raised 2026-10-20).
+  `historical-ocr-eval` (commit `6bd9568`, `docs/plan.md` "Indra OCR") found that Indra's
+  reader on Surya's boxes matches Surya's alignment. Its recognition takes about 0.5 s per page,
+  against Surya's 160–312 s. Its own boxes fit worse: fit% 75.2 against 87.1, and 28–37% on
+  the dense Polk volumes.
+  - **What to change:** in `review_alignment.py`'s `/annotate`, keep Surya's detector on the
+    crop and swap only the recognizer. The recognized text is used only to match lines to
+    unmatched Gemini text and is never saved. The box *is* saved, as `"manual"`, and survives
+    `--force`, so Indra's detector must not supply it.
+  - **What to port:** `run_indra.py`'s confidence-gated split of tall Surya boxes. Without it
+    the hybrid fell to 62.8%. Leave orientation off.
+  - **How to measure, with no new labelling:** the 479 aligned pages that already carry
+    accepted manual lines. Re-run each crop with each reader, and count how often the
+    pre-checked (≥40%) match equals the line a person accepted.
+  - **Expected losses:** Fraktur and handwriting, which Indra cannot read, and noisy scans
+    such as Queens 1933.
+  - **The larger version:** the same hybrid inside `--surya-ocr`.
+- NER's `page_context` is the model's own report, never checked against its entries. On 1958
+  p.0077 it said HOLLY while the last four entries were IDLEWILD, so 0078 started from HOLLY
+  and dropped 10 town-less continuation listings. Warn when the reported context disagrees
+  with the last entry's values for the same keys. Don't override it: NER entry order doesn't
+  reliably follow reading order (see the binder's measurements).
+- hand-added entries have no protection. A page's `_entries.json` is re-extracted whenever
+  its aligned JSON is newer, through re-align, rescale or a review-alignment save, and that
+  discards anything added by hand (1958 p.0078 has 10, marked `hand_added`). Carry
+  `hand_added` entries forward the way `_preserve_manual_lines` does for manual boxes.
 - re-OCR of the degenerate pages (plan ready; needs per-page model selection)
 - the `long_line` rule treats any line over 500 characters as a runaway, so it also catches
   reflowed prose. 31 existing pages (0.3%) would trigger needless retries.
 - the retry ladder's best-candidate choice puts any clean candidate ahead of any flawed one,
   so a short clean retry beats a long flawed first answer. Measure how often that loses text.
+- measure the default temperatures (decision 7). OCR: run 0.0, 0.1 and 1.0 on the same pages,
+  including the loop-prone Polk 1933 and Trow 1907 pages. NER: extract the same pages twice at
+  0.0 and twice at 0.1, and compare run-to-run entry agreement. Also count truncated responses
+  and entries repeated within a page, the evidence that would justify raising NER's
+  temperature. Google's Gemini 3 guide recommends
+  1.0 and warns that lower values can loop. While doing that, check the claim that the
+  temperature rungs never rescue a loop. `analyze_retry_ladder.py` on the 2026-09-02 evidence
+  logs reports 6 of 8 repetition pages rescued there. Polk 1933 `0001_58192510` loops at 0.1
+  and 0.3, logs nothing further at 0.7, and is marked Done without reaching the simple prompt.
+  Either the claim is wrong, and loops should keep the temperature rungs, or the analyzer
+  miscounts a 0.7 call that returned no text.
 - `collate_review_queue.py` lists refusals only. An entry whose line went to a stronger claim
   is not in the queue.
 - `fix_entries`' `flag_unanchored` still describes a row with no box and no address as
