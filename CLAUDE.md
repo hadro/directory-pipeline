@@ -40,11 +40,12 @@ Surya can't be upgraded past 0.19 (0.24 dropped line detection). [Indra OCR](htt
 lines as `*_surya.json` into a mirror under `output/_indra_lines/`, so the pipeline runs
 on them unchanged. The judges (gold panel and no-gold), the pass bar, the commands and the
 results: `docs/evidence/2026-11-17-indra-lines/` (run 2026-11-17). **Not ready.** Indra
-first, Surya where Indra binds badly, wins on the New York gold panel (99.4% of lines
-against 96.4%) and modestly on Tulsa 1921, but **its entry boxes are worse than Surya's on
-the Green Books** (87.1% good against 90.3%: map labels boxed as lines, partial boxes).
-Nothing in the pipeline uses Indra. The width-aware line floor found on the way is on
-`claude/width-aware-line-floor`.
+first, Surya where Indra binds badly, wins on the New York gold panel (99.6% of lines
+against 96.3%) and on Tulsa 1921, but **its entry boxes still trail Surya's on the Green
+Books** (88.8% good against 91.1%, mostly narrower boxes), even with the evidence folder's
+picture mask and row join. Nothing in the pipeline uses Indra. Found on the way: the
+width-aware line floor (`claude/width-aware-line-floor`), and the row join
+(`common.join_rows`), which helps Surya too: Tulsa's street pages, 22% wrong boxes → 8%.
 
 ## Evaluation: TypeSafe AI's Jev
 

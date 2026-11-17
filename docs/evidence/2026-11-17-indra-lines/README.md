@@ -15,7 +15,7 @@ floor, and two binder bugs. Results are at the end of this file.
 - `tools/indra_lines.py`: runs Indra and writes its lines as `*_surya.json` into a mirror
   of the volume.
 - `common.py`, `compare_detectors.py`, `gold_panel.py`, `entry_placement.py`,
-  `width_floor.py`: this folder.
+  `width_floor.py`, `picture_mask.py`: this folder.
 
 ## The question
 
@@ -166,6 +166,8 @@ find output/green_books_and_related -name '*_surya.json' | sed 's/_surya\.json$/
     | tr '\n' '\0' | xargs -0 python tools/indra_lines.py -q --det-long-side 2048 --no-split --mirror-root $M
 python $D/entry_placement.py output/green_books_and_related/*/ --mirror-root $M > $D/entries_green_books.txt
 python $W $D/entry_placement.py output/green_books_and_related/*/ --mirror-root $M > $D/entries_green_books_width.txt
+# The picture mask and the row join: add --mask-pictures, then --mask-pictures --join-rows,
+# to the width-floor runs above (gold_panel.py, entry_placement.py on Tulsa and the Green Books).
 
 # 3. Look at the pages that moved: align the mirror, then open it in the review UI.
 python pipeline/align_ocr.py output/_indra_lines_2048_nosplit/tulsa_1921/
@@ -399,10 +401,62 @@ Against Surya, the cascade makes 1,112 entries worse on 504 pages and 716 better
 
 - **Maps.** The Go Guide prints maps, and Indra boxes their labels ("CRATERS",
   "Blackfoot", "Grays"): 219 lines on page 0021 against Surya's 106. Gemini's listings
-  get dealt onto them. Indra returns layout blocks with labels; dropping lines inside
-  picture blocks is the obvious fix. Not tried.
-- **Partial boxes.** More of Indra's boxes hold only part of an entry ("partial" rises
-  from 6.5% to 9.7%). Not looked into.
+  get dealt onto them. But the maps are a minority of the loss (Go Guide +232 wrong or
+  weak entries).
+- **Partial boxes**, most of it, in *The Green Book* volume (partial 2,432 → 5,722).
+  Its listings run "Ascot House ........ 11th St. & Michigan Ave.", and Indra's detector
+  breaks the row at the leader: its box holds "Ascot House ." where Surya's spans the
+  row. On the right line, but narrower.
+
+### Pictures and split rows
+
+Both fixes below work on any detector's lines, before alignment. Both are in
+`common.prepare()`, behind `--mask-pictures` and `--join-rows` on all three scripts.
+
+**Pictures.** Indra's shipped weights have no picture channel (`detect_all()` returns
+none, and no `Picture` block appears on any page). And text cannot pick out a map:
+Gemini transcribes its labels too (321 Gemini lines on Go Guide page 0021). What gives a
+picture away is its ink. `picture_mask.py`: erase the detector's line boxes, close the
+ink that is left into regions, and keep the regions large in both directions, dense
+with ink, and clear of the image edge (the binding and cover of a book scan). Lines
+whose centre falls in one are dropped. On Go Guide page 0021 it outlines the map exactly,
+from either detector's lines, and keeps every listing line.
+
+**Split rows.** On Tulsa's street pages both detectors box the house number apart from
+the name ("102" | "Mrs Rose B Ritchey."), and on the Green Book Indra breaks rows at
+dot leaders. Gemini writes each row as one line, and alignment pairs one line with one
+box. `common.join_rows()` joins two side-by-side pieces of a row, with no box between,
+when most of each piece's words appear together in a single Gemini line; across a
+column gutter they never do. On Tulsa page 0305 left it takes Indra from 105 wrong
+entries to 12, and Surya from 105 to 15.
+
+Everything on the width-aware floor; Tulsa street pages scored with the fixed binder
+(`claude/binder-name-fields`; with today's binder they are unplaced):
+
+| wrong boxes | Surya | Indra | Cascade |
+|---|---|---|---|
+| Green Books (good share in brackets) | 1.7% (90.3%) | 2.3% (86.0%) | 1.8% (87.1%) |
+| + picture mask | 1.5% | 2.1% | 1.6% |
+| + mask + join | **1.3% (91.1%)** | 1.8% (88.2%) | 1.4% (88.8%) |
+| Tulsa, other pages | 4.6% | 6.5% | 3.6% |
+| + picture mask | 5.2% | 6.8% | 3.7% |
+| + mask + join | 5.2% | 5.3% | **3.5%** |
+| Tulsa street pages (today: 22.1%) | 15.3% | 10.4% | 9.5% |
+| + mask + join | 8.3% | **2.8%** | 3.0% |
+| Gold panel, correct | 96.4% | 99.1% | 99.4% |
+| + mask + join | 96.3% | 97.9% | **99.6%** |
+
+- **The join is the bigger fix**, and it helps Surya too: street pages 15.3% to 8.3%.
+- **The mask helps the Green Books and costs Tulsa a little**: it also catches Tulsa's
+  display ads, whose text the NER extracts, and about 500 entries lose their box. Dropping
+  only lines no taller than body text inside a region (map labels are small; ad lettering
+  is large) is the obvious refinement. Not tried.
+- **polk1925 with Indra goes from 25 of 31 gold rows to 1 with the join.** The page was
+  already mostly misaligned under Indra (75% of bound lines disagree without the join, 86%
+  with); the join moved the drift onto the gold rows. The cascade takes Surya there
+  either way.
+- **On the Green Books the cascade still trails Surya**: 88.8% good against 91.1%,
+  wrong 1.4% against 1.3%. What is left is mostly partial boxes (8.2% against 6.2%).
 
 **Against the bar**, at 2,048 px, no split, floor off:
 
@@ -419,20 +473,22 @@ Against Surya, the cascade makes 1,112 entries worse on 504 pages and 716 better
 6. Green Books (added after the bar was set): **not met.** The cascade's entry boxes
    are worse than Surya's (87.1% good against 90.3%).
 
-**Verdict for now: do not cut a cascade branch.** It wins on the New York directories
-(gold panel 99.4% against 96.4%) and modestly on Tulsa, and loses on Green Books, the
-main production collection. The width-aware floor and the binder fixes, which do not
-need Indra, are where the measured gains are.
+**Verdict for now: do not cut a cascade branch.** With the picture mask and row join it
+wins on the New York directories (99.6% against 96.3%) and on Tulsa, street pages most
+of all, and still trails Surya on the Green Books, the main production collection, by
+about two points of fully boxed entries. The fixes that do not need Indra are where the
+measured gains are: the width-aware floor and the binder (branches, PRs open), and the
+row join, which takes Surya from 22% wrong to 8% on Tulsa's street pages.
 
 **Next:**
 
-1. **Merge `claude/width-aware-line-floor` and `claude/binder-name-fields`** once
-   reviewed. Both are off `main` and independent of Indra.
-2. **Indra on Green Books:** drop lines inside its picture blocks, then rerun
-   `entry_placement.py`. Then look at why its boxes are more often partial.
-3. **If both close the gap**, the cascade in the pipeline: Indra lines in the line stage,
+1. **The row join for the production aligner**, Surya included, on its own branch,
+   measured with `entry_placement.py` before and after.
+2. **The picture mask**: try dropping only body-size lines inside a region, so display
+   ads keep their text; then decide whether it ships.
+3. **Indra on the Green Books**: what is left is narrower boxes. A join across dot
+   leaders that does not need a Gemini match, or widening a box to its row, may close it.
+4. **If that closes the gap**, the cascade in the pipeline: Indra lines in the line stage,
    Gemini OCR and align unchanged, then a Surya fallback stage for the pages over the
    threshold. Surya 0.17.1 and Indra 1.1.2 install and import together in the project's
    `.venv` (Python 3.12).
-4. **Street-page alignment in Tulsa:** about 22% of its street entries sit on the wrong
-   printed line, in the published data and with the binder fixed alike.

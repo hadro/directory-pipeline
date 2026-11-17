@@ -44,6 +44,7 @@ Configurations:
 from __future__ import annotations
 
 import argparse
+import csv
 import fnmatch
 import json
 import os
@@ -101,9 +102,9 @@ def aligned_on_disk(img: Path, entries: list[dict]) -> set:
     return {(tuple(ln["bbox"]), ln.get("gemini_text", "")) for ln in best}
 
 
-def detector_boxes(path: Path, gl, ads, entries, width: int, floor: int):
+def detector_boxes(path: Path, gl, ads, entries, width: int, floor: int, mask: bool = False, join: bool = False):
     A._MIN_LINE_HEIGHT = floor   # read at call time by filter_short_lines
-    lines, bound, unmatched, _ = align(path, gl, ads)
+    lines, bound, unmatched, _ = align(path, gl, ads, mask_pictures=mask, join=join)
     disagree = page_stats(lines, bound, unmatched, len(gl))["disagree"]
     out = [{"bbox": list(b), "gemini_text": t, "canvas_fragment": FRAG(b)} for b, t in bound]
     binds = bind_entries(entries, out, canvas_width=width)
@@ -113,7 +114,7 @@ def detector_boxes(path: Path, gl, ads, entries, width: int, floor: int):
 
 
 def score_page(job):
-    key, surya, indra, gem, ent_path = job
+    key, surya, indra, gem, ent_path, mask, join = job
     entries = [e for e in json.loads(ent_path.read_text(encoding="utf-8")).get("entries", [])
                if identity_tokens(e)]
     gl, ads = read_gemini(gem)
@@ -126,9 +127,9 @@ def score_page(job):
 
     boxes, meds = {}, {}
     on_disk = aligned_on_disk(img, entries)
-    boxes["surya"], _, meds["surya"], s15 = detector_boxes(surya, gl, ads, entries, width, SHIPPED_FLOOR)
-    boxes["surya_nofloor"], s_dis, meds["surya_nofloor"], _ = detector_boxes(surya, gl, ads, entries, width, 0)
-    boxes["indra_nofloor"], i_dis, meds["indra_nofloor"], _ = detector_boxes(indra, gl, ads, entries, width, 0)
+    boxes["surya"], _, meds["surya"], s15 = detector_boxes(surya, gl, ads, entries, width, SHIPPED_FLOOR, mask, join)
+    boxes["surya_nofloor"], s_dis, meds["surya_nofloor"], _ = detector_boxes(surya, gl, ads, entries, width, 0, mask, join)
+    boxes["indra_nofloor"], i_dis, meds["indra_nofloor"], _ = detector_boxes(indra, gl, ads, entries, width, 0, mask, join)
     pick = cascade_pick(s_dis, i_dis)
     boxes["cascade"] = boxes[f"{pick}_nofloor"]
     meds["cascade"] = meds[f"{pick}_nofloor"]
@@ -149,6 +150,11 @@ def main():
     ap.add_argument("--mirror-root", type=Path, default=DEFAULT_MIRROR)
     ap.add_argument("--output-root", type=Path, default=Path("output"))
     ap.add_argument("--pages", metavar="GLOB", help="Only image filenames matching this glob")
+    ap.add_argument("--csv", type=Path, help="Write one row per page here")
+    ap.add_argument("--join-rows", action="store_true",
+                    help="Join pieces of one printed row that Gemini wrote as one line (common.join_rows)")
+    ap.add_argument("--mask-pictures", action="store_true",
+                    help="Drop lines inside picture regions (picture_mask.py) before aligning, every configuration")
     args = ap.parse_args()
 
     jobs = []
@@ -160,7 +166,7 @@ def main():
             stem = surya.name[: -len("_surya.json")]
             ents = sorted(surya.parent.glob(f"{stem}_*_entries.json"))
             if ents:
-                jobs.append((key, surya, indra, gem, ents[0]))
+                jobs.append((key, surya, indra, gem, ents[0], args.mask_pictures, args.join_rows))
     if not jobs:
         sys.exit("No page has Surya lines, Indra lines, Gemini text and entries.")
 
@@ -181,6 +187,13 @@ def main():
         placed = n - tot["unplaced"]
         print(f"{c:14s}{placed:8d}" + "".join(f"{tot[b] / placed * 100:8.1f}%" for b in (*BANDS[:4], "tall"))
               + f"{tot['unplaced']:10d}")
+
+    if args.csv:
+        with open(args.csv, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["page", "pick", "entries"] + [f"{c}_{b}" for c in CONFIGS for b in (*BANDS, "tall")])
+            for r in rows:
+                w.writerow([r["page"], r["pick"], r["n"]] + [r[c][b] for c in CONFIGS for b in (*BANDS, "tall")])
 
     def bad(r, c):
         return r[c]["wrong"] + r[c]["weak"]

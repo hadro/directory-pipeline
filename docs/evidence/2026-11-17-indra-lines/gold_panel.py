@@ -109,6 +109,10 @@ def main():
     ap.add_argument("--min-line-height", type=int, metavar="PX",
                     help="Override align_ocr._MIN_LINE_HEIGHT (15) for both detectors. The floor "
                          "drops lines shorter than it; Indra's tight boxes on small type are 12-14 px")
+    ap.add_argument("--mask-pictures", action="store_true",
+                    help="Drop lines inside picture regions (picture_mask.py) before aligning")
+    ap.add_argument("--join-rows", action="store_true",
+                    help="Join pieces of one printed row that Gemini wrote as one line (common.join_rows)")
     ap.add_argument("--list-pages", action="store_true",
                     help="Print the panel's page images, for tools/indra_lines.py, and stop")
     args = ap.parse_args()
@@ -148,8 +152,8 @@ def main():
             continue
 
         gl, ads = read_gemini(gem)
-        s_lines, s_bound, s_unm, _ = align(surya_json, gl, ads)
-        i_lines, i_bound, i_unm, _ = align(indra_json, gl, ads, args.indra_min_conf)
+        s_lines, s_bound, s_unm, _ = align(surya_json, gl, ads, mask_pictures=args.mask_pictures, join=args.join_rows)
+        i_lines, i_bound, i_unm, _ = align(indra_json, gl, ads, args.indra_min_conf, args.mask_pictures, args.join_rows)
         pick = cascade_pick(page_stats(s_lines, s_bound, s_unm, len(gl))["disagree"],
                             page_stats(i_lines, i_bound, i_unm, len(gl))["disagree"])
         picks[pick] += 1

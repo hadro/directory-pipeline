@@ -91,6 +91,10 @@ def main():
                     help="Override align_ocr._MIN_LINE_HEIGHT (15) for both detectors, as in "
                          "gold_panel.py")
     ap.add_argument("--csv", type=Path, help="Write one row per page here")
+    ap.add_argument("--join-rows", action="store_true",
+                    help="Join pieces of one printed row that Gemini wrote as one line (common.join_rows)")
+    ap.add_argument("--mask-pictures", action="store_true",
+                    help="Drop lines inside picture regions (picture_mask.py) before aligning")
     args = ap.parse_args()
     if args.min_line_height is not None:
         import pipeline.align_ocr as A
@@ -121,7 +125,7 @@ def main():
         row = {"page": key, "gemini_lines": len(gl), "indra_ms": indra_ms(indra)}
         cells = []
         for name, path, floor in (("surya", surya, 0.35), ("indra", indra, args.indra_min_conf)):
-            lines, bound, unmatched, ran = align(path, gl, ads, floor)
+            lines, bound, unmatched, ran = align(path, gl, ads, floor, args.mask_pictures, args.join_rows)
             st = page_stats(lines, bound, unmatched, len(gl))
             st["col"] = ran
             row.update({f"{name}_{k}": v for k, v in st.items()})

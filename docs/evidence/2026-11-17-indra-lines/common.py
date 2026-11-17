@@ -52,10 +52,74 @@ def pick_gemini(img: Path, model: str | None = None) -> Path | None:
     return (pref or sorted(cands) or [None])[0]
 
 
-def prepare(lines_json: Path, min_conf: float = 0.35):
-    """align_image() up to its build_aligned_lines call, for one line file."""
+JOIN_SHARE = 0.75   # share of each piece's words that must appear in the one Gemini line
+
+
+def _words(text: str) -> set[str]:
+    return set(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
+
+
+def join_rows(lines: list[dict], gl: list[str]) -> list[dict]:
+    """Join side-by-side pieces of one printed row that Gemini wrote as one line.
+
+    Detectors box a house number apart from its name (Tulsa's street pages), and a
+    name apart from its address across a dot leader (the Green Book). Gemini writes
+    each row as one line, and alignment pairs one line with one box. Two pieces on
+    the same row, with no box between them, are joined when most of each piece's
+    words appear together in a single Gemini line: across a column gutter they never
+    do, since two columns' words do not share a Gemini line.
+    """
+    gem = [_words(g) for g in gl]
+    by_word: dict[str, set[int]] = {}
+    for i, ws in enumerate(gem):
+        for w in ws:
+            by_word.setdefault(w, set()).add(i)
+
+    def together(a: set, b: set) -> bool:
+        if not a or not b:
+            return False
+        cands = set().union(*(by_word.get(w, set()) for w in a | b))
+        return any(len(a & gem[i]) >= JOIN_SHARE * len(a) and len(b & gem[i]) >= JOIN_SHARE * len(b)
+                   for i in cands)
+
+    lines = sorted(lines, key=lambda ln: (ln["bbox"][0], ln["bbox"][1]))
+    out, used = [], set()
+    for i, ln in enumerate(lines):
+        if i in used:
+            continue
+        cur = dict(ln)
+        while True:
+            x0, y0, x1, y1 = cur["bbox"]
+            right = [j for j, m in enumerate(lines) if j not in used and j != i and m["bbox"][0] >= x1 - 2
+                     and min(y1, m["bbox"][3]) - max(y0, m["bbox"][1])
+                     >= 0.6 * min(y1 - y0, m["bbox"][3] - m["bbox"][1])]
+            if not right:
+                break
+            j = min(right, key=lambda j: lines[j]["bbox"][0])
+            nxt = lines[j]
+            if not together(_words(cur.get("text", "")), _words(nxt.get("text", ""))):
+                break
+            used.add(j)
+            b = nxt["bbox"]
+            cur["bbox"] = [x0, min(y0, b[1]), max(x1, b[2]), max(y1, b[3])]
+            cur["text"] = f"{cur.get('text', '')} {nxt.get('text', '')}".strip()
+        out.append(cur)
+    return out
+
+
+def prepare(lines_json: Path, min_conf: float = 0.35, mask_pictures: bool = False,
+            join_with: list[str] | None = None):
+    """align_image() up to its build_aligned_lines call, for one line file.
+    *mask_pictures* drops lines inside picture regions (picture_mask.py) first;
+    *join_with* (the page's Gemini lines) joins pieces of one row (join_rows)."""
     page_bbox, lines, _ = A.parse_surya(lines_json, min_confidence=min_conf)
     lines = A._expand_multiline_surya_lines(lines)
+    if mask_pictures:
+        from picture_mask import outside_pictures, picture_regions
+        img = lines_json.with_name(lines_json.name[: -len("_surya.json")] + ".jpg")
+        lines = outside_pictures(lines, picture_regions(img, [ln["bbox"] for ln in lines]))
+    if join_with:
+        lines = join_rows(lines, join_with)
     img_w = page_bbox[2]
     page_w = img_w - page_bbox[0]
     lines = A.filter_margin_lines(A.filter_short_lines(lines), img_w)
@@ -69,7 +133,8 @@ def prepare(lines_json: Path, min_conf: float = 0.35):
     return lines, ordered, groups, fallback
 
 
-def align(lines_json: Path, gl: list[str], ads: set[int], min_conf: float = 0.35):
+def align(lines_json: Path, gl: list[str], ads: set[int], min_conf: float = 0.35,
+          mask_pictures: bool = False, join: bool = False):
     """The shipped alignment of *gl* onto one detector's lines.
 
     Returns (lines, bound, unmatched, column_path_ran): *bound* is
@@ -77,7 +142,8 @@ def align(lines_json: Path, gl: list[str], ads: set[int], min_conf: float = 0.35
     reached its cost comparison; the cost function is wrapped, not replaced, so
     the result is exactly what production would write.
     """
-    lines, ordered, groups, fallback = prepare(lines_json, min_conf)
+    lines, ordered, groups, fallback = prepare(lines_json, min_conf, mask_pictures,
+                                               gl if join else None)
     real, calls = A._alignment_cost, {"n": 0}
 
     def counting(*a, **k):

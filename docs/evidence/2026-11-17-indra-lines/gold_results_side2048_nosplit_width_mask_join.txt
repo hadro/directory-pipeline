@@ -1,0 +1,55 @@
+page                            rows | surya_pub ok/wr/ub |     surya ok/wr/ub |     indra ok/wr/ub |   cascade ok/wr/ub
+ Tboyd1890/0002_flushin           12 |           12/ 0/ 0 |           12/ 0/ 0 |           12/ 0/ 0 |           12/ 0/ 0 i
+  boyd1890/0004_flushin           40 |           40/ 0/ 0 |           40/ 0/ 0 |           40/ 0/ 0 |           40/ 0/ 0 i
+ Tboyd1890/0006_flushin           20 |           20/ 0/ 0 |           20/ 0/ 0 |           20/ 0/ 0 |           20/ 0/ 0 i
+  doggetts1850/0021_5675061      154 |          154/ 0/ 0 |          154/ 0/ 0 |          154/ 0/ 0 |          154/ 0/ 0 i
+  duncan1794/0021_newyork         22 |           22/ 0/ 0 |           22/ 0/ 0 |           22/ 0/ 0 |           22/ 0/ 0 i
+  duncan1794/0022_newyork         36 |           36/ 0/ 0 |           36/ 0/ 0 |           36/ 0/ 0 |           36/ 0/ 0 i
+  franks1786/0003_newyork         11 |           11/ 0/ 0 |           11/ 0/ 0 |           11/ 0/ 0 |           11/ 0/ 0 i
+  franks1786/0004_newyork         12 |           12/ 0/ 0 |           12/ 0/ 0 |           12/ 0/ 0 |           12/ 0/ 0 i
+  franks1786/0005_newyork          7 |            7/ 0/ 0 |            7/ 0/ 0 |            7/ 0/ 0 |            7/ 0/ 0 i
+  franks1786/0021_newyork         26 |           26/ 0/ 0 |           26/ 0/ 0 |           26/ 0/ 0 |           26/ 0/ 0 i
+  hearne1852/0021_micro_I         30 |           30/ 0/ 0 |           30/ 0/ 0 |           30/ 0/ 0 |           30/ 0/ 0 i
+  hearne1852/0022_micro_I         22 |           22/ 0/ 0 |           22/ 0/ 0 |           22/ 0/ 0 |           22/ 0/ 0 i
+  hopehenderson1856/0021_micro_   60 |           60/ 0/ 0 |           60/ 0/ 0 |           60/ 0/ 0 |           60/ 0/ 0 i
+  lain1876/0021_1876BPL           73 |           73/ 0/ 0 |           73/ 0/ 0 |           72/ 1/ 0 |           72/ 1/ 0 i
+  lain1876/0022_1876BPL           30 |           30/ 0/ 0 |           30/ 0/ 0 |           30/ 0/ 0 |           30/ 0/ 0 i
+  longworth1818/0021_5781975      54 |           54/ 0/ 0 |           54/ 0/ 0 |           54/ 0/ 0 |           54/ 0/ 0 i
+  longworth1818/0022_5781990      52 |           52/ 0/ 0 |           52/ 0/ 0 |           52/ 0/ 0 |           52/ 0/ 0 i
+*Tmb1931/0021_5807323             33 |           33/ 0/ 0 |           33/ 0/ 0 |           33/ 0/ 0 |           33/ 0/ 0 i
+*Tmb1931/0022_5807366             66 |           66/ 0/ 0 |           66/ 0/ 0 |           66/ 0/ 0 |           66/ 0/ 0 i
+  ogden1839/0022_brookly          33 |           33/ 0/ 0 |           33/ 0/ 0 |           33/ 0/ 0 |           33/ 0/ 0 i
+*Tpolk1917/0021_5685525           57 |            0/57/ 0 |            0/49/ 8 |           56/ 1/ 0 |           56/ 1/ 0 i
+ Tpolk1925/0021_5811503           31 |           29/ 2/ 0 |           29/ 2/ 0 |            1/30/ 0 |           29/ 2/ 0 s
+  polk1933si/0021_5806483         56 |           55/ 1/ 0 |           55/ 1/ 0 |           55/ 1/ 0 |           55/ 1/ 0 i
+ Tqueens1933/0022_5808293         47 |           45/ 1/ 1 |           47/ 0/ 0 |           44/ 3/ 0 |           47/ 0/ 0 s
+  rode1851/0021_newyork           53 |           53/ 0/ 0 |           53/ 0/ 0 |           53/ 0/ 0 |           53/ 0/ 0 i
+  smith1855/0021_micro_I          90 |           89/ 1/ 0 |           89/ 1/ 0 |           89/ 1/ 0 |           89/ 1/ 0 i
+  smith1855/0022_micro_I          95 |           95/ 0/ 0 |           95/ 0/ 0 |           94/ 1/ 0 |           94/ 1/ 0 i
+  smith1856/0022_micro_I         121 |          121/ 0/ 0 |          121/ 0/ 0 |          121/ 0/ 0 |          121/ 0/ 0 i
+  trow1884/0021_5682586          126 |          126/ 0/ 0 |          126/ 0/ 0 |          126/ 0/ 0 |          126/ 0/ 0 i
+  trow1884/0022_5682682           15 |            9/ 0/ 6 |            9/ 6/ 0 |           15/ 0/ 0 |           15/ 0/ 0 i
+  trow1907/0021_trowsge           67 |           67/ 0/ 0 |           67/ 0/ 0 |           67/ 0/ 0 |           67/ 0/ 0 i
+  trow1913/0021_5690892           92 |           92/ 0/ 0 |           92/ 0/ 0 |           92/ 0/ 0 |           92/ 0/ 0 i
+  trowwilson1865/0022_5676777    167 |          167/ 0/ 0 |          167/ 0/ 0 |          167/ 0/ 0 |          167/ 0/ 0 i
+
+All scored rows
+  surya_pub  n= 1810  correct  96.2%  wrong  3.4%  unboxed  0.4%
+  surya      n= 1810  correct  96.3%  wrong  3.3%  unboxed  0.4%
+  indra      n= 1810  correct  97.9%  wrong  2.1%  unboxed  0.0%
+  cascade    n= 1810  correct  99.6%  wrong  0.4%  unboxed  0.0%
+
+Unflagged pages
+  surya_pub  n= 1544  correct  99.5%  wrong  0.1%  unboxed  0.4%
+  surya      n= 1544  correct  99.5%  wrong  0.5%  unboxed  0.0%
+  indra      n= 1544  correct  99.7%  wrong  0.3%  unboxed  0.0%
+  cascade    n= 1544  correct  99.7%  wrong  0.3%  unboxed  0.0%
+
+Flagged pages (* suspect Surya, T tall gold boxes): judge is lenient
+  surya_pub  n=  266  correct  77.1%  wrong 22.6%  unboxed  0.4%
+  surya      n=  266  correct  77.8%  wrong 19.2%  unboxed  3.0%
+  indra      n=  266  correct  87.2%  wrong 12.8%  unboxed  0.0%
+  cascade    n=  266  correct  98.9%  wrong  1.1%  unboxed  0.0%
+
+cascade: Indra, then Surya where Indra's disagreement is over 0.2 and Surya's is lower. Pages taking Indra 31, Surya 2 (last column: i/s)
+Not scored: {'no monotonic match': 16, 'Gemini OCR failed on the page': 387, 'text not in Gemini output': 30, 'box dropped by aligner preprocessing': 8, 'dropped page (region Surya)': 49}
