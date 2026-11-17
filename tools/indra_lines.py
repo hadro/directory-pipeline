@@ -250,6 +250,10 @@ def main() -> None:
     ap.add_argument("--det-long-side", type=int, metavar="PX",
                     help="Long side the page is scaled to for line detection (Indra's "
                          "default: 1024, which loses small type on dense directory pages)")
+    ap.add_argument("--no-split", action="store_true",
+                    help="Keep each detected line whole. Indra otherwise cuts a line at gaps "
+                         "other lines' edges align with, which on a directory page separates "
+                         "name from address, and alignment pairs one line with one box")
     ap.add_argument("--pages", metavar="GLOB",
                     help="Only image filenames matching this glob, e.g. '0012_*'")
     ap.add_argument("--limit", type=int, default=0,
@@ -279,6 +283,13 @@ def main() -> None:
                  "The first run downloads them from Hugging Face.")
     if args.det_long_side:
         ocr.long_side = args.det_long_side
+    if args.no_split:
+        import indra_ocr.pipeline as indra_pipeline
+        # shortcut: patches Indra 1.x internals (SPLIT_GAP, gutter_cuts); recheck on an upgrade.
+        if not (hasattr(indra_pipeline, "SPLIT_GAP") and hasattr(ocr, "gutter_cuts")):
+            sys.exit(f"Error: --no-split does not support Indra {indra_ocr.__version__}")
+        indra_pipeline.SPLIT_GAP = float("inf")
+        ocr.gutter_cuts = lambda boxes, rec: [[] for _ in rec]
 
     failed_any = False
     for volume, chosen in _targets(args.volumes):
@@ -308,6 +319,7 @@ def main() -> None:
             "indra_version": indra_ocr.__version__,
             "threads": args.threads,
             "det_long_side": getattr(ocr, "long_side", None),
+            "split": not args.no_split,
             "turn": False,
             "machine": f"{platform.system()} {platform.machine()} ({os.cpu_count()} cpus)",
             "python": platform.python_version(),

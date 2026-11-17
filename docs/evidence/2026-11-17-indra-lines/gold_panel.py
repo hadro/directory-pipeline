@@ -104,9 +104,15 @@ def main():
     ap.add_argument("--mirror-root", type=Path, default=REPO / DEFAULT_MIRROR)
     ap.add_argument("--indra-min-conf", type=float, default=0.35,
                     help="parse_surya's floor for Indra lines (default 0.35, the pipeline's)")
+    ap.add_argument("--min-line-height", type=int, metavar="PX",
+                    help="Override align_ocr._MIN_LINE_HEIGHT (15) for both detectors. The floor "
+                         "drops lines shorter than it; Indra's tight boxes on small type are 12-14 px")
     ap.add_argument("--list-pages", action="store_true",
                     help="Print the panel's page images, for tools/indra_lines.py, and stop")
     args = ap.parse_args()
+    if args.min_line_height is not None:
+        import pipeline.align_ocr as A
+        A._MIN_LINE_HEIGHT = args.min_line_height   # read at call time by filter_short_lines
 
     pages, index = load_gold(args.gold_dir, args.output_root)
     agg = {k: {j: defaultdict(int) for j in JUDGES} for k in ("all", "clean", "flagged")}
