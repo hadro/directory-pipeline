@@ -248,10 +248,8 @@ def main() -> None:
     try:
         from surya.detection import DetectionPredictor
     except ImportError as exc:
-        print(
-            f"Error: {exc}\nInstall with: uv sync --extra gpu",
-            file=sys.stderr,
-        )
+        from utils.surya_version import surya_import_error
+        print(surya_import_error(exc), file=sys.stderr)
         sys.exit(1)
 
     from PIL import Image as PILImage

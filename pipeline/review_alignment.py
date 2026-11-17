@@ -82,9 +82,13 @@ def _load_surya() -> None:
     global _det, _rec
     if _det is not None:
         return
-    from surya.detection import DetectionPredictor
-    from surya.foundation import FoundationPredictor
-    from surya.recognition import RecognitionPredictor
+    try:
+        from surya.detection import DetectionPredictor
+        from surya.foundation import FoundationPredictor
+        from surya.recognition import RecognitionPredictor
+    except ImportError as exc:
+        from utils.surya_version import surya_import_error
+        raise SystemExit(surya_import_error(exc)) from exc
     _det = DetectionPredictor()
     _rec = RecognitionPredictor(FoundationPredictor())
 

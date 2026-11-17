@@ -188,3 +188,68 @@ defines; Tulsa's and others' prompts use that name for their own field.
 
 **Fix:** None needed. They are separate on purpose. The switch appears only for volumes
 with a `sections.txt` and two or more sections.
+
+---
+
+## 12. Every box on a page offset: a placeholder canvas
+
+**Symptom:** All the crops on a page land in the wrong region, usually on NYPL images.
+
+**Cause:** When `info.json` cannot be fetched, alignment falls back to the manifest's
+canvas size. On NYPL that can be a 2560×2560 placeholder, so every `#xywh=` on the page
+is in the wrong coordinate space. Until 0.3 the only signal was one warning line per page;
+five 1958 Green Book pages went unnoticed that way.
+
+**Detection:** Since 0.3 the align summary lists these pages ("boxes scaled to a square
+placeholder canvas"), even under `--quiet`, and prints the repair commands. It scans every
+aligned file on disk, not only that run's. Aligned files written before 2026-09-20 lack
+the flag it reads; check those with
+`python tools/rescale_canvas_fragments.py output/{slug} --check`.
+
+**Fix:** No API calls needed:
+```bash
+python tools/rescale_canvas_fragments.py output/{slug} --aligned-model {ocr_model}
+python tools/patch_canvas_fragments.py output/{slug} --aligned-model {ocr_model}
+```
+Then rebuild the explorer. Both tools default `--aligned-model` to the commonest model
+among the aligned files under the directory (before 0.3, the retired `gemini-2.0-flash`),
+so pass it when a volume has several.
+
+---
+
+## 13. Pages lost without a report before 0.3
+
+**Symptom:** An older volume is missing pages or entries, but its runs reported success.
+
+**Cause:** Three stages could lose a page and still exit 0 before 0.3:
+- **Download:** a page that timed out was a warning line, and the stage reported done.
+- **Gemini OCR:** a response that a safety or content filter blocked was counted
+  "empty", not failed. It was not retried and wrote no `.txt`.
+- **NER:** a page whose call errored or returned unparseable JSON was one log line. The
+  stage was recorded complete, and the next page carried on with the context of the page
+  before the lost one.
+
+0.3 retries timeouts, sends blocked responses through the retry ladder, and makes all
+three stages fail with the page names. `main.py` now exits 1 when any target fails.
+
+**Detection:** Compare images with `manifest.json` canvases, `.txt` files with images, and
+`*_entries.json` files with `.txt` or aligned files. Each gap is a lost page.
+
+**Fix:** Re-run the stage. A lost page has no output file, so it is not skipped: re-run the
+download with the same source, then `pipeline ocr output/{slug}` and
+`pipeline extract output/{slug}`. No `--force` needed.
+
+---
+
+## 14. `--infer-categories` changed nothing
+
+**Symptom:** `fix_entries.py --infer-categories` (or `pipeline postprocess --infer-categories`)
+runs, but the fixed CSV's categories are unchanged.
+
+**Cause:** Before 0.3, `detect_schema()` did not recognise a category column named
+`section` (the 1958 Green Book's NER prompt uses that name). Inferred categories went to a
+`category` key the CSV did not have, and the writer dropped them silently: 1,816 rows on
+that volume.
+
+**Fix:** Re-run `pipeline postprocess output/{collection}/ --infer-categories` with 0.3 or
+later. A CSV with both columns still takes `category` as the category column.
