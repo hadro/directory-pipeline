@@ -115,3 +115,11 @@ def bucket(x) -> str:
     if x is None:
         return "none"
     return "failing" if x > FAILING else ("borderline" if x > BORDERLINE else "clean")
+
+
+def cascade_pick(surya_disagree, indra_disagree) -> str:
+    """Indra unless its page is not clean; then whichever detector disagrees less.
+    Production would run Surya only on the pages that reach the second test."""
+    i = 1.0 if indra_disagree is None else indra_disagree
+    s = 1.0 if surya_disagree is None else surya_disagree
+    return "indra" if i <= BORDERLINE or i <= s else "surya"

@@ -42,7 +42,9 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import REPO, TALL, align, pick_gemini, read_gemini  # noqa: E402
+from common import (  # noqa: E402
+    BORDERLINE, REPO, TALL, align, cascade_pick, page_stats, pick_gemini, read_gemini,
+)
 from placement_panel import (  # noqa: E402
     CORRECT_MIN, DROP, GEM_MIN, NOT_PANEL, SUSPECT, head, recover_boxes, sim,
 )
@@ -51,7 +53,7 @@ sys.path.insert(0, str(REPO))
 from tools.indra_lines import DEFAULT_MIRROR  # noqa: E402
 
 TOL = 2
-JUDGES = ("surya_pub", "surya", "indra")
+JUDGES = ("surya_pub", "surya", "indra", "cascade")
 
 
 def on_line(box, gold) -> bool:
@@ -117,6 +119,7 @@ def main():
     pages, index = load_gold(args.gold_dir, args.output_root)
     agg = {k: {j: defaultdict(int) for j in JUDGES} for k in ("all", "clean", "flagged")}
     skipped = defaultdict(int)
+    picks = defaultdict(int)
     listed = []
     if not args.list_pages:
         print(f"{'page':31s} rows | " + " | ".join(f"{j:>9s} ok/wr/ub" for j in JUDGES))
@@ -145,8 +148,11 @@ def main():
             continue
 
         gl, ads = read_gemini(gem)
-        s_lines, s_bound, _, _ = align(surya_json, gl, ads)
-        _, i_bound, _, _ = align(indra_json, gl, ads, args.indra_min_conf)
+        s_lines, s_bound, s_unm, _ = align(surya_json, gl, ads)
+        i_lines, i_bound, i_unm, _ = align(indra_json, gl, ads, args.indra_min_conf)
+        pick = cascade_pick(page_stats(s_lines, s_bound, s_unm, len(gl))["disagree"],
+                            page_stats(i_lines, i_bound, i_unm, len(gl))["disagree"])
+        picks[pick] += 1
         ecols, raw_hits, width = recover_boxes(surya_json, raws)
 
         # The panel's fair rows, so the published judge reproduces its numbers.
@@ -181,14 +187,15 @@ def main():
                 if j == "surya_pub":
                     k = box_to_text(r, proc_box, s_bound)
                 else:
-                    k = text_to_box(r, gold_box, s_bound if j == "surya" else i_bound)
+                    det = pick if j == "cascade" else j
+                    k = text_to_box(r, gold_box, s_bound if det == "surya" else i_bound)
                 c[k] += 1
                 agg["all"][j][k] += 1
                 agg[part][j][k] += 1
             cells.append(f"{c['correct']:4d}/{c['wrong']:2d}/{c['unboxed']:2d}")
         flag = ("*" if suspect else " ") + ("T" if tall_gold else " ")
         print(f"{flag}{(vol + '/' + img_name[:12])[:29]:29s} {len(fair):4d} | "
-              + " | ".join(f"{x:>18s}" for x in cells))
+              + " | ".join(f"{x:>18s}" for x in cells) + f" {pick[0]}")
 
     if args.list_pages:
         print("\n".join(listed))
@@ -204,7 +211,10 @@ def main():
         print(f"\n{title}")
         for j in JUDGES:
             print(f"  {j:10s} {fmt(agg[key][j])}")
-    print("\nNot scored:", dict(skipped))
+    print(f"\ncascade: Indra, then Surya where Indra's disagreement is over {BORDERLINE} and "
+          f"Surya's is lower. Pages taking Indra {picks['indra']}, Surya {picks['surya']} "
+          "(last column: i/s)")
+    print("Not scored:", dict(skipped))
 
 
 if __name__ == "__main__":

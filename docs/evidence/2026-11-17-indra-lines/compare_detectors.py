@@ -38,7 +38,9 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import REPO, align, bucket, page_stats, pick_gemini, read_gemini  # noqa: E402
+from common import (  # noqa: E402
+    BORDERLINE, REPO, align, bucket, cascade_pick, page_stats, pick_gemini, read_gemini,
+)
 
 sys.path.insert(0, str(REPO))
 from tools.indra_lines import DEFAULT_MIRROR, mirror_root_for, select_images  # noqa: E402
@@ -85,8 +87,14 @@ def main():
     ap.add_argument("--indra-min-conf", type=float, default=0.35,
                     help="parse_surya's confidence floor for Indra lines (default 0.35, the "
                          "pipeline's). 0.5 drops the lines Indra returned without text.")
+    ap.add_argument("--min-line-height", type=int, metavar="PX",
+                    help="Override align_ocr._MIN_LINE_HEIGHT (15) for both detectors, as in "
+                         "gold_panel.py")
     ap.add_argument("--csv", type=Path, help="Write one row per page here")
     args = ap.parse_args()
+    if args.min_line_height is not None:
+        import pipeline.align_ocr as A
+        A._MIN_LINE_HEIGHT = args.min_line_height   # read at call time by filter_short_lines
 
     pages = []
     for vol in args.volumes:
@@ -136,6 +144,14 @@ def main():
     print(f"  {'':11s}" + "".join(f"{c:>11s}" for c in order))
     for s in order:
         print(f"  {s:11s}" + "".join(f"{trans[(s, i)]:11d}" for i in order))
+
+    picks = [cascade_pick(r["surya_disagree"], r["indra_disagree"]) for r in rows]
+    cas = Counter(bucket(r[f"{p}_disagree"]) for r, p in zip(rows, picks))
+    runs = sum(r["indra_disagree"] is None or r["indra_disagree"] > BORDERLINE for r in rows)
+    print(f"\nCascade (Indra; Surya where Indra's page is over {BORDERLINE}, keeping the lower): "
+          + ", ".join(f"{b} {cas[b]}" for b in order)
+          + f". Surya runs on {runs} of {len(rows)} pages. Picked and judged by the same "
+            "measure, so optimistic; gold_panel.py scores it fairly.")
 
     better = [r["page"] for r in rows if bucket(r["surya_disagree"]) == "failing"
               and bucket(r["indra_disagree"]) == "clean"]

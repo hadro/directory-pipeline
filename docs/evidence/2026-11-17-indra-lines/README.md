@@ -1,9 +1,10 @@
 # Evidence — Indra OCR as the line detector
 
 **Date:** 2026-11-17
-**Status:** the harness only. **Not run yet.** Indra's models download from Hugging
-Face, and the volumes and the gold panel are on the machine that holds `output/`, so
-the run happens there. Results go at the end of this file.
+**Status:** run on 2026-11-16 and 17. **Indra alone does not pass**: it trails Surya on
+Tulsa 1921. **Indra first, with Surya on the pages where Indra binds badly, does**: 98.8%
+of gold lines placed against Surya's 96.2%, with Surya needed on about a third of Tulsa's
+pages. Results are at the end of this file.
 
 **Code:**
 
@@ -140,15 +141,19 @@ tr '\n' '\0' < /tmp/gold_pages.txt | xargs -0 python tools/indra_lines.py -q \
 python docs/evidence/2026-11-17-indra-lines/gold_panel.py --mirror-root output/_indra_lines_2048_nosplit \
     --min-line-height 0 > docs/evidence/2026-11-17-indra-lines/gold_results_side2048_nosplit_floor0.txt
 
-# 2. A production volume, no gold: the same 150-page Tulsa sample size as 2026-10-17.
-python tools/indra_lines.py output/tulsa_1921/
+# 2. A production volume, no gold: every Tulsa 1921 page with Surya lines (834 of 1,250).
+for j in output/tulsa_1921/*_surya.json; do echo "${j%_surya.json}.jpg"; done > /tmp/tulsa_pages.txt
+tr '\n' '\0' < /tmp/tulsa_pages.txt | xargs -0 python tools/indra_lines.py -q \
+    --det-long-side 2048 --no-split --mirror-root output/_indra_lines_2048_nosplit
 python docs/evidence/2026-11-17-indra-lines/compare_detectors.py output/tulsa_1921/ \
-    --limit 150 --seed 0 --csv docs/evidence/2026-11-17-indra-lines/tulsa_1921.csv \
+    --mirror-root output/_indra_lines_2048_nosplit --min-line-height 0 \
     > docs/evidence/2026-11-17-indra-lines/tulsa_1921.txt
+# tulsa_1921_floor15.txt: the same without --min-line-height 0. tulsa_1921_split.txt:
+# Indra without --no-split, into and from output/_indra_lines_2048.
 
 # 3. Look at the pages that moved: align the mirror, then open it in the review UI.
-python pipeline/align_ocr.py output/_indra_lines/tulsa_1921/
-pipeline review output/_indra_lines/tulsa_1921/
+python pipeline/align_ocr.py output/_indra_lines_2048_nosplit/tulsa_1921/
+pipeline review output/_indra_lines_2048_nosplit/tulsa_1921/
 ```
 
 **Speed:** `indra_run.json` at each mirror root holds every page's wall time, including
@@ -229,23 +234,82 @@ The dense pages, correct / scored. The last column scores more rows, because the
 **Speed**, wall time per page including image load: median 0.58 s at 1024 px and 0.71 s
 at 2048 px (slowest 3.4 s), against about 61 s for Surya on the same machine.
 
-**Against the bar**, at 2048 px, no split, floor off:
+**Looking at the dense pages.** A page has a few dozen gold rows, and these pages are
+flagged, so the boxes were drawn for the whole page and read beside the no-gold check (the
+share of bound lines whose Gemini text disagrees with the detector's own reading of the
+box, floor off):
 
-1. Unflagged pages: 99.5% against 99.6%. **Met.**
-2. Dense pages: polk1917 goes from 0 to 48 of 59, queens1933 and mb1931 tie, and polk1925
-   is 5 lines worse (25 against 30 of 32). **Mostly met.** These pages are all flagged, where
-   the judge is lenient, so look at polk1917 and polk1925 before trusting either.
-3. Tulsa 1921 without gold: **not run yet.**
-4. Speed: **met**, by about 85 times.
+- **polk1917:** Indra's gain is real but partial. Surya's bound text is shifted by several
+  lines from near the top of the page. Indra's is right for stretches, then drifts. Over the
+  whole page 72% of Indra's bound lines disagree, against 87% of Surya's. Even with
+  splitting off, Indra returns short pieces of lines ("21", "11th", "Frank"), and each
+  takes a Gemini line. The 59 gold rows fell mostly in its good stretches.
+- **polk1925:** both detectors mis-bind parts of the middle column. Surya is better over
+  the whole page (41% against 73%), as on the gold rows.
 
-**The floor is the catch.** Indra needs it off, and the pipeline has it on. Turning it off
-costs Surya nothing on this panel (96.2% either way), but it changes every Surya alignment
-in production, so it needs its own check (`tools/audit_entry_bindings.py`, or Tulsa below)
-before it moves.
+**Tulsa 1921** (`tulsa_1921*.txt`): all 834 pages with Surya lines and Gemini text, Indra
+at 2,048 px, no split. Pages by the no-gold check (clean: at most 20% disagree; failing:
+over 50%):
+
+| | floor | clean | borderline | failing |
+|---|---|---|---|---|
+| Surya | 15 px | 539 | 263 | 32 |
+| Indra | 15 px | 487 | 294 | 52 |
+| Surya | off | 662 | 134 | 38 |
+| Indra | off | 571 | 221 | 41 |
+| Indra, splitting on | off | 363 | 353 | 117 |
+
+Indra alone trails Surya: 571 clean pages against 662 at the same floor, with 14 pages
+going from clean to failing and 13 the other way. The check penalises a detector that
+reads worse, but these failures are real misplacements. The pages carry display
+advertisements, Indra's boxes there run two printed lines together (median box height
+28 px against Surya's 20 on page 0062 left), and binding drifts. It is not the detection
+size (the tall boxes are there at 1,024, 1,672 and 2,048 px), and not skew (Indra trails
+on the pages it found level too). With splitting on it is much worse.
+
+**Indra first, Surya where Indra binds badly.** The check needs no gold, so production can
+compute it per page. Run Indra on every page; where more than 20% of its bound lines
+disagree, run Surya as well, and keep whichever disagrees less (`cascade_pick()` in
+`common.py`; both scripts report it):
+
+| | gold panel, placed correctly | Tulsa clean / borderline / failing | Surya runs on |
+|---|---|---|---|
+| Surya | 96.2% | 662 / 134 / 38 | every page |
+| Indra | 98.5% | 571 / 221 / 41 | none |
+| **Indra, then Surya** | **98.8%** | **719 / 97 / 17** | 4 of 33 gold pages, 263 of 834 Tulsa pages |
+
+On the gold panel: unflagged pages 99.5% (Surya 99.6%), flagged pages 94.4% (Surya 76.6%).
+The Tulsa row is optimistic, because the same check picks and judges; the gold row is not.
+On Tulsa it would take about 834 × 0.9 s + 263 × 61 s, roughly 4.7 hours against 14 for
+Surya alone. The check also sends pages that Indra reads poorly to Surya when its boxes
+are fine (trow1907: both place all 67 gold rows). That costs time, not accuracy.
+
+**The floor, for Surya alone.** On Tulsa, turning it off takes Surya from 539 clean pages
+to 662, and from 32 failing to 38: 11 failing pages come clean and 7 clean pages fail.
+The new failures are wrapped continuation lines ("bell av.", "Main av.") with no tall
+letters, 10–14 px high. The floor was dropping them. Gemini runs them into the line
+above, so once kept, each takes a Gemini line, and binding drifts (on one page from 13
+disagreeing lines to 102). A floor relative to the page's median line height (0.5, 0.6,
+0.7 and 0.8 ×) did no better than off on either set: the fragments are 13–14 px, the
+lines 18–20 px. On the gold panel the floor changes nothing for Surya (96.2% either way).
+
+**Against the bar**, at 2,048 px, no split, floor off:
+
+1. Unflagged gold pages: Indra 99.5%, Surya 99.6%. **Met.**
+2. The dense pages: **partly.** polk1917 improves but stays mostly wrong for both, and
+   polk1925 is worse with Indra. The cascade takes the better detector on both.
+3. Tulsa 1921: **not met by Indra alone** (91 fewer clean pages, 14 from clean to
+   failing). **Met by the cascade.**
+4. Speed: Indra **met**, 70 to 85 times faster (median 0.88 s a page on Tulsa). The
+   cascade is about 3 times faster than Surya on Tulsa.
 
 **Next:**
 
-1. Look at polk1917 and polk1925 with boxes drawn.
-2. Tulsa 1921 without gold (`compare_detectors.py`), at 2048 px with `--no-split`. It needs
-   a `--min-line-height` option too.
-3. If both hold: a line-detector option for the OCR stage, and a decision on the floor.
+1. **The floor, on its own branch.** Off is better for Surya on Tulsa, neutral on gold,
+   and Indra needs it. Measure with `tools/audit_entry_bindings.py` before and after, and
+   look at the 7 Tulsa pages that fail without it.
+2. **The cascade in the pipeline.** It needs Gemini text, so it belongs in align: Indra
+   lines for every page, Surya only for the pages over the threshold. Surya runs on
+   Python 3.13 with `--extra gpu`; check one environment can hold both.
+3. **Indra's fragments** (polk1917): join pieces of one printed line before alignment.
+   Not tried.

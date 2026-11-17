@@ -40,9 +40,12 @@ The placement errors left after 0.3 sit on dense pages where Surya under-segment
 Surya can't be upgraded past 0.19 (0.24 dropped line detection). [Indra OCR](https://github.com/datalab-to/indra)
 (Datalab, CPU, ONNX) returns lines in Surya's shape. `tools/indra_lines.py` writes its
 lines as `*_surya.json` into a mirror under `output/_indra_lines/`, so the pipeline runs
-on them unchanged. The judges (gold panel and no-gold), what differs for alignment, the
-pass bar, and the commands: `docs/evidence/2026-11-17-indra-lines/` (created 2026-11-17,
-**not yet run**). Nothing in the pipeline uses Indra until it passes.
+on them unchanged. The judges (gold panel and no-gold), the pass bar, the commands and the
+results: `docs/evidence/2026-11-17-indra-lines/` (run 2026-11-17). **Indra alone fails**:
+it trails Surya on Tulsa 1921. Indra at 2,048 px with lines kept whole, then Surya on the
+pages where Indra binds badly, passes (98.8% of gold lines against 96.2%). Both need
+`align_ocr`'s 15 px line floor off, a production change that needs its own check first.
+Nothing in the pipeline uses Indra yet.
 
 ## Evaluation: TypeSafe AI's Jev
 
