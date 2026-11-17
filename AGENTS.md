@@ -225,7 +225,17 @@ guess — a confidently wrong box is the failure this exists to prevent. Refusal
 `tools/audit_entry_bindings.py` measures placement without ground truth and is the
 before/after checkpoint for any change to alignment or binding. **Coverage is not
 placement** — that distinction cost this project several wrong conclusions; unmatched-rate
-cannot see whether a box landed on the right line.
+cannot see whether a box landed on the right line. The audit has the same blind spot one
+level up: it compares an entry with the *Gemini text* bound to its box, so a box that
+alignment put on the wrong printed line passes. For a change that moves boxes (line
+detector, aligner), judge boxes by what is printed in them:
+`docs/evidence/2026-11-17-indra-lines/entry_placement.py`.
+
+**Open bug (found 2026-11-17):** `identity_tokens()` takes the first `*_name` field, and
+in Tulsa 1921's street section that is `street_name`, the section heading. The current
+binder refuses all 21,902 of those entries. The published entries predate it and keep
+their boxes; re-extracting Tulsa, or running `patch_canvas_fragments.py` over it, would
+strip them. Detail in that folder's README.
 
 Cross-repo handoff for the 2026-09-04 audit and the outstanding policy decision:
 `../green-books/docs/alignment-audit-2026-09-04.md`.

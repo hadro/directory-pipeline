@@ -4,13 +4,15 @@
 **Status:** run on 2026-11-16 and 17. **Indra alone does not pass**: it trails Surya on
 Tulsa 1921. **Indra first, with Surya on the pages where Indra binds badly, does**: 98.8%
 of gold lines placed against Surya's 96.2%, with Surya needed on about a third of Tulsa's
-pages. Results are at the end of this file.
+pages. At the entry level on Tulsa it cuts wrong boxes by a third, but most of that gain
+comes from turning off the aligner's 15 px line floor, which helps Surya alone too.
+Results are at the end of this file.
 
 **Code:**
 
 - `tools/indra_lines.py`: runs Indra and writes its lines as `*_surya.json` into a mirror
   of the volume.
-- `common.py`, `compare_detectors.py`, `gold_panel.py`: this folder.
+- `common.py`, `compare_detectors.py`, `gold_panel.py`, `entry_placement.py`: this folder.
 
 ## The question
 
@@ -293,6 +295,51 @@ disagreeing lines to 102). A floor relative to the page's median line height (0.
 0.7 and 0.8 ×) did no better than off on either set: the fragments are 13–14 px, the
 lines 18–20 px. On the gold panel the floor changes nothing for Surya (96.2% either way).
 
+**Entry boxes, Tulsa 1921** (`entry_placement.py`, `entries_tulsa_1921.txt`). Lines are
+not what the data publishes; entries are, through a binder that refuses weak matches. So
+each configuration's alignment was bound with today's binder, in memory, and each entry's
+box judged by the share of its identity words printed inside it, read by Surya or Indra,
+whichever shares more. `tools/audit_entry_bindings.py` cannot answer this: it compares an
+entry with the *Gemini text* bound to its box, so when alignment puts that text on the
+wrong printed line, the entry follows it and the audit calls it right.
+
+800 pages, 69,843 entries; about 48,300 placed under every configuration (the rest are
+the street section, below). Shares of placed entries:
+
+| | wrong (no word in the box) | weak (under a third) | tall box |
+|---|---|---|---|
+| Surya, 15 px floor (today) | 6.6% | 4.5% | 2.2% |
+| Surya, floor off | 4.5% | 4.1% | 1.9% |
+| Indra, floor off | 6.4% | 5.5% | 1.3% |
+| **Cascade**, floor off | **3.6%** | **4.1%** | **1.3%** |
+
+Against today's Surya, counting wrong and weak entries page by page:
+
+| | pages better (entries) | pages worse (entries) | net entries |
+|---|---|---|---|
+| Surya, floor off | 448 (2,108) | 118 (900) | −1,208 |
+| Indra, floor off | 367 (2,108) | 311 (2,497) | +389 |
+| **Cascade** | 436 (2,428) | 191 (784) | **−1,644** |
+
+The cascade cuts wrong and weak entry boxes by about a third (11.1% to 7.7%), but **three
+quarters of that is the floor**: Surya alone with the floor off gets −1,208. Indra adds
+about 440 more, and a cascade that runs Surya on 203 of the 800 pages. The pages that get
+worse are mostly the floor's: the wrapped continuation lines above (0406 right: 8 to 90).
+The judge is lenient in two ways: a box holding several lines, and a neighbouring entry
+with the same surname, both score as partly right.
+
+The wiring holds: 115,899 of 116,021 lines of the in-memory Surya alignment are in the
+aligned JSON on disk.
+
+**A binder bug, found on the way (not Indra's).** Today's binder refuses all 21,902
+entries of Tulsa's street-directory section (150 pages), under every configuration.
+Their identity words come from `identity_tokens()`, which takes the first field whose
+name ends `_name`: here `street_name`, the section heading ("MAIN AV—NORTH"), so every
+entry on the page looks the same. Dropping `street_name` binds 162 of 162 on page 0337
+right; as extracted, 1. It is the Green Book `category` trap in another field. The
+published entries predate this binder and keep their boxes, but re-extracting Tulsa, or
+running `tools/patch_canvas_fragments.py` over it, would strip them.
+
 **Against the bar**, at 2,048 px, no split, floor off:
 
 1. Unflagged gold pages: Indra 99.5%, Surya 99.6%. **Met.**
@@ -302,14 +349,23 @@ lines 18–20 px. On the gold panel the floor changes nothing for Surya (96.2% e
    failing). **Met by the cascade.**
 4. Speed: Indra **met**, 70 to 85 times faster (median 0.88 s a page on Tulsa). The
    cascade is about 3 times faster than Surya on Tulsa.
+5. Entry boxes on Tulsa (added after the bar was set): the cascade is **better on net**
+   (1,644 fewer wrong or weak entries), but 784 entries get worse on 191 pages, mostly
+   from the floor. Not "a handful".
 
 **Next:**
 
-1. **The floor, on its own branch.** Off is better for Surya on Tulsa, neutral on gold,
-   and Indra needs it. Measure with `tools/audit_entry_bindings.py` before and after, and
-   look at the 7 Tulsa pages that fail without it.
-2. **The cascade in the pipeline.** It needs Gemini text, so it belongs in align: Indra
-   lines for every page, Surya only for the pages over the threshold. Surya runs on
-   Python 3.13 with `--extra gpu`; check one environment can hold both.
-3. **Indra's fragments** (polk1917): join pieces of one printed line before alignment.
+1. **The floor, on its own branch, first.** It is most of the entry-level gain, with or
+   without Indra, and Indra needs it. Its regressions (wrapped continuation lines kept
+   as lines) need a fix before it ships; `entry_placement.py` is the before/after check.
+2. **The street-section binder bug**, on its own branch: 21,902 Tulsa entries. Before
+   anyone re-extracts or re-patches Tulsa.
+3. **A second collection** (Green Books) through `compare_detectors.py` and
+   `entry_placement.py`, before cutting a cascade branch. Tulsa says Indra's own
+   contribution there is modest; the dense pages (polk1917) are where it is large.
+4. **The cascade in the pipeline**, if 3 holds: Indra lines in the line stage, Gemini
+   OCR and align unchanged, then a Surya fallback stage for the pages over the threshold.
+   Surya 0.17.1 and Indra 1.1.2 install and import together in the project's `.venv`
+   (Python 3.12).
+5. **Indra's fragments** (polk1917): join pieces of one printed line before alignment.
    Not tried.
