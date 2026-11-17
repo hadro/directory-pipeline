@@ -3,9 +3,10 @@ name: debug-pipeline
 description: |
   Diagnoses problems with the directory-pipeline. Trigger this skill when the user
   reports something isn't working: "no thumbnails", "empty CSV", "no bounding boxes",
-  "canvas_fragment has no xywh", "entries are missing", "pipeline failed", or any
-  symptom suggesting a stage produced wrong or missing output. The skill asks for
-  the symptom, runs targeted file checks, and gives the exact fix command.
+  "canvas_fragment has no xywh", "crops show the wrong part of the page", "entries are
+  missing", "pipeline failed", or any symptom suggesting a stage produced wrong or
+  missing output. The skill asks for the symptom, runs targeted file checks, and gives
+  the exact fix command.
 ---
 
 When this skill is invoked, follow these steps exactly. Run all commands from the
@@ -20,8 +21,9 @@ Present these numbered options and ask the user which best describes their probl
 2. Thumbnails show the full page, not cropped to the entry
 3. Entries CSV is empty or missing many entries
 4. Pipeline ran but `canvas_fragment` column has no `#xywh=` bounding box
-5. Pipeline failed with an error (ask the user to paste the error message)
-6. Other (ask user to describe)
+5. Crops show the wrong part of the page
+6. Pipeline failed with an error (ask the user to paste the error message)
+7. Other (ask user to describe)
 
 ## Step 2: Ask for the output directory
 
@@ -76,9 +78,17 @@ Report:
 ### Symptom 3: Entries CSV empty or missing entries
 
 Checks:
+- The end of the extract run's output. Since 0.3 it names every page whose NER call
+  failed ("NER failed on N page(s): …") and exits 1, even under `--quiet`
+- Pages with a `*_{model}.txt` or `*_aligned.json` but no `*_entries.json`. Before 0.3 a
+  failed NER call was one log line and the run exited 0, so an older volume can have
+  these with no other record
+- Glob `{output_dir}/*_entries_error.txt` — the raw response of a page whose NER output
+  could not be parsed
 - Glob `{output_dir}/ner_prompt.md` — missing prompt means generic prompting
-- Glob `{output_dir}/*_entries_error.txt` — NER parse/API error logs
 - Bash: `grep -l GEMINI_API_KEY .env 2>/dev/null` — confirm key is set (do not print value)
+- Compare the number of images on disk with the number of canvases in `manifest.json`.
+  A page that never downloaded reaches no later stage
 - Pages with an image but no `*_{model}.txt`. List them; each is a page no later
   stage ever saw
 - Bash: `grep -l '^\[OCR FAILED' {output_dir}/*_gemini-*.txt` — old failure placeholders
@@ -86,18 +96,33 @@ Checks:
   extraction
 
 Report:
-- If `*_entries_error.txt` exists: read it and report the Gemini error
+- If extraction named failed pages, or pages lack a `*_entries.json`: re-run
+  `pipeline extract output/{slug}`. A failed page writes no entries file, so it is retried
+  without `--force`; a page with an `*_entries_error.txt` is also retried automatically.
+  If one page keeps failing, report its `*_entries_error.txt` (a parse failure) or the
+  error logged beside its name (an API failure).
+- If `*_entries_error.txt` exists: read it and report what Gemini returned
 - If API key not set: "Add `GEMINI_API_KEY=...` to `.env` in the project root."
 - If `ner_prompt.md` missing: "No custom NER prompt found — results may be poor.
   Run `--generate-prompts` first, or pass `--ner-prompt` pointing to a prompt
   from a related collection."
-- Pages without a `.txt` have one of three causes:
+- If images are missing: re-run the download with the same source, e.g.
+  `pipeline ingest <URL>` (plus `--slug` if the first run used one). Pages already on disk
+  are skipped, so only the missing ones are requested. Since 0.3 the download summary
+  says "N page(s) failed to download" and the stage fails; before, a page that never
+  arrived was a warning line and the run reported success.
+- Pages without a `.txt` have one of four causes:
   - **The blank-page check skipped them.** The OCR run's summary counts them as
     "blank". The check was fixed on 2026-10-16: before that it skipped pages with
     faint or grey type. Re-running `pipeline ocr output/{slug}` OCRs any page the
     fixed check passes. `--no-blank-skip` forces every page.
   - **OCR failed on them.** The run exits non-zero and the stage is not recorded as
     complete. Re-running retries them.
+  - **Gemini returned no text.** The OCR summary counts these as "empty". Before 0.3
+    that included responses a safety or content filter blocked, which were neither
+    retried nor counted as failures. 0.3 sends them through the retry ladder and fails
+    the page if no attempt returns text. Re-running `pipeline ocr output/{slug}` requests
+    every page without a `.txt` again.
   - **The image is corrupt.** The OCR stages re-download a corrupt page first, and
     report it as "corrupt" if that fails.
 - If `[OCR FAILED` placeholders exist: versions before 0.3 wrote them, and align and
@@ -154,7 +179,38 @@ This is the most common complex failure. Run all checks below in order.
   `pipeline ocr output/{slug} --blank-threshold 0.5`. Surya redoes only the deleted
   pages, Gemini skips pages already transcribed, and align fills in the gaps.
 
-### Symptom 5: Pipeline failed with error
+### Symptom 5: Crops show the wrong part of the page
+
+Checks:
+- Are all the boxes on a page off, or only some entries?
+- The align run's summary. Since 0.3 it ends with "⚠ N page(s) have boxes scaled to a
+  square placeholder canvas (info.json could not be fetched)" and lists the pages, even
+  under `--quiet`. It reads every aligned file on disk, so re-running
+  `pipeline ocr output/{slug}` reports pages aligned by earlier runs too
+- Aligned files written before 2026-09-20 lack the flag that report reads. For those:
+  `python tools/rescale_canvas_fragments.py output/{slug} --check` compares each page's
+  stored canvas size with its live `info.json` and exits 1 on a mismatch
+
+Report:
+- If pages were aligned against a placeholder canvas: when `info.json` could not be
+  fetched, alignment fell back to the manifest's canvas size. On NYPL that can be a
+  2560×2560 placeholder, which puts every box on the page in the wrong coordinate space.
+  Fix in place, with no API calls:
+  ```
+  python tools/rescale_canvas_fragments.py output/{slug} --aligned-model {ocr_model}
+  python tools/patch_canvas_fragments.py output/{slug} --aligned-model {ocr_model}
+  ```
+  The first rescales the aligned JSON. The second rebinds the entries cache and the
+  volume CSV. Both default `--aligned-model` to the commonest model among the aligned
+  files on disk, so pass it when the volume has several. Then rebuild the explorer.
+- If only some entries on a multi-column page are off, by a line or a column: this is
+  likely the known gutter-hoist bug, deferred to 0.4 (`docs/plans/gutter-hoist-fix.md`).
+  Measure it with `python tools/audit_entry_bindings.py output/{slug}`. To correct
+  individual lines, run `pipeline review output/{slug}`, then `pipeline extract output/{slug}`.
+- If the volume was re-OCR'd with another model and the boxes come from the old
+  alignment: see gotcha 1 in `references/gotchas.md`.
+
+### Symptom 6: Pipeline failed with error
 
 Ask the user to paste the error message or traceback. Then:
 - `ModuleNotFoundError` for surya: "Run `uv sync --extra gpu` (requires GPU or Apple Silicon)."
@@ -165,9 +221,19 @@ Ask the user to paste the error message or traceback. Then:
   `utils/models.py`, or `--ocr-model gemini-3.8-flash` for higher accuracy.
 - A 400 about thinking settings after changing a model: see `thinking_config_for()` in
   `utils/gemini.py`. Lite and non-lite 3.x models need different settings.
-- "N page(s) failed … stage not recorded as complete": Gemini OCR exits non-zero when
-  any page fails or is corrupt, and align records its stage only when no page failed.
+- "the Gemini API refused a call for lack of credit": the account's prepaid credit is
+  spent (an HTTP 402). Since 0.3, OCR and NER stop at the first refusal and exit 1;
+  before, each page sat through the rate-limit backoff and then failed. Add credit, then
+  re-run the same command: pages already done are skipped.
+- "N page(s) failed … stage not recorded as complete" (OCR) or "NER failed on N
+  page(s): …" (extract): both exit non-zero and leave the stage unrecorded when any page
+  failed. Align also leaves its stage unrecorded on a failed page, though it exits 0.
   Re-run to retry; failed pages write no output, so they are not skipped.
+- "N page(s) failed to download": re-run the download with the same source. Pages
+  already on disk are skipped, so only the missing ones are requested.
+- `✗ Failed: <target>` in `main.py`'s final summary: one of that target's stages failed,
+  and since 0.3 the run exits 1. Later stages still ran on whatever the failed stage left,
+  so their output is partial. Look further up for the failed stage's own error.
 
 ## Step 4: Present findings and fix command
 
