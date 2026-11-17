@@ -18,10 +18,15 @@ resolved to 0.20.0 and then 0.24.0, and ``--surya-ocr`` failed on import.
 from __future__ import annotations
 
 import re
+import sys
 from importlib.metadata import PackageNotFoundError, version
 
 SUPPORTED_SPEC = "surya-ocr>=0.17.1,<0.20"
 _FIRST_UNSUPPORTED = (0, 20)
+# Surya 0.17 caps Pillow below 11, which has no Python 3.14 build, so the gpu
+# extra installs Surya only below 3.14 (pyproject.toml says why).
+FIRST_UNSUPPORTED_PYTHON = (3, 14)
+GPU_EXTRA_ENTRY = f"{SUPPORTED_SPEC}; python_version < '3.14'"
 
 
 def installed_surya_version() -> "str | None":
@@ -37,7 +42,7 @@ def _is_unsupported(ver: str) -> bool:
     return len(parts) == 2 and tuple(parts) >= _FIRST_UNSUPPORTED
 
 
-def surya_import_error(exc: ImportError) -> str:
+def surya_import_error(exc: ImportError, python: tuple = sys.version_info[:2]) -> str:
     """The message for a failed Surya import.
 
     When Surya is installed but too new, "No module named 'surya.foundation'"
@@ -55,5 +60,13 @@ def surya_import_error(exc: ImportError) -> str:
             "model that returns blocks, not lines). Install a supported release:\n"
             "  uv sync --extra gpu        (this checkout caps the version)\n"
             f'  pip install "{SUPPORTED_SPEC}"   (outside uv, e.g. a notebook kernel)'
+        )
+    if installed is None and tuple(python) >= FIRST_UNSUPPORTED_PYTHON:
+        return (
+            f"Error: {exc}\n"
+            f"This is Python {python[0]}.{python[1]}. The Surya releases this pipeline can "
+            "use need Pillow 10, which has no build for Python 3.14 or later, so the "
+            "gpu extra installs no Surya here. Run the Surya stages on Python 3.13:\n"
+            "  uv sync --python 3.13 --extra gpu"
         )
     return f"Error: {exc}\nInstall with:  uv sync --extra gpu"

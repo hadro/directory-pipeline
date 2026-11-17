@@ -17,7 +17,8 @@ def test_spec_matches_the_gpu_extra():
     # The message tells people what to install; it must name what uv installs.
     extra = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"][
         "optional-dependencies"]["gpu"]
-    assert sv.SUPPORTED_SPEC in extra
+    assert sv.GPU_EXTRA_ENTRY in extra
+    assert sv.GPU_EXTRA_ENTRY.startswith(sv.SUPPORTED_SPEC + ";")
 
 
 @pytest.mark.parametrize("ver, unsupported", [
@@ -55,8 +56,21 @@ def test_message_is_the_install_hint_otherwise(monkeypatch, ver):
     # Missing, or a supported release that failed for another reason (a broken
     # torch, say): the version is not the problem, so do not blame it.
     _installed(monkeypatch, ver)
-    msg = sv.surya_import_error(ImportError("boom"))
+    msg = sv.surya_import_error(ImportError("boom"), python=(3, 13))
     assert msg == "Error: boom\nInstall with:  uv sync --extra gpu"
+
+
+def test_message_on_python_3_14_points_at_3_13(monkeypatch):
+    # The gpu extra installs no Surya on 3.14, so "uv sync --extra gpu" would
+    # change nothing there.
+    _installed(monkeypatch, None)
+    msg = sv.surya_import_error(ImportError("No module named 'surya'"), python=(3, 14))
+    assert "Python 3.14" in msg
+    assert "uv sync --python 3.13 --extra gpu" in msg
+    assert "Install with:  uv sync --extra gpu" not in msg
+    # A too-new Surya that somehow got installed on 3.14 is still named as such.
+    _installed(monkeypatch, "0.24.0")
+    assert "surya-ocr 0.24.0 is installed" in sv.surya_import_error(ImportError("x"), python=(3, 14))
 
 
 def test_run_surya_ocr_exits_with_the_message_when_surya_is_missing(tmp_path):
@@ -71,4 +85,7 @@ def test_run_surya_ocr_exits_with_the_message_when_surya_is_missing(tmp_path):
         capture_output=True, text=True, cwd=ROOT,
     )
     assert proc.returncode == 1
-    assert "Install with:  uv sync --extra gpu" in proc.stderr
+    expected = ("uv sync --python 3.13 --extra gpu"
+                if sys.version_info[:2] >= sv.FIRST_UNSUPPORTED_PYTHON
+                else "Install with:  uv sync --extra gpu")
+    assert expected in proc.stderr
