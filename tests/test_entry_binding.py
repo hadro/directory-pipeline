@@ -409,7 +409,7 @@ class TestIdentityVariants:
 
 @pytest.mark.parametrize("context_field", [
     "list_name", "index_name", "group_name", "heading_name",
-    "series_name", "volume_name", "collection_name", "table_name",
+    "series_name", "volume_name", "collection_name", "table_name", "street_name",
 ])
 def test_a_set_name_never_supplies_the_identity(context_field):
     entry = {
@@ -432,6 +432,43 @@ def test_the_guard_holds_when_the_context_field_sorts_first():
 def test_an_entry_with_only_a_set_name_has_no_identity():
     """Refusing beats binding every entry on the page to its own heading."""
     assert identity_text({"list_name": "A LIST OF RELIGIOUS NEWSPAPERS"}) == ""
+
+
+def test_a_street_page_binds_by_occupant_not_by_street():
+    """Tulsa 1921's street section, page 0337 right: one street heads every entry,
+    and with it as identity the binder placed 1 of 162."""
+    street = "MAIN AV—NORTH"
+    entries = [{"street_name": street, "house_number": "421", "occupant_name": n}
+               for n in ("J V Hulcomb", "J F Phillips", "W C Walker")]
+    lines = [line(t, frag(10, 20 * i, 300, 18)) for i, t in enumerate(
+        ["Main Av-N TULSA CITY DIRECTORY, 1921. Main Av-N 673",
+         "421 J V Hulcomb.", "421 J F Phillips.", "421 W C Walker."])]
+    b = bind_entries(entries, lines, canvas_width=2400)
+    assert [x.line_index for x in b] == [1, 2, 3]
+
+
+class TestSplitNames:
+    """Lain-Healy's Brooklyn 1897 extracts `surname` + `given_name`. `surname` has
+    no `_name` suffix, so the identity was the given name alone."""
+
+    def test_surname_leads_the_given_name(self):
+        e = {"surname": "Ellison", "given_name": "Wood", "is_business": True,
+             "occupation": "stationers"}
+        assert identity_text(e) == "Ellison Wood"
+
+    def test_a_surname_alone_is_the_name(self):
+        assert identity_text({"surname": "Ellison", "address": "12 Fulton"}) == "Ellison 12 Fulton"
+
+    def test_a_whole_name_field_is_not_doubled(self):
+        assert identity_text({"name": "Ellison Wood", "surname": "Ellison"}) == "Ellison Wood"
+
+    def test_same_given_name_different_surnames(self):
+        lines = [line("Ellison Wood stationers", frag(10, 10, 300, 18)),
+                 line("Abbott Wood clerk", frag(10, 30, 300, 18))]
+        entries = [{"surname": "Abbott", "given_name": "Wood", "occupation": "clerk"},
+                   {"surname": "Ellison", "given_name": "Wood", "occupation": "stationers"}]
+        b = bind_entries(entries, lines, canvas_width=2400)
+        assert (b[0].line_index, b[1].line_index) == (1, 0)
 
 
 def test_a_genuine_name_field_still_qualifies():
