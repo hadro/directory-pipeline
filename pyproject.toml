@@ -13,6 +13,11 @@ dependencies = [
     "google-genai>=1.21",
     "numpy>=1.26",
     "pillow>=10.0",
+    # Pillow 10 has no Python 3.14 build. The gpu extra's Surya caps Pillow
+    # below 11, and uv's single lock otherwise settles on one Pillow (10.4) for
+    # every Python, extras or not: CI on 3.14 then failed compiling it. This
+    # floor makes the lock fork, so 3.14 gets a current Pillow.
+    "pillow>=11; python_version >= '3.14'",
     "requests>=2.32.5",
     "python-dotenv>=1.0",
     "flask>=3.0",
@@ -55,7 +60,18 @@ select = ["F", "E9"]
 # Heavy GPU-dependent OCR models (Surya).
 # Install with: uv sync --extra gpu
 gpu = [
-    "surya-ocr>=0.17.1",
+    # Capped below 0.20: the pipeline needs Surya's line detector, and 0.20
+    # removed surya.foundation; 0.24 (Surya 2.5) dropped line detection for a
+    # layout VLM that returns blocks. uv.lock is not tracked, so without the cap
+    # a fresh sync installs the newest release and --surya-ocr fails on import.
+    # Details: utils/surya_version.py, which keeps the same spec for its message.
+    #
+    # Not on Python 3.14: Surya 0.17 caps Pillow below 11, and Pillow 10 ships
+    # no 3.14 build. uv resolves every extra into one lock, so without the
+    # marker that cap reached core installs too, and CI (3.14, no extras)
+    # failed compiling Pillow 10.4 from source. Run Surya on 3.13:
+    #   uv sync --python 3.13 --extra gpu
+    "surya-ocr>=0.17.1,<0.20; python_version < '3.14'",
     "transformers>=4.56.1,<5.0",
 ]
 # Geocoding and map generation.

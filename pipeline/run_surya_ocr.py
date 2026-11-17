@@ -97,11 +97,8 @@ def main() -> None:
         from surya.foundation import FoundationPredictor
         from surya.recognition import RecognitionPredictor
     except ImportError as exc:
-        print(
-            f"Error: {exc}\n"
-            "Install with:  uv sync --extra gpu",
-            file=sys.stderr,
-        )
+        from utils.surya_version import surya_import_error
+        print(surya_import_error(exc), file=sys.stderr)
         sys.exit(1)
 
     t_load = time.monotonic()

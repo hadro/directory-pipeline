@@ -115,6 +115,6 @@ Notes:
 |------|-------|---------|
 | `output/{slug}/manifest.json` | `--download` | Maps filenames to IIIF canvas URIs; needed for thumbnails |
 | `output/{slug}/selection.txt` | `--select-pages` (Sample tab) | Sample pages for prompt generation |
-| `output/{slug}/included_pages.txt` | `--select-pages` (Scope tab) | Page filter applied during extraction |
+| `output/{slug}/included_pages.txt` | `--select-pages` (Scope tab) | Page filter applied during OCR and extraction |
 | `output/{slug}/ocr_prompt.md` | `--generate-prompts` | Custom OCR prompt for this collection type |
 | `output/{slug}/ner_prompt.md` | `--generate-prompts` | Custom NER prompt; reuse across volumes |

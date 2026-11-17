@@ -1,7 +1,7 @@
 ---
 name: pipeline-run
 description: |
-  Builds the exact `python main.py` command for the directory-pipeline project.
+  Builds the exact `pipeline` (or `python main.py`) command for the directory-pipeline project.
   Trigger this skill when the user asks "what command should I run", "how do I run
   the pipeline", "what flags do I need", "run the pipeline", or describes a goal
   like "extract entries" or "add bounding boxes". The skill inspects the output
