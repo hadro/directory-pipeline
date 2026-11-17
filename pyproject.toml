@@ -55,7 +55,12 @@ select = ["F", "E9"]
 # Heavy GPU-dependent OCR models (Surya).
 # Install with: uv sync --extra gpu
 gpu = [
-    "surya-ocr>=0.17.1",
+    # Capped below 0.20: the pipeline needs Surya's line detector, and 0.20
+    # removed surya.foundation; 0.24 (Surya 2.5) dropped line detection for a
+    # layout VLM that returns blocks. uv.lock is not tracked, so without the cap
+    # a fresh sync installs the newest release and --surya-ocr fails on import.
+    # Details: utils/surya_version.py, which keeps the same spec for its message.
+    "surya-ocr>=0.17.1,<0.20",
     "transformers>=4.56.1,<5.0",
 ]
 # Geocoding and map generation.
