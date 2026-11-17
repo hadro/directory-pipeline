@@ -39,11 +39,12 @@ Surya can't be upgraded past 0.19 (0.24 dropped line detection). [Indra OCR](htt
 (Datalab, CPU, ONNX) returns lines in Surya's shape. `tools/indra_lines.py` writes its
 lines as `*_surya.json` into a mirror under `output/_indra_lines/`, so the pipeline runs
 on them unchanged. The judges (gold panel and no-gold), the pass bar, the commands and the
-results: `docs/evidence/2026-11-17-indra-lines/` (run 2026-11-17). **Indra alone fails**:
-it trails Surya on Tulsa 1921. Indra at 2,048 px with lines kept whole, then Surya on the
-pages where Indra binds badly, passes (98.8% of gold lines against 96.2%). Both need
-`align_ocr`'s 15 px line floor off, a production change that needs its own check first.
-Nothing in the pipeline uses Indra yet.
+results: `docs/evidence/2026-11-17-indra-lines/` (run 2026-11-17). **Not ready.** Indra
+first, Surya where Indra binds badly, wins on the New York gold panel (99.4% of lines
+against 96.4%) and modestly on Tulsa 1921, but **its entry boxes are worse than Surya's on
+the Green Books** (87.1% good against 90.3%: map labels boxed as lines, partial boxes).
+Nothing in the pipeline uses Indra. The width-aware line floor found on the way is on
+`claude/width-aware-line-floor`.
 
 ## Evaluation: TypeSafe AI's Jev
 
@@ -229,11 +230,11 @@ alignment put on the wrong printed line passes. For a change that moves boxes (l
 detector, aligner), judge boxes by what is printed in them:
 `docs/evidence/2026-11-17-indra-lines/entry_placement.py`.
 
-**Open bug (found 2026-11-17):** `identity_tokens()` takes the first `*_name` field, and
-in Tulsa 1921's street section that is `street_name`, the section heading. The current
-binder refuses all 21,902 of those entries. The published entries predate it and keep
-their boxes; re-extracting Tulsa, or running `patch_canvas_fragments.py` over it, would
-strip them. Detail in that folder's README.
+**Bug found 2026-11-17, fixed on `claude/binder-name-fields` (unmerged):**
+`identity_tokens()` takes the first `*_name` field, and in Tulsa 1921's street section
+that is `street_name`, the section heading, so `main`'s binder refuses all 21,902 of those
+entries. The published entries predate it and keep their boxes; until the fix merges,
+re-extracting Tulsa, or running `patch_canvas_fragments.py` over it, would strip them.
 
 Cross-repo handoff for the 2026-09-04 audit and the outstanding policy decision:
 `../green-books/docs/alignment-audit-2026-09-04.md`.
