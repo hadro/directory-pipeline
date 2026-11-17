@@ -36,6 +36,7 @@ and results. Most need the gitignored `output/` data to reproduce.
 - [evidence/2026-09-22-gutter-hoist/](evidence/2026-09-22-gutter-hoist/) — mid-page lines hoisted as headers, and what it costs.
 - [evidence/2026-10-16-blank-page/](evidence/2026-10-16-blank-page/) — the blank-page check that skipped pages with text, and its fix.
 - [evidence/2026-10-17-column-alignment-panel/](evidence/2026-10-17-column-alignment-panel/) — per-column alignment on city directories, scored against hand-verified gold.
+- [evidence/2026-11-17-indra-lines/](evidence/2026-11-17-indra-lines/) — Indra OCR's line boxes against Surya's, on the gold panel and without gold. The harness; not run yet.
 
 ## Assets
 - `screenshots/` — images embedded in the README and docs.

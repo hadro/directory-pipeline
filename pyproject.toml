@@ -58,6 +58,13 @@ gpu = [
     "surya-ocr>=0.17.1",
     "transformers>=4.56.1,<5.0",
 ]
+# Indra OCR (Datalab): CPU line detection on ONNX Runtime, no torch. Under
+# evaluation as a replacement for Surya's line boxes; see
+# docs/evidence/2026-11-17-indra-lines/. Capped at the major version tested.
+# Install with: uv sync --inexact --extra indra   (--inexact keeps Surya)
+indra = [
+    "indra-ocr>=1.1.2,<2",
+]
 # Geocoding and map generation.
 # Install with: uv sync --extra geo
 geo = [

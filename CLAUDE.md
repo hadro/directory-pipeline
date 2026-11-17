@@ -32,6 +32,16 @@ lose per-column alignment. Evidence: `docs/evidence/2026-09-22-gutter-hoist/`. T
 suggested branch (a "band of its own" test in `is_header`), how to measure it, and the
 rollout: `docs/plans/gutter-hoist-fix.md` (created 2026-09-23).
 
+## Experiment: Indra OCR as the line detector
+
+The placement errors left after 0.3 sit on dense pages where Surya under-segments, and
+Surya can't be upgraded past 0.19 (0.24 dropped line detection). [Indra OCR](https://github.com/datalab-to/indra)
+(Datalab, CPU, ONNX) returns lines in Surya's shape. `tools/indra_lines.py` writes its
+lines as `*_surya.json` into a mirror under `output/_indra_lines/`, so the pipeline runs
+on them unchanged. The judges (gold panel and no-gold), what differs for alignment, the
+pass bar, and the commands: `docs/evidence/2026-11-17-indra-lines/` (created 2026-11-17,
+**not yet run**). Nothing in the pipeline uses Indra until it passes.
+
 ## Evaluation: TypeSafe AI's Jev
 
 An assessment of [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) — TypeSafe AI's non-generative "System One" model (launched 2026-09-15) that returns calibrated typed decisions (`Noul` / `Choice` / `Score`) instead of text — lives at `docs/plans/jev-evaluation.md` (created 2026-09-20). **Bottom line: Jev cannot do NER or OCR** (it does not generate text, and rejects unconstrained string fields), so it is not a replacement for `extract_entries.py`, the sibling repo's Qwen fine-tune, or anything in the Hugging Face plan. It *is* a candidate for the routing/gating layer: non-entry rejection before NER, `detect_sections` Phase 5 boundary adjudication, and the `_INFER_RULES` category residue. Read it before evaluating any classification-only model backend; nothing is committed to, and the doc proposes one measured shadow run before any wiring.
