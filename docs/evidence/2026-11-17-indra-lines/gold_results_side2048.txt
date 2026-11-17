@@ -1,0 +1,51 @@
+page                            rows | surya_pub ok/wr/ub |     surya ok/wr/ub |     indra ok/wr/ub
+ Tboyd1890/0002_flushin           12 |           12/ 0/ 0 |           12/ 0/ 0 |           12/ 0/ 0
+  boyd1890/0004_flushin           40 |           40/ 0/ 0 |           40/ 0/ 0 |           40/ 0/ 0
+ Tboyd1890/0006_flushin           20 |           20/ 0/ 0 |           20/ 0/ 0 |           20/ 0/ 0
+  doggetts1850/0021_5675061      154 |          154/ 0/ 0 |          154/ 0/ 0 |          154/ 0/ 0
+  duncan1794/0021_newyork         22 |           22/ 0/ 0 |           22/ 0/ 0 |           22/ 0/ 0
+  duncan1794/0022_newyork         36 |           36/ 0/ 0 |           36/ 0/ 0 |           36/ 0/ 0
+  franks1786/0003_newyork         11 |           11/ 0/ 0 |           11/ 0/ 0 |           11/ 0/ 0
+  franks1786/0004_newyork         12 |           12/ 0/ 0 |           12/ 0/ 0 |           12/ 0/ 0
+  franks1786/0005_newyork          7 |            7/ 0/ 0 |            7/ 0/ 0 |            7/ 0/ 0
+  franks1786/0021_newyork         26 |           26/ 0/ 0 |           26/ 0/ 0 |           26/ 0/ 0
+  hearne1852/0021_micro_I         30 |           30/ 0/ 0 |           30/ 0/ 0 |           30/ 0/ 0
+  hearne1852/0022_micro_I         22 |           22/ 0/ 0 |           22/ 0/ 0 |           22/ 0/ 0
+  hopehenderson1856/0021_micro_   60 |           60/ 0/ 0 |           60/ 0/ 0 |           60/ 0/ 0
+  lain1876/0021_1876BPL           73 |           72/ 0/ 1 |           72/ 1/ 0 |           72/ 1/ 0
+  lain1876/0022_1876BPL           30 |           27/ 0/ 3 |           27/ 3/ 0 |           27/ 2/ 1
+  longworth1818/0021_5781975      54 |           54/ 0/ 0 |           54/ 0/ 0 |           54/ 0/ 0
+  longworth1818/0022_5781990      52 |           52/ 0/ 0 |           52/ 0/ 0 |           52/ 0/ 0
+*Tmb1931/0021_5807323             33 |           33/ 0/ 0 |           33/ 0/ 0 |            9/24/ 0
+*Tmb1931/0022_5807366             64 |           64/ 0/ 0 |           64/ 0/ 0 |           63/ 1/ 0
+  ogden1839/0022_brookly          33 |           33/ 0/ 0 |           33/ 0/ 0 |           33/ 0/ 0
+*Tpolk1917/0021_5685525           48 |            0/48/ 0 |            0/42/ 6 |           39/ 9/ 0
+ Tpolk1925/0021_5811503           14 |           11/ 3/ 0 |           11/ 1/ 2 |            0/ 6/ 8
+  polk1933si/0021_5806483         56 |           55/ 1/ 0 |           55/ 1/ 0 |           56/ 0/ 0
+ Tqueens1933/0022_5808293         31 |           20/11/ 0 |           21/ 9/ 1 |            8/23/ 0
+  rode1851/0021_newyork           53 |           53/ 0/ 0 |           53/ 0/ 0 |           53/ 0/ 0
+  smith1855/0021_micro_I          90 |           89/ 1/ 0 |           89/ 1/ 0 |           89/ 1/ 0
+  smith1855/0022_micro_I          95 |           95/ 0/ 0 |           95/ 0/ 0 |           94/ 1/ 0
+  smith1856/0022_micro_I         121 |          121/ 0/ 0 |          121/ 0/ 0 |          121/ 0/ 0
+  trow1884/0021_5682586          126 |          126/ 0/ 0 |          126/ 0/ 0 |          125/ 1/ 0
+  trow1884/0022_5682682           15 |           15/ 0/ 0 |           15/ 0/ 0 |           15/ 0/ 0
+  trow1907/0021_trowsge           67 |           67/ 0/ 0 |           67/ 0/ 0 |           66/ 1/ 0
+  trow1913/0021_5690892           92 |           92/ 0/ 0 |           92/ 0/ 0 |           92/ 0/ 0
+  trowwilson1865/0022_5676777    167 |          167/ 0/ 0 |          167/ 0/ 0 |          167/ 0/ 0
+
+All scored rows
+  surya_pub  n= 1766  correct  96.1%  wrong  3.6%  unboxed  0.2%
+  surya      n= 1766  correct  96.2%  wrong  3.3%  unboxed  0.5%
+  indra      n= 1766  correct  95.5%  wrong  4.0%  unboxed  0.5%
+
+Unflagged pages
+  surya_pub  n= 1544  correct  99.6%  wrong  0.1%  unboxed  0.3%
+  surya      n= 1544  correct  99.6%  wrong  0.4%  unboxed  0.0%
+  indra      n= 1544  correct  99.5%  wrong  0.5%  unboxed  0.1%
+
+Flagged pages (* suspect Surya, T tall gold boxes): judge is lenient
+  surya_pub  n=  222  correct  72.1%  wrong 27.9%  unboxed  0.0%
+  surya      n=  222  correct  72.5%  wrong 23.4%  unboxed  4.1%
+  indra      n=  222  correct  68.0%  wrong 28.4%  unboxed  3.6%
+
+Not scored: {'no monotonic match': 16, 'Gemini OCR failed on the page': 387, 'text not in Gemini output': 22, 'box dropped by aligner preprocessing': 60, 'dropped page (region Surya)': 49}

@@ -120,15 +120,19 @@ From the repo root, on the machine with `output/`:
 ```bash
 uv sync --inexact --extra indra       # adds Indra; --inexact keeps Surya and torch installed
 
-# 0. A first look (a minute or two): four dense 1907 Trow pages tracked in this repo.
-#    Mirrored to output/_indra_lines/pages/. Read the timings and eyeball the boxes.
-python tools/indra_lines.py docs/evidence/2026-09-02-ocr-token-burn/pages/
+# (Not the four Trow pages in docs/evidence/2026-09-02-ocr-token-burn/pages/: they are
+#  mirror-image, faint microfilm, and Indra finds no lines on them. See Results.)
 
-# 1. The gold panel: run Indra on its pages only, then score.
+# 1. The gold panel: run Indra on its pages only, then score. Indra's default detection
+#    size (1024 px), then 2048 px into a second mirror.
 python docs/evidence/2026-11-17-indra-lines/gold_panel.py --list-pages > /tmp/gold_pages.txt
-python tools/indra_lines.py $(cat /tmp/gold_pages.txt)
+tr '\n' '\0' < /tmp/gold_pages.txt | xargs -0 python tools/indra_lines.py -q
 python docs/evidence/2026-11-17-indra-lines/gold_panel.py > docs/evidence/2026-11-17-indra-lines/gold_results.txt
 python docs/evidence/2026-11-17-indra-lines/gold_panel.py --indra-min-conf 0.5 > docs/evidence/2026-11-17-indra-lines/gold_results_conf05.txt
+tr '\n' '\0' < /tmp/gold_pages.txt | xargs -0 python tools/indra_lines.py -q \
+    --det-long-side 2048 --mirror-root output/_indra_lines_2048
+python docs/evidence/2026-11-17-indra-lines/gold_panel.py --mirror-root output/_indra_lines_2048 \
+    > docs/evidence/2026-11-17-indra-lines/gold_results_side2048.txt
 
 # 2. A production volume, no gold: the same 150-page Tulsa sample size as 2026-10-17.
 python tools/indra_lines.py output/tulsa_1921/
@@ -163,4 +167,59 @@ Indra returned none.
 
 ## Results
 
-Not run yet.
+Run on 2026-11-16 on an M2 MacBook (8 cores, 16 GB), with Indra 1.1.2 on 4 threads.
+Output: `gold_results.txt`, `gold_results_conf05.txt` and `gold_results_side2048.txt`
+(counts and page names only).
+
+**The wiring holds.** Surya, scored by the published judge, gives 96.1%, the panel's figure
+from 2026-10-17.
+
+**The four Trow 1907 pages are not a fair sample.** They were kept because Gemini looped
+on them. They are faint microfilm, and mirror images (the header reads backwards). Indra
+finds no lines on the raw scans at any detection size. With contrast stretched it finds
+lines, and it reads them only once the page is flipped left to right.
+
+**Gold panel**, correct placement, 1,766 rows:
+
+| | Surya | Indra, 1024 px (default) | Indra, 2048 px |
+|---|---|---|---|
+| all rows | 96.2% | 86.0% | 95.5% |
+| unflagged pages (1,544) | 99.6% | 91.6% | **99.5%** |
+| flagged pages (222) | 72.5% | 47.3% | 68.0% |
+
+The dense pages, correct / scored:
+
+| page | Surya | Indra 1024 | Indra 2048 | Gemini lines | Indra lines at 2048 |
+|---|---|---|---|---|---|
+| polk1917 | 0/48 | 0/48 | **39/48** | 756 | 1,692 |
+| polk1925 | 11/14 | 0/14 | 0/14 | 614 | 1,951 |
+| queens1933 | 21/31 | 2/31 | 8/31 | 352 | 1,294 |
+| mb1931 p.21 | 33/33 | 9/33 | 9/33 | 480 | 953 |
+| polk1933si | 55/56 | 17/56 | 56/56 | 172 | 311 |
+| trow1913 | 92/92 | 36/92 | 92/92 | 438 | 471 |
+
+`--indra-min-conf 0.5` changes nothing (85.8% against 86.0%).
+
+**Speed**, wall time per page including image load: median 0.58 s at 1024 px and 0.71 s
+at 2048 px (slowest 3.4 s), against about 61 s for Surya on the same machine.
+
+**Reading:**
+
+- **Detection size is the lever.** At Indra's default, it shrinks a 2,600 px page to
+  1,024 px, and small type on dense pages disappears (polk1917: 114 lines for 756
+  Gemini lines). Its own adaptive retry needs at least 8 lines from the first pass, and
+  stops at 2,048 px. At 2,048 px, Indra matches Surya on ordinary pages (bar 1 met).
+- **Dense pages are mixed (bar 2 not met).** polk1917 goes from 0 to 39 of 48, the
+  largest single gain on the panel. But polk1925, queens1933 and mb1931 p.21 are worse
+  than Surya. On those, Indra returns 2 to 3.5 boxes per Gemini line: it cuts a printed
+  line at the wide gaps between name, occupation and address, and alignment pairs one
+  line with one box.
+- All six dense pages are flagged or have tall gold boxes, where this judge is lenient.
+  Look at the polk1917 boxes before trusting its gain.
+
+**Next:**
+
+1. Look at polk1917 and polk1925 with boxes drawn.
+2. Join Indra's segments that share a baseline into one line before alignment, then
+   re-score. That is the likely fix for the split lines.
+3. Tulsa 1921 without gold (`compare_detectors.py`), at 2048 px.

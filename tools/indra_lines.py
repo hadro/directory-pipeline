@@ -247,6 +247,9 @@ def main() -> None:
                     help="Root whose layout the mirror keeps (default: output)")
     ap.add_argument("--threads", type=int, default=4,
                     help="ONNX Runtime threads (default 4, as in Datalab's benchmark)")
+    ap.add_argument("--det-long-side", type=int, metavar="PX",
+                    help="Long side the page is scaled to for line detection (Indra's "
+                         "default: 1024, which loses small type on dense directory pages)")
     ap.add_argument("--pages", metavar="GLOB",
                     help="Only image filenames matching this glob, e.g. '0012_*'")
     ap.add_argument("--limit", type=int, default=0,
@@ -274,6 +277,8 @@ def main() -> None:
     except ModelError as exc:
         sys.exit(f"Error: could not load Indra's models: {exc}\n"
                  "The first run downloads them from Hugging Face.")
+    if args.det_long_side:
+        ocr.long_side = args.det_long_side
 
     failed_any = False
     for volume, chosen in _targets(args.volumes):
@@ -302,6 +307,7 @@ def main() -> None:
             "source": str(volume),
             "indra_version": indra_ocr.__version__,
             "threads": args.threads,
+            "det_long_side": getattr(ocr, "long_side", None),
             "turn": False,
             "machine": f"{platform.system()} {platform.machine()} ({os.cpu_count()} cpus)",
             "python": platform.python_version(),
