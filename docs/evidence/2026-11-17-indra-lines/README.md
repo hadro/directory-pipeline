@@ -7,8 +7,8 @@ of gold lines placed against Surya's 96.2%, with Surya needed on about a third o
 pages. At the entry level on Tulsa it cuts wrong boxes by a third, but most of that gain
 comes from the aligner's 15 px line floor, which helps Surya alone too; and **on Green
 Books its entry boxes are worse than Surya's** (map labels, partial boxes). Not ready
-for the pipeline. Found on the way and fixed on their own branches: a width-aware line
-floor, and two binder bugs. Results are at the end of this file.
+for the pipeline. Found on the way and since merged: a width-aware line floor (PR #14)
+and two binder bugs (PR #15). Results are at the end of this file.
 
 **Code:**
 
@@ -357,8 +357,8 @@ published entries predate this binder and keep their boxes, but re-extracting Tu
 running `tools/patch_canvas_fragments.py` over it, would strip them. A survey of all
 413,975 entries on disk found a second case: `surname` has no `_name` suffix, so
 `surname` + `given_name` entries (Lain-Healy's Brooklyn 1897) matched on the given name
-alone. **Both fixed on branch `claude/binder-name-fields`**, not yet merged; the measurements
-are in its commit message.
+alone. **Both fixed in PR #15** (merged 2026-11-18); the measurements
+are in its description.
 
 ### A width-aware floor
 
@@ -369,7 +369,7 @@ Gemini line, and the reading order drifts until body text lands on a margin ad s
 (0406 right). No height cutoff separates them from real short lines: the gains come at
 every typical line height, from 15 px to over 21. Width does. The rule: **a line under
 15 px stays only if it is at least half the page's median line width.** It is
-`width_floor.py` here, and the shipped filter on branch `claude/width-aware-line-floor`
+`width_floor.py` here, and the shipped filter in `align_ocr.filter_short_lines` (PR #14)
 (the two keep identical lines on 1,706 Tulsa and gold pages, both detectors).
 
 | | floor 15 (today) | floor off | **width-aware** |
@@ -431,7 +431,7 @@ column gutter they never do. On Tulsa page 0305 left it takes Indra from 105 wro
 entries to 12, and Surya from 105 to 15.
 
 Everything on the width-aware floor; Tulsa street pages scored with the fixed binder
-(`claude/binder-name-fields`; with today's binder they are unplaced):
+(PR #15; with the binder before it they were unplaced):
 
 | wrong boxes | Surya | Indra | Cascade |
 |---|---|---|---|

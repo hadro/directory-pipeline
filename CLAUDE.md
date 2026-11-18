@@ -44,7 +44,7 @@ first, Surya where Indra binds badly, wins on the New York gold panel (99.6% of 
 against 96.3%) and on Tulsa 1921, but **its entry boxes still trail Surya's on the Green
 Books** (88.8% good against 91.1%, mostly narrower boxes), even with the evidence folder's
 picture mask and row join. Nothing in the pipeline uses Indra. Found on the way: the
-width-aware line floor (`claude/width-aware-line-floor`), and the row join
+width-aware line floor (merged, PR #14), and the row join
 (`common.join_rows`), which helps Surya too: Tulsa's street pages, 22% wrong boxes → 8%.
 
 ## Evaluation: TypeSafe AI's Jev
@@ -231,11 +231,10 @@ alignment put on the wrong printed line passes. For a change that moves boxes (l
 detector, aligner), judge boxes by what is printed in them:
 `docs/evidence/2026-11-17-indra-lines/entry_placement.py`.
 
-**Bug found 2026-11-17, fixed on `claude/binder-name-fields` (unmerged):**
-`identity_tokens()` takes the first `*_name` field, and in Tulsa 1921's street section
-that is `street_name`, the section heading, so `main`'s binder refuses all 21,902 of those
-entries. The published entries predate it and keep their boxes; until the fix merges,
-re-extracting Tulsa, or running `patch_canvas_fragments.py` over it, would strip them.
+**Fixed 2026-11-18 (PR #15):** `identity_tokens()` took the first `*_name` field, and in
+Tulsa 1921's street section that is `street_name`, the section heading, so the binder
+refused all 21,902 of those entries. `street_name` is now never identity, and a split
+`surname` + `given_name` binds by the full name. Re-binding Tulsa is safe again.
 
 Cross-repo handoff for the 2026-09-04 audit and the outstanding policy decision:
 `../green-books/docs/alignment-audit-2026-09-04.md`.
