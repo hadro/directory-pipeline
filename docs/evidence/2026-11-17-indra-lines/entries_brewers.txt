@@ -1,0 +1,26 @@
+811 pages, 24142 entries with identity words. Cascade took Surya on 27 pages.
+Wiring: 28224 of 34112 lines of the in-memory Surya alignment are in the aligned JSON on disk.
+
+Shares of placed entries:
+                placed     good  partial     weak    wrong     tall  unplaced
+published        23293    56.5%    19.1%     7.4%    17.0%     7.7%       849
+surya            23399    68.4%    19.7%     4.9%     7.1%     4.8%       743
+surya_nofloor    23498    67.8%    19.2%     4.6%     8.3%     5.0%       644
+indra_nofloor    23861    76.6%    20.9%     1.7%     0.8%     0.0%       281
+cascade          23857    76.6%    20.9%     1.7%     0.9%     0.1%       285
+
+published against surya, wrong+weak entries per page: pages better 30 (112 entries), worse 593 (3012 entries)
+  most improved: 0024_5131991.jpg (21->3), 0054_5131327.jpg (18->3), 0049_5131414.jpg (27->17), 0033_5131574.jpg (12->3), 0047_5131770.jpg (11->2)
+  most worsened: 0064_5132031.jpg (10->38), 0016_5131903.jpg (8->36), 0064_5133887.jpg (1->24), 0050_5131415.jpg (1->20), 0042_5131929.jpg (13->32)
+
+surya_nofloor against surya, wrong+weak entries per page: pages better 32 (98 entries), worse 171 (347 entries)
+  most improved: 0049_5131414.jpg (27->8), 0054_5131327.jpg (18->1), 0033_5131574.jpg (12->1), 0033_5133856.jpg (24->18), 0026_5131993.jpg (9->3)
+  most worsened: 0038_5133861.jpg (1->14), 0041_5131406.jpg (12->23), 0066_5133889.jpg (1->11), 0060_5133883.jpg (0->9), 0048_5131681.jpg (1->8)
+
+indra_nofloor against surya, wrong+weak entries per page: pages better 517 (2248 entries), worse 32 (65 entries)
+  most improved: 0049_5131414.jpg (27->0), 0033_5131842.jpg (25->0), 0035_5131308.jpg (24->0), 0033_5133856.jpg (24->0), 0024_5131991.jpg (21->0)
+  most worsened: 0011_5131464.jpg (5->18), 0041_5131406.jpg (12->19), 0045_5131932.jpg (3->9), 0029_5131570.jpg (3->8), 0014_5131981.jpg (6->9)
+
+cascade against surya, wrong+weak entries per page: pages better 509 (2234 entries), worse 33 (46 entries)
+  most improved: 0049_5131414.jpg (27->0), 0033_5131842.jpg (25->0), 0035_5131308.jpg (24->0), 0033_5133856.jpg (24->0), 0024_5131991.jpg (21->0)
+  most worsened: 0041_5131406.jpg (12->19), 0074_5142998.jpg (0->4), 0034_5131575.jpg (1->4), 0059_5131424.jpg (0->2), 0108_5128952.jpg (0->2)

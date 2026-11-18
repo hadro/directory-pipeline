@@ -6,7 +6,9 @@ Tulsa 1921. **Indra first, with Surya on the pages where Indra binds badly, does
 of gold lines placed against Surya's 96.2%, with Surya needed on about a third of Tulsa's
 pages. At the entry level on Tulsa it cuts wrong boxes by a third, but most of that gain
 comes from the aligner's 15 px line floor, which helps Surya alone too; and **on Green
-Books its entry boxes are worse than Surya's** (map labels, partial boxes). Not ready
+Books its entry boxes are worse than Surya's** (map labels, partial boxes). On the
+brewery directories (2026-11-18) Indra alone wins clearly: Tovey's wrong boxes 8.6% to
+1.0%. Not ready
 for the pipeline. Found on the way and since merged: a width-aware line floor (PR #14)
 and two binder bugs (PR #15). Results are at the end of this file.
 
@@ -168,6 +170,12 @@ python $D/entry_placement.py output/green_books_and_related/*/ --mirror-root $M 
 python $W $D/entry_placement.py output/green_books_and_related/*/ --mirror-root $M > $D/entries_green_books_width.txt
 # The picture mask and the row join: add --mask-pictures, then --mask-pictures --join-rows,
 # to the width-floor runs above (gold_panel.py, entry_placement.py on Tulsa and the Green Books).
+# Brewery directories (2026-11-18, on main: the width-aware floor is shipped, so no $W).
+# entries_brewers_join/_mask/_mask_join.txt: add --join-rows, --mask-pictures, or both.
+find output/brewers_guide_*/ output/tovey_s_*/ -name '*_surya.json' | sed 's/_surya\.json$/.jpg/' \
+    | tr '\n' '\0' | xargs -0 python tools/indra_lines.py -q --det-long-side 2048 --no-split --mirror-root $M
+python $D/entry_placement.py output/brewers_guide_*/ output/tovey_s_*/ --mirror-root $M \
+    --ner-model gemini-3.1-flash-lite-preview > $D/entries_brewers.txt
 
 # 3. Look at the pages that moved: align the mirror, then open it in the review UI.
 python pipeline/align_ocr.py output/_indra_lines_2048_nosplit/tulsa_1921/
@@ -458,6 +466,40 @@ Everything on the width-aware floor; Tulsa street pages scored with the fixed bi
 - **On the Green Books the cascade still trails Surya**: 88.8% good against 91.1%,
   wrong 1.4% against 1.3%. What is left is mostly partial boxes (8.2% against 6.2%).
 
+### Brewery directories
+
+Run 2026-11-18 on the published brewery collection: the *Brewers' Guide* (2 volumes, 232
+pages with entries) and *Tovey's Official Brewers' Directory* (10 volumes, 579 pages),
+24,142 entries. The OCR is `gemini-2.0-flash`, the scored entries the published
+`gemini-3.1-flash-lite-preview` extraction (`--ner-model`). `published` is each entry's
+box as published, the aligned line on disk carrying its `canvas_fragment` (all 23,294
+fragments match one). Everything else on today's `main` (width-aware floor, PR #15 binder).
+Files: `entries_brewers*.txt`.
+
+| | good | wrong | weak | tall | unplaced |
+|---|---|---|---|---|---|
+| **Tovey's**, published | 49.8% | 21.1% | 9.2% | 10.4% | 728 |
+| re-aligned, Surya | 64.9% | 8.6% | 6.1% | 6.4% | 627 |
+| Indra | **75.4%** | **1.0%** | 1.8% | 0.0% | 198 |
+| cascade | 75.5% | 1.0% | 1.8% | 0.1% | 197 |
+| **Brewers' Guide**, published | 75.5% | 5.4% | 2.4% | 0.0% | 121 |
+| re-aligned, Surya | 78.2% | 2.7% | 1.4% | 0.0% | 116 |
+| Indra | **80.1%** | **0.3%** | 1.4% | 0.0% | 83 |
+| cascade | 79.8% | 0.6% | 1.4% | 0.0% | 88 |
+
+- **Re-aligning with today's `main` alone** cuts Tovey's wrong boxes from 21% to 9%. The
+  published boxes came from an older aligner: on a Tovey page they sit a row off, and
+  first entries under a state heading are boxed on the heading itself.
+- **Tovey's is Surya's under-segmentation case.** Tight leading, and many Surya boxes
+  span two to four printed rows. Those boxes score leniently here (the judge passes a box
+  that contains the name), so Surya's numbers are if anything flattering. Indra boxes
+  each row once. The cascade takes Surya on 27 of 811 pages, and gains nothing.
+- **The row join and the picture mask do nothing here**: good +0.2 points with the join
+  (Surya and Indra alike), the mask changes no band. The ditto rows (`" ...... Bluff City
+  Brewery`) the join was hoped to fix are rare.
+- Indra here is the strongest result so far. Unlike the Green Book, the leaders do not
+  split its rows (`--no-split`).
+
 **Against the bar**, at 2,048 px, no split, floor off:
 
 1. Unflagged gold pages: Indra 99.5%, Surya 99.6%. **Met.**
@@ -472,23 +514,29 @@ Everything on the width-aware floor; Tulsa street pages scored with the fixed bi
    from the floor. Not "a handful". With the width-aware floor: 2,168 better, 508 worse.
 6. Green Books (added after the bar was set): **not met.** The cascade's entry boxes
    are worse than Surya's (87.1% good against 90.3%).
+7. Brewery directories (added 2026-11-18): **met**, by Indra alone. Tovey's wrong boxes
+   8.6% to 1.0%, good 64.9% to 75.4%.
 
 **Verdict for now: do not cut a cascade branch.** With the picture mask and row join it
-wins on the New York directories (99.6% against 96.3%) and on Tulsa, street pages most
-of all, and still trails Surya on the Green Books, the main production collection, by
-about two points of fully boxed entries. The fixes that do not need Indra are where the
-measured gains are: the width-aware floor and the binder (branches, PRs open), and the
-row join, which takes Surya from 22% wrong to 8% on Tulsa's street pages.
+wins on the New York directories (99.6% against 96.3%), on Tulsa, street pages most of
+all, and on the brewery directories by the widest margin yet, and still trails Surya on
+the Green Books, the main production collection, by about two points of fully boxed
+entries. The fixes that do not need Indra are where the measured gains are: the
+width-aware floor and the binder (merged, PRs #14 and #15), and the row join, which takes
+Surya from 22% wrong to 8% on Tulsa's street pages and does nothing on the breweries.
 
 **Next:**
 
-1. **The row join for the production aligner**, Surya included, on its own branch,
-   measured with `entry_placement.py` before and after.
-2. **The picture mask**: try dropping only body-size lines inside a region, so display
+1. **Re-align the published collections with today's `main`**, then re-bind. It needs
+   no new code and no Gemini calls, and on Tovey's it takes wrong boxes from 21% to 9%.
+   Do it once, after any aligner change that ships.
+2. **The row join for the production aligner**, Surya included, on its own branch,
+   measured with `entry_placement.py` before and after. Its gain is Tulsa's street pages.
+3. **The picture mask**: try dropping only body-size lines inside a region, so display
    ads keep their text; then decide whether it ships.
-3. **Indra on the Green Books**: what is left is narrower boxes. A join across dot
+4. **Indra on the Green Books**: what is left is narrower boxes. A join across dot
    leaders that does not need a Gemini match, or widening a box to its row, may close it.
-4. **If that closes the gap**, the cascade in the pipeline: Indra lines in the line stage,
+5. **If that closes the gap**, the cascade in the pipeline: Indra lines in the line stage,
    Gemini OCR and align unchanged, then a Surya fallback stage for the pages over the
    threshold. Surya 0.17.1 and Indra 1.1.2 install and import together in the project's
    `.venv` (Python 3.12).

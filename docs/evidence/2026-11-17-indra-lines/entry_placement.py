@@ -25,15 +25,14 @@ both readings keeps either detector's reading quality from deciding the result.
 A bound box taller than 2x its detector's median line height is also counted as
 tall: such a box holds several printed lines, so its score is lenient.
 
-The published entries' own boxes are not scored: they were bound at extraction by
-the binder of the day, and Tulsa 1921's predate the 0.3 binder. Today's binder
-refuses Tulsa's street-directory entries outright (identity_tokens takes the
-section-level street_name as the entry's identity), under every configuration.
-
 Configurations:
 
-  surya          Surya at the aligner's shipped floor: the baseline. Its alignment
-                 should match the aligned JSON on disk (the wiring line)
+  published      the entry's own box as published: the aligned line on disk whose
+                 canvas_fragment it carries, bound at extraction by the binder of
+                 the day (Tulsa 1921's predate the 0.3 binder)
+  surya          Surya at the aligner's shipped floor: the baseline. Since PR #14
+                 that is the width-aware floor; result files from 2026-11-17 used the
+                 15 px floor and matched the aligned JSON on disk (the wiring line)
   surya_nofloor  Surya with filter_short_lines' 15 px floor off
   indra_nofloor  Indra, floor off
   cascade        indra_nofloor, or surya_nofloor where common.cascade_pick says so
@@ -65,7 +64,7 @@ from tools.indra_lines import DEFAULT_MIRROR, mirror_root_for  # noqa: E402
 from utils.entry_binding import bind_entries, identity_tokens, tokens  # noqa: E402
 
 SHIPPED_FLOOR = A._MIN_LINE_HEIGHT
-CONFIGS = ("surya", "surya_nofloor", "indra_nofloor", "cascade")
+CONFIGS = ("published", "surya", "surya_nofloor", "indra_nofloor", "cascade")
 BANDS = ("good", "partial", "weak", "wrong", "unplaced")
 
 
@@ -86,9 +85,9 @@ def printed_share(entry: dict, box, readings) -> float:
     return best
 
 
-def aligned_on_disk(img: Path, entries: list[dict]) -> set:
-    """(bbox, gemini_text) of the aligned JSON holding most of the page's published
-    fragments (as audit_entry_bindings --resolve overlap), for the wiring check."""
+def aligned_on_disk(img: Path, entries: list[dict]) -> list[dict]:
+    """Lines of the aligned JSON holding most of the page's published fragments
+    (as audit_entry_bindings --resolve overlap)."""
     frags = {e.get("canvas_fragment") for e in entries}
     best, best_n = [], -1
     for p in img.parent.glob(f"{img.stem}_*_aligned.json"):
@@ -99,7 +98,7 @@ def aligned_on_disk(img: Path, entries: list[dict]) -> set:
         n = len(frags & {ln.get("canvas_fragment") for ln in lines})
         if n > best_n:
             best, best_n = lines, n
-    return {(tuple(ln["bbox"]), ln.get("gemini_text", "")) for ln in best}
+    return best
 
 
 def detector_boxes(path: Path, gl, ads, entries, width: int, floor: int, mask: bool = False, join: bool = False):
@@ -126,8 +125,12 @@ def score_page(job):
     width = page_bbox[2]
 
     boxes, meds = {}, {}
-    on_disk = aligned_on_disk(img, entries)
+    disk = aligned_on_disk(img, entries)
+    on_disk = {(tuple(ln["bbox"]), ln.get("gemini_text", "")) for ln in disk}
+    by_frag = {ln.get("canvas_fragment"): ln["bbox"] for ln in disk}
+    boxes["published"] = [by_frag.get(e.get("canvas_fragment")) for e in entries]
     boxes["surya"], _, meds["surya"], s15 = detector_boxes(surya, gl, ads, entries, width, SHIPPED_FLOOR, mask, join)
+    meds["published"] = meds["surya"]
     boxes["surya_nofloor"], s_dis, meds["surya_nofloor"], _ = detector_boxes(surya, gl, ads, entries, width, 0, mask, join)
     boxes["indra_nofloor"], i_dis, meds["indra_nofloor"], _ = detector_boxes(indra, gl, ads, entries, width, 0, mask, join)
     pick = cascade_pick(s_dis, i_dis)
@@ -151,6 +154,8 @@ def main():
     ap.add_argument("--output-root", type=Path, default=Path("output"))
     ap.add_argument("--pages", metavar="GLOB", help="Only image filenames matching this glob")
     ap.add_argument("--csv", type=Path, help="Write one row per page here")
+    ap.add_argument("--ner-model", metavar="SLUG",
+                    help="Score {stem}_{SLUG}_entries.json (default: the first entries file by name)")
     ap.add_argument("--join-rows", action="store_true",
                     help="Join pieces of one printed row that Gemini wrote as one line (common.join_rows)")
     ap.add_argument("--mask-pictures", action="store_true",
@@ -164,7 +169,7 @@ def main():
             if args.pages and not fnmatch.fnmatch(Path(key).name, args.pages):
                 continue
             stem = surya.name[: -len("_surya.json")]
-            ents = sorted(surya.parent.glob(f"{stem}_*_entries.json"))
+            ents = sorted(surya.parent.glob(f"{stem}_{args.ner_model or '*'}_entries.json"))
             if ents:
                 jobs.append((key, surya, indra, gem, ents[0], args.mask_pictures, args.join_rows))
     if not jobs:
@@ -197,7 +202,7 @@ def main():
 
     def bad(r, c):
         return r[c]["wrong"] + r[c]["weak"]
-    for c in ("surya_nofloor", "indra_nofloor", "cascade"):
+    for c in ("published", "surya_nofloor", "indra_nofloor", "cascade"):
         diff = sorted(rows, key=lambda r: bad(r, c) - bad(r, "surya"))
         d = [bad(r, c) - bad(r, "surya") for r in rows]
         print(f"\n{c} against surya, wrong+weak entries per page: "
