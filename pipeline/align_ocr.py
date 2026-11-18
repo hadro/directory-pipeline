@@ -248,28 +248,38 @@ def _expand_multiline_surya_lines(lines: list[dict]) -> list[dict]:
 # Reading-order correction
 # ---------------------------------------------------------------------------
 
-# Minimum line bbox height in pixels — absolute floor used when there are too
-# few lines to compute a reliable median.  Lines below the effective threshold
-# are dot-leader artifacts or horizontal rules detected as text;
-# coordinates.
+# Lines under this height (px) must also be wide to be kept: see filter_short_lines.
 _MIN_LINE_HEIGHT = 15
+# ...at least this share of the page's median line width.
+_SHORT_LINE_MIN_WIDTH = 0.5
 
 
 def filter_short_lines(lines: list[dict], min_height: int | None = None) -> list[dict]:
-    """Remove lines whose bounding box height is below an adaptive threshold.
+    """Remove lines too short to be text the aligner should place.
 
-    When *min_height* is not provided, the threshold is computed as 35% of the
-    median line height across all input lines, with *_MIN_LINE_HEIGHT* as a
-    floor.  This keeps the filter proportional to the scan resolution instead
-    of relying on a fixed pixel constant.
+    Every line under 35% of the page's median line height goes (dot leaders,
+    rules). A line under *_MIN_LINE_HEIGHT* px is kept only when it is at least
+    *_SHORT_LINE_MIN_WIDTH* of the median line width. The narrow ones are
+    fragments Gemini folds into a neighbouring line: header pieces ("PHY",
+    "811"), wrapped tails ("bldg.", "av."). Kept, they take a Gemini line each
+    and reading order drifts. The wide ones are real lines in small type, or
+    lines without tall letters, which the old height-only floor dropped. On
+    Tulsa 1921 that took Surya from 539 clean pages to 646, 1 page clean to
+    failing; dropping the floor outright gave 662 but 7 (evidence:
+    docs/evidence/2026-11-17-indra-lines/ on claude/indra-line-detector).
+
+    With *min_height*, lines are filtered on height alone.
     """
     if not lines:
         return lines
-    if min_height is None:
-        heights = [ln["bbox"][3] - ln["bbox"][1] for ln in lines]
-        median_h = statistics.median(heights)
-        min_height = max(_MIN_LINE_HEIGHT, round(median_h * 0.35))
-    return [ln for ln in lines if (ln["bbox"][3] - ln["bbox"][1]) >= min_height]
+    height = lambda ln: ln["bbox"][3] - ln["bbox"][1]  # noqa: E731
+    if min_height is not None:
+        return [ln for ln in lines if height(ln) >= min_height]
+    relative = round(statistics.median(map(height, lines)) * 0.35)
+    wide = _SHORT_LINE_MIN_WIDTH * statistics.median(ln["bbox"][2] - ln["bbox"][0] for ln in lines)
+    return [ln for ln in lines
+            if height(ln) >= relative
+            and (height(ln) >= _MIN_LINE_HEIGHT or ln["bbox"][2] - ln["bbox"][0] >= wide)]
 
 
 def filter_margin_lines(
