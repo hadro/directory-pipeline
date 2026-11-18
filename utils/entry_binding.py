@@ -90,7 +90,17 @@ NEVER_IDENTITY = frozenset({
     # the Green Books, through a field name nobody had thought to guard.
     "list_name", "index_name", "group_name", "heading_name",
     "series_name", "volume_name", "collection_name", "table_name",
+    # A street directory's section heading, carried on every entry under it
+    # (Tulsa 1921: "MAIN AV—NORTH"; Broadway in 1851: "Broadway"). It sorts before
+    # `occupant_name`, so every entry on a street page had the street as its
+    # identity and the binder refused all 20,254 of them.
+    "street_name",
 })
+
+# A person's name split across fields. `surname` has no `_name` suffix, so
+# {"surname": "Ellison", "given_name": "Wood"} had the given name alone as its
+# identity: 33,824 entries (Lain-Healy's Brooklyn 1897, the polk/queens slices).
+SURNAME = "surname"
 
 # Score below which a line is not considered a match at all.
 DEFAULT_FLOOR = 0.34
@@ -128,6 +138,16 @@ def _first_field(entry: dict, pick) -> str:
     return ""
 
 
+def _name_text(entry: dict) -> str:
+    """The first populated identity field, led by `surname` when the name is split
+    into surname and given name (or the entry has a surname and nothing else)."""
+    name = _first_field(entry, _is_identity)
+    surname = entry.get(SURNAME)
+    if isinstance(surname, str) and surname.strip() and (not name or name == entry.get("given_name")):
+        return f"{surname} {name}".strip()
+    return name
+
+
 def identity_text(entry: dict) -> str:
     """The entry's own text: its name, plus its address when it has one.
 
@@ -135,8 +155,7 @@ def identity_text(entry: dict) -> str:
     match, so an entry carrying both `name` and `firm_name` does not get its
     name counted twice.
     """
-    parts = [t for t in (_first_field(entry, _is_identity),
-                         _first_field(entry, _is_address)) if t]
+    parts = [t for t in (_name_text(entry), _first_field(entry, _is_address)) if t]
     return " ".join(parts)
 
 
@@ -158,7 +177,7 @@ def identity_variants(entry: dict) -> list[list[str]]:
     entries sharing a name, and the name alone is tried as a fallback.
     """
     full = identity_tokens(entry)
-    name_only = tokens(_first_field(entry, _is_identity))
+    name_only = tokens(_name_text(entry))
     variants = [full]
     if name_only and name_only != full:
         variants.append(name_only)
