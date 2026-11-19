@@ -1,0 +1,21 @@
+800 pages, 69843 entries with identity words. Cascade took Surya on 203 pages.
+Wiring: 115899 of 116021 lines of the in-memory Surya alignment are in the aligned JSON on disk.
+
+Shares of placed entries:
+                placed     good  partial     weak    wrong     tall  unplaced
+surya            48230    61.6%    27.3%     4.5%     6.6%     2.2%     21613
+surya_nofloor    48330    62.7%    28.7%     4.1%     4.5%     1.9%     21513
+indra_nofloor    48338    57.8%    30.3%     5.5%     6.4%     1.3%     21505
+cascade          48337    61.6%    30.7%     4.1%     3.6%     1.3%     21506
+
+surya_nofloor against surya, wrong+weak entries per page: pages better 448 (2108 entries), worse 118 (900 entries)
+  most improved: 0397_p15020coll12:2835_right.jpg (77->26), 0407_p15020coll12:2845_right.jpg (49->1), 0063_p15020coll12:2501_right.jpg (51->4), 0042_p15020coll12:2480_right.jpg (47->1), 0026_p15020coll12:2464_left.jpg (49->5)
+  most worsened: 0406_p15020coll12:2844_right.jpg (8->90), 0183_p15020coll12:2621_left.jpg (8->59), 0399_p15020coll12:2837_right.jpg (4->50), 0195_p15020coll12:2633_right.jpg (6->50), 0015_p15020coll12:2453_left.jpg (6->50)
+
+indra_nofloor against surya, wrong+weak entries per page: pages better 367 (2108 entries), worse 311 (2497 entries)
+  most improved: 0407_p15020coll12:2845_right.jpg (49->2), 0041_p15020coll12:2479_right.jpg (44->1), 0075_p15020coll12:2513_right.jpg (46->3), 0386_p15020coll12:2824_right.jpg (47->5), 0155_p15020coll12:2593_right.jpg (45->4)
+  most worsened: 0112_p15020coll12:2550_right.jpg (2->62), 0141_p15020coll12:2579_left.jpg (8->65), 0183_p15020coll12:2621_left.jpg (8->62), 0015_p15020coll12:2453_left.jpg (6->52), 0062_p15020coll12:2500_left.jpg (2->46)
+
+cascade against surya, wrong+weak entries per page: pages better 436 (2428 entries), worse 191 (784 entries)
+  most improved: 0397_p15020coll12:2835_right.jpg (77->26), 0407_p15020coll12:2845_right.jpg (49->2), 0042_p15020coll12:2480_right.jpg (47->1), 0041_p15020coll12:2479_right.jpg (44->1), 0075_p15020coll12:2513_right.jpg (46->3)
+  most worsened: 0183_p15020coll12:2621_left.jpg (8->59), 0015_p15020coll12:2453_left.jpg (6->50), 0141_p15020coll12:2579_left.jpg (8->50), 0381_p15020coll12:2819_right.jpg (53->74), 0144_p15020coll12:2582_right.jpg (6->20)

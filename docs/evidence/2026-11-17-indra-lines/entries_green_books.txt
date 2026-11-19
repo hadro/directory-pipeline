@@ -1,0 +1,21 @@
+3516 pages, 106792 entries with identity words. Cascade took Surya on 266 pages.
+Wiring: 204956 of 215326 lines of the in-memory Surya alignment are in the aligned JSON on disk.
+
+Shares of placed entries:
+                placed     good  partial     weak    wrong     tall  unplaced
+surya           101506    90.3%     6.5%     1.5%     1.7%     0.8%      5286
+surya_nofloor   103336    90.3%     6.5%     1.5%     1.7%     0.9%      3456
+indra_nofloor   104651    85.9%     9.6%     2.0%     2.4%     0.2%      2141
+cascade         104644    87.0%     9.4%     1.7%     1.9%     0.2%      2148
+
+surya_nofloor against surya, wrong+weak entries per page: pages better 22 (45 entries), worse 47 (145 entries)
+  most improved: 0027_5206028.jpg (7->0), 0030_58020318.jpg (7->1), 0076_5206077.jpg (6->0), 0012_5206013.jpg (4->0), 0043_5206044.jpg (3->0)
+  most worsened: 0106_5206107.jpg (0->16), 0009_5206010.jpg (5->20), 0111_5206112.jpg (0->8), 0093_5206094.jpg (1->8), 0108_5206109.jpg (2->8)
+
+indra_nofloor against surya, wrong+weak entries per page: pages better 334 (749 entries), worse 658 (2117 entries)
+  most improved: 0021_58020373.jpg (28->5), 0061_5206062.jpg (20->1), 0086_58051330.jpg (15->1), 0080_58019970.jpg (12->0), 0092_58019982.jpg (12->1)
+  most worsened: 0053_58020281.jpg (3->49), 0053_58020341.jpg (1->37), 0097_5206098.jpg (4->30), 0021_58020249.jpg (0->26), 0041_5213553.jpg (0->25)
+
+cascade against surya, wrong+weak entries per page: pages better 317 (699 entries), worse 528 (1216 entries)
+  most improved: 0021_58020373.jpg (28->5), 0086_58051330.jpg (15->1), 0080_58019970.jpg (12->0), 0051_5214924.jpg (11->0), 0127_5215000.jpg (12->1)
+  most worsened: 0009_5206010.jpg (5->20), 0106_5206107.jpg (0->14), 0069_5215074.jpg (0->12), 0014_5206796.jpg (0->11), 0032_5214773.jpg (0->11)

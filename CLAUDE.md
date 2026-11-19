@@ -32,6 +32,24 @@ lose per-column alignment. Evidence: `docs/evidence/2026-09-22-gutter-hoist/`. T
 suggested branch (a "band of its own" test in `is_header`), how to measure it, and the
 rollout: `docs/plans/gutter-hoist-fix.md` (created 2026-09-23).
 
+## Experiment: Indra OCR as the line detector
+
+The placement errors left after 0.3 sit on dense pages where Surya under-segments, and
+Surya can't be upgraded past 0.19 (0.24 dropped line detection). [Indra OCR](https://github.com/datalab-to/indra)
+(Datalab, CPU, ONNX) returns lines in Surya's shape. `tools/indra_lines.py` writes its
+lines as `*_surya.json` into a mirror under `output/_indra_lines/`, so the pipeline runs
+on them unchanged. The judges (gold panel and no-gold), the pass bar, the commands and the
+results: `docs/evidence/2026-11-17-indra-lines/` (run 2026-11-17). **Not ready.** Indra
+first, Surya where Indra binds badly, wins on the New York gold panel (99.6% of lines
+against 96.3%), on Tulsa 1921 and most clearly on the brewery directories (Tovey's wrong
+entry boxes 8.6% → 1.0%), but **its entry boxes still trail Surya's on the Green
+Books** (88.8% good against 91.1%, mostly narrower boxes), even with the evidence folder's
+picture mask and row join. Nothing in the pipeline uses Indra. Found on the way: the
+width-aware line floor (merged, PR #14), and the row join
+(`common.join_rows`), which helps Surya too: Tulsa's street pages, 22% wrong boxes → 8%.
+The published brewery boxes predate today's aligner: re-aligning on `main` alone takes
+Tovey's from 21% wrong to 9%.
+
 ## Evaluation: TypeSafe AI's Jev
 
 An assessment of [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) — TypeSafe AI's non-generative "System One" model (launched 2026-09-15) that returns calibrated typed decisions (`Noul` / `Choice` / `Score`) instead of text — lives at `docs/plans/jev-evaluation.md` (created 2026-09-20). **Bottom line: Jev cannot do NER or OCR** (it does not generate text, and rejects unconstrained string fields), so it is not a replacement for `extract_entries.py`, the sibling repo's Qwen fine-tune, or anything in the Hugging Face plan. It *is* a candidate for the routing/gating layer: non-entry rejection before NER, `detect_sections` Phase 5 boundary adjudication, and the `_INFER_RULES` category residue. Read it before evaluating any classification-only model backend; nothing is committed to, and the doc proposes one measured shadow run before any wiring.
@@ -210,7 +228,16 @@ guess — a confidently wrong box is the failure this exists to prevent. Refusal
 `tools/audit_entry_bindings.py` measures placement without ground truth and is the
 before/after checkpoint for any change to alignment or binding. **Coverage is not
 placement** — that distinction cost this project several wrong conclusions; unmatched-rate
-cannot see whether a box landed on the right line.
+cannot see whether a box landed on the right line. The audit has the same blind spot one
+level up: it compares an entry with the *Gemini text* bound to its box, so a box that
+alignment put on the wrong printed line passes. For a change that moves boxes (line
+detector, aligner), judge boxes by what is printed in them:
+`docs/evidence/2026-11-17-indra-lines/entry_placement.py`.
+
+**Fixed 2026-11-18 (PR #15):** `identity_tokens()` took the first `*_name` field, and in
+Tulsa 1921's street section that is `street_name`, the section heading, so the binder
+refused all 21,902 of those entries. `street_name` is now never identity, and a split
+`surname` + `given_name` binds by the full name. Re-binding Tulsa is safe again.
 
 Cross-repo handoff for the 2026-09-04 audit and the outstanding policy decision:
 `../green-books/docs/alignment-audit-2026-09-04.md`.
